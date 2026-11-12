@@ -359,7 +359,7 @@
       const f = Number(fraction).toFixed(2);
       return `<svg viewBox="0 0 16 16" class="pie-ring" aria-hidden="true" ${color ? `style="color:${color}"` : ''}>
         <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-opacity=".22" stroke-width="2" pathLength="1"></circle>
-        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" pathLength="1" stroke-dasharray="${f} 1" stroke-linecap="round"></circle>
+        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" pathLength="1" stroke-dasharray="${f} 1" stroke-linecap="round" transform="rotate(-90 8 8)"></circle>
       </svg>`;
     };
 
@@ -437,7 +437,7 @@
       '/pie-ring-graph': () => `<div class="demo-ring">
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-opacity=".22" stroke-width="2" pathLength="1"></circle>
-          <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" pathLength="1" stroke-dasharray="0.68 1" stroke-linecap="round"></circle>
+          <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" pathLength="1" stroke-dasharray="0.68 1" stroke-linecap="round" transform="rotate(-90 8 8)"></circle>
         </svg>
       </div>`,
     };
