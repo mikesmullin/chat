@@ -49,10 +49,17 @@ fn shell() -> Node {
 
 fn stage() -> Node {
     m("main").class("stage").child(
-        m("div").class("demo").kids(vec![
-            m("div").class("demo-full").child(chat_root(&FULL)),
-            m("div").class("demo-side").child(chat_root(&SIDE)),
-        ]),
+        // side-collapsed drops the right rail's grid track with it (x-show
+        // alone would leave a 380px hole).
+        m("div")
+            .class("demo")
+            // NOTE: plain string (not format!) — double braces here would emit
+            // literally and break m-js expression compile (lint rule `syntax`).
+            .bind("class", "{ 'side-collapsed': !$store.chat.sideOpen }")
+            .kids(vec![
+                m("div").class("demo-full").child(chat_root(&FULL)),
+                m("div").class("demo-side").child(chat_root(&SIDE)),
+            ]),
     )
 }
 
@@ -140,10 +147,17 @@ fn main_col(pane: &Pane) -> Node {
 fn topbar(pane: &Pane) -> Node {
     if pane.sidebar {
         // Demo sidebar: no tabs toggle, no tab strip, no fullscreen button —
-        // just the status readout (show-status).
+        // the status readout (show-status) plus this pane's own collapse
+        // button. Reopen from the fullscreen topbar's sidebar toggle.
         return m("header")
             .class("topbar sheet-chat-top")
-            .child(
+            .kids(vec![
+                m("button")
+                    .class("icon-btn")
+                    .attr("type", "button")
+                    .attr("title", "Collapse sidebar")
+                    .on("click", &format!("$store.{STORE}.toggleSide()"))
+                    .child(Node::icon("sidebar")),
                 m("div").class("sheet-chat-tabs").child(
                     m("div").class("chat-header-meta").kids(vec![
                         m("span")
@@ -156,7 +170,7 @@ fn topbar(pane: &Pane) -> Node {
                             .text(&format!("$store.{STORE}.elapsed")),
                     ]),
                 ),
-            );
+            ]);
     }
     m("header").class("topbar").kids(vec![
         m("button")
@@ -221,6 +235,14 @@ fn topbar(pane: &Pane) -> Node {
                     .class("ph ph-corners-in")
                     .show(&format!("$store.{STORE}.isFullscreen")),
             ]),
+        // Right rail toggle (the left rail's is the history button).
+        m("button")
+            .class("icon-btn")
+            .attr("type", "button")
+            .attr("title", "Toggle sidebar")
+            .bind("class", &format!("{{ active: $store.{STORE}.sideOpen }}"))
+            .on("click", &format!("$store.{STORE}.toggleSide()"))
+            .child(Node::icon("sidebar")),
     ])
 }
 
