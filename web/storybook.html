@@ -12,8 +12,13 @@
      Storybook layer — sits on top of the chat app's skin (kit.css +
      styles.css) and retints it for this guide: neutral black/charcoal
      surfaces (no blue in the background family), white ink, indigo +
-     pastel accents. Every component here renders with the indigo accent
-     so the final app will inherit the same language.
+     pastel accents.
+
+     Composition rule (2026-11-12): components are built from other
+     components. An item group contains state labels, relative
+     timestamps, pie rings, and the nav rail is itself a component.
+     Each unit below has its own class; composed components reuse the
+     same classes, so the sub-component and its parent render identically.
      ================================================================ */
 
     /* retint the base skin to neutral charcoal (wins because it loads last) */
@@ -27,7 +32,7 @@
       --text: #f1f3f6;
       --muted: #8e94a2;
 
-      /* indigo — the only cool accent; kept off the blue side */
+      /* indigo — the only cool accent */
       --accent: #7c7ef8;
       --accent-soft: #a9accf;
       --accent-tint: color-mix(in srgb, var(--accent) 10%, transparent);
@@ -43,7 +48,7 @@
       --pastel-red: #f2adab;
     }
 
-    /* base: keep the near-black base, add the two-column shell */
+    /* base: the two-column shell */
     #sb {
       display: grid;
       grid-template-columns: 264px 1fr;
@@ -51,7 +56,7 @@
       min-height: 100vh;
     }
 
-    /* ------------------------------------------------ rail (left) ---- */
+    /* ---- rail (left) ---- */
     .sb-rail {
       background: var(--panel);
       border-right: 1px solid var(--border);
@@ -61,141 +66,164 @@
       overflow: hidden;
     }
     .rail-head { padding: 24px 20px 14px; }
-    .rail-head h1 {
-      font-size: 15px;
-      font-weight: 700;
-      letter-spacing: -.015em;
-      line-height: 1.2;
-      color: var(--text);
-    }
-    .rail-head p {
-      font-size: 12px;
-      color: var(--muted);
-      margin-top: 3px;
-    }
+    .rail-head h1 { font-size: 15px; font-weight: 700; letter-spacing: -.015em; line-height: 1.2; color: var(--text); }
+    .rail-head p { font-size: 12px; color: var(--muted); margin-top: 3px; }
     .rail-group { margin-top: 18px; padding: 4px 20px 10px; }
     .kicker {
-      font-family: var(--mono);
-      font-size: 10.5px;
-      letter-spacing: .16em;
-      text-transform: uppercase;
-      color: var(--muted);
+      font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
+      text-transform: uppercase; color: var(--muted);
     }
     .nav-list {
-      list-style: none;
-      padding: 6px 12px 40px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      min-height: 0;
-      overflow-y: auto;
+      list-style: none; padding: 6px 12px 40px;
+      display: flex; flex-direction: column; gap: 6px;
+      min-height: 0; overflow-y: auto;
     }
     .nav-item {
-      display: flex;
-      align-items: center;
-      gap: 11px;
-      width: 100%;
-      text-align: left;
-      padding: 9px 12px;
-      border: 1px solid transparent;
-      border-radius: 7px;
-      background: transparent;
-      font: inherit;
-      font-size: 15px;
-      color: var(--muted);
-      cursor: pointer;
-      transition: color .13s, background .13s, border-color .13s;
+      display: flex; align-items: center; gap: 11px; width: 100%; text-align: left;
+      padding: 9px 12px; border: 1px solid transparent; border-radius: 7px;
+      background: transparent; font: inherit; font-size: 15px; color: var(--muted);
+      cursor: pointer; transition: color .13s, background .13s, border-color .13s;
     }
-    .nav-item .ph {
-      color: inherit;
-      font-size: 15px;
-      line-height: 1;
-      flex: 0 0 auto;
-      transition: color .13s;
-    }
+    .nav-item .ph { color: inherit; font-size: 15px; line-height: 1; flex: 0 0 auto; transition: color .13s; }
     .nav-item span { overflow: hidden; white-space: nowrap; }
     .nav-item:hover { color: var(--text); background: var(--accent-glow); }
-    .nav-item.on {
-      color: var(--accent-soft);
-      border-color: var(--accent);
-      background: var(--accent-tint);
-    }
+    .nav-item.on { color: var(--accent-soft); border-color: var(--accent); background: var(--accent-tint); }
     .nav-item.on .ph { color: var(--accent-soft); }
 
-    /* ------------------------------------------------ content (right) --
-       wide area; the selected component floats alone, centered
-       both ways (margin:auto survives tall content without clipping).
-     */
-    .sb-content {
-      min-height: 100%;
-      overflow-y: auto;
-      background: var(--bg);
-      display: flex;
-      padding: 24px;
+    /* ---- content (right) ---- */
+    .sb-content { min-width: 0; min-height: 100%; overflow-y: auto; background: var(--bg); display: flex; padding: 24px; }
+    .feature { margin: auto; display: flex; align-items: center; justify-content: center; width: 100%; }
+
+    /* ================================================================
+     Sub-component: pie ring graph — the generic cooldown ring.
+     Fill fraction is the first number in `stroke-dasharray` (pathLength
+     is normalized to 1). Color comes from `currentColor`, so it tints
+     to whatever state it sits in.
+     ================================================================ */
+    .pie-ring {
+      width: 14px; height: 14px;
+      display: inline-block;
+      flex: 0 0 auto;
+      vertical-align: bottom;
     }
-    .feature {
-      margin: auto;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+
+    /* ================================================================
+     Sub-component: relative timestamp — how long in the state, short
+     format (3m, 20m, 1h). Reused in every grouped list. */
+    .relative-timestamp {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+      flex: 0 0 auto;
+      white-space: nowrap;
     }
+    .relative-timestamp .demo-set { display: flex; gap: 14px; align-items: baseline; }
+    .relative-timestamp .demo-set span { white-space: nowrap; }
+
+    /* ================================================================
+     Sub-component: item group — the reusable grouping.
+     State = color code + dot + name + counter, then a list of rows.
+     Rows are agent rows (robot, name, summary, meta) — see below.
+     ================================================================ */
+    .item-group { color: var(--muted); margin-bottom: 18px; max-width: 480px; width: 100%; }
+    .item-group.working { color: var(--pastel-amber); }
+    .item-group.done { color: var(--accent-soft); }
+    .item-group:last-child { margin-bottom: 0; }
+
+    .item-head {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+      font-size: 12px;
+    }
+    .item-head-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+    .item-head-name { font-weight: 600; }
+    .item-head-count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); font-weight: 400; }
+
+    .item-list { list-style: none; margin: 0; display: flex; flex-direction: column; gap: 2px; }
+
+    .item-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 6px 8px; border-radius: 8px; color: var(--text);
+      transition: background .13s;
+    }
+    .item-row:hover { background: var(--accent-glow); }
+    .item-icon { font-size: 16px; line-height: 1; color: var(--muted); flex: 0 0 auto; transition: color .13s; }
+    .item-row:hover .item-icon { color: var(--accent-soft); }
+    .item-name { font-weight: 600; flex: 0 0 auto; }
+    .item-summary {
+      flex: 1 1 auto; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      color: var(--muted); font-size: 13px; padding-right: 4px;
+    }
+    .item-meta { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+
+    /* state symbols (used by item rows; colors are fixed by state,
+       not inherited, because the row overrides color to ink) */
+    .state-idle {
+      width: 10px; height: 10px; border-radius: 50%;
+      border: 2px solid var(--muted); background: transparent;
+      flex: 0 0 auto;
+    }
+    .state-done {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent); border: 0;
+      flex: 0 0 auto;
+    }
+    .state-working { color: var(--pastel-amber); flex: 0 0 auto; }
 
     /* ================================================================
      Component: settings button
      gear (left) · "Settings" (right) — the settings entry point.
      ================================================================ */
     .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      font: inherit;
-      font-size: 15px;
-      font-weight: 500;
-      color: var(--text);
-      background: transparent;
-      border: none;
-      border-radius: 0;
-      padding: 0;
-      cursor: pointer;
-      transition: color .13s, transform .13s;
+      display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+      font: inherit; font-size: 15px; font-weight: 500; color: var(--text);
+      background: transparent; border: none; border-radius: 0; padding: 0;
+      cursor: pointer; transition: color .13s, transform .13s;
     }
-    .btn:hover {
-      color: var(--accent-soft);
-    }
+    .btn:hover { color: var(--accent-soft); }
     .btn:active { transform: scale(0.98); }
-    .btn .ph {
-      font-size: 16px;
-      line-height: 1;
-      color: var(--muted);
-      transition: color .13s;
-    }
+    .btn .ph { font-size: 16px; line-height: 1; color: var(--muted); transition: color .13s; }
     .btn:hover .ph { color: var(--accent-soft); }
     .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-    /* responsive: stack on narrow viewports */
+    /* ================================================================
+     Component: left sidebar navigation — the rail, shown standalone.
+     Reuses .sb-rail / .rail-head / .kicker / .nav-list / .nav-item
+     classes; in the live page it lives inside #sb.
+     ================================================================ */
+    .nav-demo {
+      width: 264px; height: 460px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .nav-demo .nav-list { padding-bottom: 8px; }
+    .nav-demo .nav-item:hover { background: var(--accent-glow); }
+
+    /* demo chrome for sub-component showcases (only, the components
+       themselves stay bare) */
+    .demo-cap {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px; color: var(--muted); margin-bottom: 10px;
+    }
+    .demo-cap .item-head-name { font-size: 12px; }
+    .demo-ring { width: 64px; height: 64px; color: var(--accent); }
+    .demo-ring svg, .demo-ring .pie-ring svg { width: 100%; height: 100%; display: block; }
+
+    /* responsive */
     @media (max-width: 860px) {
       #sb { grid-template-columns: 1fr; }
       .sb-rail {
-        grid-row: 1 / 1;
-        flex-direction: row;
-        align-items: center;
-        border-right: 0;
-        border-bottom: 1px solid var(--border);
-        overflow: hidden;
-        height: auto;
+        grid-row: 1 / 1; flex-direction: row; align-items: center;
+        border-right: 0; border-bottom: 1px solid var(--border);
+        overflow: hidden; height: auto;
       }
       .rail-head { margin: 0; padding: 12px 16px; display: flex; align-items: center; gap: 16px; }
       .rail-group { display: none; }
-      .nav-list {
-        flex-direction: row;
-        flex-wrap: wrap;
-        gap: 8px;
-        padding: 10px;
-        overflow: hidden;
-        white-space: nowrap;
-      }
+      .nav-list { flex-direction: row; flex-wrap: wrap; gap: 8px; padding: 10px; overflow: hidden; white-space: nowrap; }
       .sb-content { padding: 16px; }
+      .nav-demo { width: 100%; height: 340px; }
     }
   </style>
 </head>
@@ -210,30 +238,107 @@
         <span class="kicker">Components</span>
       </div>
       <ul class="nav-list" id="rail-nav">
-        <li class="nav-item on" data-comp="settings">
-          <span>Settings Menu Item</span>
-        </li>
+        <li class="nav-item on" data-comp="settings"><span>Settings Menu Item</span></li>
+        <li class="nav-item" data-comp="agents"><span>Agents Menu</span></li>
+        <li class="nav-item" data-comp="nav-rail"><span>Left Sidebar Navigation</span></li>
+        <li class="nav-item" data-comp="item-group"><span>Item Group</span></li>
+        <li class="nav-item" data-comp="relative-timestamp"><span>Relative Timestamp</span></li>
+        <li class="nav-item" data-comp="pie-ring-graph"><span>Pie Ring Graph</span></li>
       </ul>
     </aside>
 
     <!-- right: content / central focus for the selected component -->
     <main class="sb-content">
-      <section class="feature" id="stage">
-        <button type="button" class="btn btn-settings">
-          <i class="ph ph-gear" aria-hidden="true"></i>
-          <span>Settings</span>
-        </button>
-      </section>
+      <section class="feature" id="stage"></section>
     </main>
   </div>
 
   <script>
     /*
      Component catalog — one entry per storybook item.
-     Adding a component = add a <li class="nav-item"> in the rail
-     (data-comp key) + an entry here. The rail click swaps the stage.
+     Adding a component = one <li class="nav-item"> in the rail
+     (data-comp key) + one entry here. The rail click swaps the stage.
+
+     Composition: agents-menu is built from item-group + relative-timestamp
+     + pie-ring-graph (same classes, same rendering). The rail item is a
+     second instance of the left-sidebar-navigation component.
      */
-    const COMPONENTS = {
+    // --- reusable sub-components (shared classes, used by composites) ---
+    const relativeTimestamp = function(value) {
+      return `<span class="relative-timestamp">${value}</span>`;
+    };
+    const pieRing = function(fraction, color) {
+      const f = Number(fraction).toFixed(2);
+      return `<svg viewBox="0 0 16 16" class="pie-ring" aria-hidden="true" ${color ? `style="color:${color}"` : ''}>
+        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-opacity=".22" stroke-width="2" pathLength="1"></circle>
+        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" pathLength="1" stroke-dasharray="${f} 1" stroke-linecap="round"></circle>
+      </svg>`;
+    };
+    const stateIcon = function(state) {
+      if (state === 'idle') return '<span class="state-idle"></span>';
+      if (state === 'done') return '<span class="state-done"></span>';
+      return pieRing(0.68, 'var(--pastel-amber)');
+    };
+
+    // --- item group: state dot + name + counter + list of rows ---
+    const itemGroup = function(state, label, count, rows) {
+      return `<div class="item-group ${state}">
+        <div class="item-head">
+          <span class="item-head-dot"></span>
+          <span class="item-head-name">${label}</span>
+          <span class="item-head-count">${count}</span>
+        </div>
+        <ul class="item-list">
+          ${rows.join('\n')}
+        </ul>
+      </div>`;
+    };
+
+    // --- agent row: robot + name + summary + meta(time, state) ---
+    const agentRow = function(name, summary, time, state) {
+      return `<li class="item-row">
+        <span class="item-icon"><i class="ph ph-robot"></i></span>
+        <span class="item-name">${name}</span>
+        <span class="item-summary">${summary}</span>
+        <span class="item-meta">
+          ${relativeTimestamp(time)}${stateIcon(state)}
+        </span>
+      </li>`;
+    };
+
+    // --- left sidebar navigation: the rail itself ---
+    const railNav = function() {
+      return `<div class="nav-demo">
+        <div class="rail-head"><h1>Design Guide</h1></div>
+        <div class="rail-group"><span class="kicker">Components</span></div>
+        <ul class="nav-list">
+          <li class="nav-item on"><span>Settings Menu Item</span></li>
+          <li class="nav-item"><span>Agents Menu</span></li>
+          <li class="nav-item"><span>Item Group</span></li>
+        </ul>
+      </div>`;
+    };
+
+    // --- composite components ---
+    const agentsMenu = function() {
+      return `<div class="item-group-parent">
+        <p class="agents-header">agents</p>
+        ${itemGroup('idle', 'Idle', 3, [
+          agentRow('Alice', 'Refactored the retry logic in the fetch client', '20m', 'idle'),
+          agentRow('Bob', 'Waiting on CI for the cache patch', '3m', 'idle'),
+          agentRow('Fay', 'Tidying the session store after the migration', '45m', 'idle'),
+        ])}
+        ${itemGroup('working', 'Working', 1, [
+          agentRow('Carol', 'Migrating the auth service to the new schema', '12m', 'working'),
+        ])}
+        ${itemGroup('done', 'Done', 2, [
+          agentRow('Eve', 'Finished the onboarding copy and tone guide', '1h', 'done'),
+          agentRow('Dan', 'Fixed the session timeout bug', '45m', 'done'),
+        ])}
+      </div>`;
+    };
+
+    const components = {
       settings: {
         html: `
           <button type="button" class="btn btn-settings">
@@ -241,23 +346,59 @@
             <span>Settings</span>
           </button>
         `
+      },
+      agents: {
+        html: `<div class="agents-demo">
+          ${agentsMenu()}
+        </div>`
+      },
+      'nav-rail': {
+        html: `<div class="nav-demo-wrap">${railNav()}</div>`
+      },
+      'item-group': {
+        html: `
+          <div class="item-group done">
+            <div class="item-head">
+              <span class="item-head-dot"></span>
+              <span class="item-head-name">Done</span>
+              <span class="item-head-count">2</span>
+            </div>
+            <ul class="item-list">
+              ${agentRow('Eve', 'Finished the onboarding copy and tone guide', '1h', 'done')}
+              ${agentRow('Dan', 'Fixed the session timeout bug', '45m', 'done')}
+            </ul>
+          </div>`
+      },
+      'relative-timestamp': {
+        html: `<div class="relative-timestamp demo-set">
+          <span>3m</span><span>20m</span><span>45m</span><span>1h</span>
+        </div>`
+      },
+      'pie-ring-graph': {
+        html: `<div class="demo-ring">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-opacity=".22" stroke-width="2" pathLength="1"></circle>
+            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" pathLength="1" stroke-dasharray="0.68 1" stroke-linecap="round"></circle>
+          </svg>
+        </div>`
       }
     };
 
-    const nav = document.getElementById('rail-nav');
     const stage = document.getElementById('stage');
+    const nav = document.getElementById('rail-nav');
 
     function show(key) {
       nav.querySelectorAll('.nav-item').forEach(
         (item) => item.classList.toggle('on', item.dataset.comp === key)
       );
-      stage.innerHTML = COMPONENTS[key].html;
+      stage.innerHTML = components[key].html;
     }
 
     nav.addEventListener('click', (e) => {
       const item = e.target.closest('.nav-item');
       if (item) show(item.dataset.comp);
     });
+    show('settings');
   </script>
 </body>
 </html>
