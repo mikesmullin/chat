@@ -14,6 +14,11 @@
      surfaces (no blue in the background family), white ink, indigo +
      pastel accents.
 
+     Routing: m-js Router in HASH mode (permalinks
+     storybook.html#/agents, full back/forward, no server support
+     needed). The rail is static HTML; Router.set() drives the #app
+     content.
+
      Composition rule (2026-11-12): components are built from other
      components. An item group contains state labels, relative
      timestamps, counters, pie rings, and the nav rail is itself a
@@ -23,7 +28,7 @@
 
      Group order: Done, Working, Idle — things needing attention first.
      Counters sit inline, immediately right of the group name (not
-     floated to the edge).
+     floated to the edge); heads are text only (no dot).
      ================================================================ */
 
     /* retint the base skin to neutral charcoal (wins because it loads last) */
@@ -125,8 +130,8 @@
       flex: 0 0 auto;
       white-space: nowrap;
     }
-    .relative-timestamp.demo-set { display: flex; gap: 6px; align-items: baseline; }
-    .relative-timestamp.demo-set span { white-space: nowrap; }
+    .relative-timestamp .demo-set { display: flex; gap: 6px; align-items: baseline; }
+    .relative-timestamp .demo-set span { white-space: nowrap; }
 
     /* the "agents" menu title: normal weight, dim gray (near #666) */
     .agents-header {
@@ -138,7 +143,9 @@
 
     /* ================================================================
      Sub-component: counter — the item count for a group (or list).
-     Mono, muted, small. Inline; placed by its host, no self-alignment. */
+     Mono, muted, same size + line-height as the group name (sits on the
+     same line, vertically centered). Inline; placed by its host, no
+     self-alignment. */
     .counter {
       font-family: var(--mono);
       font-size: 12px;
@@ -148,11 +155,13 @@
       flex: 0 0 auto;
       white-space: nowrap;
     }
+    /* counter demo: single-space (6px at 12px mono) between instances */
+    .counter-demo { display: flex; gap: 6px; align-items: baseline; }
 
     /* ================================================================
      Sub-component: item group — the reusable grouping.
-     State = color code + dot + name + counter, then a list of rows.
-     Counter sits inline, immediately right of the name.
+     State = color code (name), then inline counter, then a list of rows.
+     No dot before the name — the name itself is the color code.
      Rows are agent rows (robot, name, summary, meta) — see below.
      ================================================================ */
     .item-group { color: var(--muted); margin-bottom: 18px; max-width: 480px; width: 100%; }
@@ -166,7 +175,6 @@
       font-size: 12px;
     }
     .item-head-name { font-weight: 600; }
-    /* .item-head .counter — inline, no margin-left:auto */
     .item-list {
       list-style: none;
       margin: 0;
@@ -262,7 +270,7 @@
 </head>
 <body>
   <div id="sb">
-    <!-- left rail: component navigator -->
+    <!-- left rail: static component navigator (Router drives #app) -->
     <aside class="sb-rail">
       <header class="rail-head">
         <h1>Design Guide</h1>
@@ -271,176 +279,176 @@
         <span class="kicker">Components</span>
       </div>
       <ul class="nav-list" id="rail-nav">
-        <li class="nav-item on" data-comp="settings"><span>Settings Menu Item</span></li>
-        <li class="nav-item" data-comp="agents"><span>Agents Menu</span></li>
-        <li class="nav-item" data-comp="nav-rail"><span>Left Sidebar Navigation</span></li>
-        <li class="nav-item" data-comp="item-group"><span>Item Group</span></li>
-        <li class="nav-item" data-comp="counter"><span>Counter</span></li>
-        <li class="nav-item" data-comp="relative-timestamp"><span>Relative Timestamp</span></li>
-        <li class="nav-item" data-comp="pie-ring-graph"><span>Pie Ring Graph</span></li>
+        <li class="nav-item on" data-route="/">Settings Menu Item</li>
+        <li class="nav-item" data-route="/agents">Agents Menu</li>
+        <li class="nav-item" data-route="/nav-rail">Left Sidebar Navigation</li>
+        <li class="nav-item" data-route="/item-group">Item Group</li>
+        <li class="nav-item" data-route="/counter">Counter</li>
+        <li class="nav-item" data-route="/relative-timestamp">Relative Timestamp</li>
+        <li class="nav-item" data-route="/pie-ring-graph">Pie Ring Graph</li>
       </ul>
     </aside>
 
-    <!-- right: content / central focus for the selected component -->
+    <!-- right: content / central focus for the routed component -->
     <main class="sb-content">
-      <section class="feature" id="stage"></section>
+      <section class="feature" id="app"></section>
     </main>
   </div>
 
-  <script>
+  <script type="module">
     /*
-     Component catalog — one entry per storybook item.
-     Adding a component = one <li class="nav-item"> in the rail
-     (data-comp key) + one entry here. The rail click swaps the stage.
+     Storybook router — m-js Router in HASH mode.
 
-     Composition: agents-menu is built from item-group + relative-
+     Permalinks: storybook.html#/agents, ...#/pie-ring-graph.
+     Navigation: rail items call Router.set(uri) (pushes history,
+     redraws #app content). Back/forward is history-driven by m-js.
+
+     Gotcha (2026-11-12): Router.onChange stores ONE handler and M.mount()
+     must own it for the DOM to re-render. Calling Router.onChange after
+     mount clobbers the redraw hook and navigation stops touching the DOM.
+     The rail active state therefore tracks the route via a native
+     hashchange listener instead.
+
+     Composition: agents menu is built from item-group + relative-
      timestamp + counter + pie-ring-graph (same classes, same builders).
-     The rail item is a second instance of the left-sidebar-navigation
-     component.
+     The rail item "Left Sidebar Navigation" is a second instance of
+     the rail component.
      */
+    import M, { Router } from 'https://mikesmullin.github.io/m-js/dist/m.min.js'
 
-    // --- reusable sub-components (shared classes, used by composites) ---
-    const relativeTimestamp = function(value) {
-      return `<span class="relative-timestamp">${value}</span>`;
-    };
-    const counter = function(n) {
-      return `<span class="counter">${n}</span>`;
-    };
-    const pieRing = function(fraction, color) {
+    Router.setMode('hash')
+
+    /* --- reusable sub-components (shared classes, used by composites) --- */
+    const relativeTimestamp = (value) =>
+      `<span class="relative-timestamp">${value}</span>`;
+
+    const counter = (n) =>
+      `<span class="counter">${n}</span>`;
+
+    const pieRing = (fraction, color) => {
       const f = Number(fraction).toFixed(2);
-      return `<svg viewBox="0 0 16 16" class="pie-ring" aria-hidden="true" ${color ? 'style="color:' + color + '"':''}>
+      return `<svg viewBox="0 0 16 16" class="pie-ring" aria-hidden="true" ${color ? `style="color:${color}"` : ''}>
         <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-opacity=".22" stroke-width="2" pathLength="1"></circle>
         <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" pathLength="1" stroke-dasharray="${f} 1" stroke-linecap="round"></circle>
       </svg>`;
     };
-    const stateIcon = function(state) {
+
+    const stateIcon = (state) => {
       if (state === 'idle') return '<span class="state-idle"></span>';
       if (state === 'done') return '<span class="state-done"></span>';
       return pieRing(0.68, 'var(--pastel-amber)');
     };
 
-    // --- item group: state dot + name + inline counter + list of rows ---
-    const itemGroup = function(state, label, count, rows) {
-      return `<div class="item-group ${state}">
-        <div class="item-head">
-          <span class="item-head-name">${label}</span>
-          ${counter(count)}
-        </div>
-        <ul class="item-list">
-          ${rows.join('\n')}
-        </ul>
-      </div>`;
+    /* --- item group: state name + inline counter + list of rows --- */
+    const itemGroup = (state, label, count, rows) => `<div class="item-group ${state}">
+      <div class="item-head">
+        <span class="item-head-name">${label}</span>
+        ${counter(count)}
+      </div>
+      <ul class="item-list">
+        ${rows.join('\n')}
+      </ul>
+    </div>`;
+
+    /* --- agent row: robot + name + summary + meta(time, state) --- */
+    const agentRow = (name, summary, time, state) => `<li class="item-row">
+      <span class="item-icon"><i class="ph ph-robot"></i></span>
+      <span class="item-name">${name}</span>
+      <span class="item-summary">${summary}</span>
+      <span class="item-meta">
+        ${relativeTimestamp(time)}${stateIcon(state)}
+      </span>
+    </li>`;
+
+    /* --- left sidebar navigation: the rail itself --- */
+    const railNav = () => `<div class="nav-demo">
+      <div class="rail-head"><h1>Design Guide</h1></div>
+      <div class="rail-group"><span class="kicker">Components</span></div>
+      <ul class="nav-list">
+        <li class="nav-item on"><span>Settings Menu Item</span></li>
+        <li class="nav-item"><span>Agents Menu</span></li>
+        <li class="nav-item"><span>Item Group</span></li>
+      </ul>
+    </div>`;
+
+    /* --- composite components: DONE / WORKING / IDLE (attention first) --- */
+    const agentsMenu = () => `<div class="agents-menu">
+      <p class="agents-header">Agents</p>
+      ${itemGroup('done', 'Done', 2, [
+        agentRow('Eve', 'Finished the onboarding copy and tone guide', '1h', 'done'),
+        agentRow('Dan', 'Fixed the session timeout bug', '45m', 'done'),
+      ])}
+      ${itemGroup('working', 'Working', 1, [
+        agentRow('Carol', 'Migrating the auth service to the new schema', '12m', 'working'),
+      ])}
+      ${itemGroup('idle', 'Idle', 3, [
+        agentRow('Alice', 'Refactored the retry logic in the fetch client', '20m', 'idle'),
+        agentRow('Bob', 'Waiting on CI for the cache patch', '3m', 'idle'),
+        agentRow('Fay', 'Tidying the session store after the migration', '45m', 'idle'),
+      ])}
+    </div>`;
+
+    /* --- route registry --- */
+    const routes = {
+      '/': () => `<button type="button" class="btn btn-settings">
+        <i class="ph ph-gear" aria-hidden="true"></i>
+        <span>Settings</span>
+      </button>`,
+      '/agents': agentsMenu,
+      '/nav-rail': railNav,
+      '/item-group': () => itemGroup('done', 'Done', 2, [
+        agentRow('Eve', 'Finished the onboarding copy and tone guide', '1h', 'done'),
+        agentRow('Dan', 'Fixed the session timeout bug', '45m', 'done'),
+      ]),
+      '/counter': () => `<div class="counter-demo">${counter(1)}${counter(3)}${counter(24)}${counter(128)}</div>`,
+      '/relative-timestamp': () => `<div class="relative-timestamp demo-set">
+        <span>3m</span><span>20m</span><span>45m</span><span>1h</span>
+      </div>`,
+      '/pie-ring-graph': () => `<div class="demo-ring">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-opacity=".22" stroke-width="2" pathLength="1"></circle>
+          <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" pathLength="1" stroke-dasharray="0.68 1" stroke-linecap="round"></circle>
+        </svg>
+      </div>`,
     };
 
-    // --- agent row: robot + name + summary + meta(time, state) ---
-    const agentRow = function(name, summary, time, state) {
-      return `<li class="item-row">
-        <span class="item-icon"><i class="ph ph-robot"></i></span>
-        <span class="item-name">${name}</span>
-        <span class="item-summary">${summary}</span>
-        <span class="item-meta">
-          ${relativeTimestamp(time)}${stateIcon(state)}
-        </span>
-      </li>`;
+    /* title per route */
+    const TITLES = {
+      '/': 'Settings Menu Item',
+      '/agents': 'Agents Menu',
+      '/nav-rail': 'Left Sidebar Navigation',
+      '/item-group': 'Item Group',
+      '/counter': 'Counter',
+      '/relative-timestamp': 'Relative Timestamp',
+      '/pie-ring-graph': 'Pie Ring Graph',
     };
 
-    // --- left sidebar navigation: the rail itself ---
-    const railNav = function() {
-      return `<div class="nav-demo">
-        <div class="rail-head"><h1>Design Guide</h1></div>
-        <div class="rail-group"><span class="kicker">Components</span></div>
-        <ul class="nav-list">
-          <li class="nav-item on"><span>Settings Menu Item</span></li>
-          <li class="nav-item"><span>Agents Menu</span></li>
-          <li class="nav-item"><span>Item Group</span></li>
-        </ul>
-      </div>`;
-    };
-
-    // --- composite components: DONE / WORKING / IDLE (attention first) ---
-    const agentsMenu = function() {
-      return `<div class="agents-demo">
-        <p class="agents-header">Agents</p>
-        ${itemGroup('done', 'Done', 2, [
-          agentRow('Eve', 'Finished the onboarding copy and tone guide', '1h', 'done'),
-          agentRow('Dan', 'Fixed the session timeout bug', '45m', 'done'),
-        ])}
-        ${itemGroup('working', 'Working', 1, [
-          agentRow('Carol', 'Migrating the auth service to the new schema', '12m', 'working'),
-        ])}
-        ${itemGroup('idle', 'Idle', 3, [
-          agentRow('Alice', 'Refactored the retry logic in the fetch client', '20m', 'idle'),
-          agentRow('Bob', 'Waiting on CI for the cache patch', '3m', 'idle'),
-          agentRow('Fay', 'Tidying the session store after the migration', '45m', 'idle'),
-        ])}
-      </div>`;
-    };
-
-    const components = {
-      settings: {
-        html: `
-          <button type="button" class="btn btn-settings">
-            <i class="ph ph-gear" aria-hidden="true"></i>
-            <span>Settings</span>
-          </button>
-        `
-      },
-      agents: {
-        html: `<div class="agents-demo">${agentsMenu()}</div>`
-      },
-      'nav-rail': {
-        html: `<div class="nav-demo-wrap">${railNav()}</div>`
-      },
-      'item-group': {
-        html: `<div class="item-group done">
-          <div class="item-head">
-            <span class="item-head-name">Done</span>
-            ${counter(2)}
-          </div>
-          <ul class="item-list">
-            ${agentRow('Eve', 'Finished the onboarding copy and tone guide', '1h', 'done')}
-            ${agentRow('Dan', 'Fixed the session timeout bug', '45m', 'done')}
-          </ul>
-        </div>`
-      },
-      counter: {
-        html: `<div style="display:flex;gap:16px;align-items:baseline;">
-          ${counter(1)}
-          ${counter(3)}
-          ${counter(24)}
-          ${counter(128)}
-        </div>`
-      },
-      'relative-timestamp': {
-        html: `<div class="relative-timestamp demo-set">
-          <span>3m</span><span>20m</span><span>45m</span><span>1h</span>
-        </div>`
-      },
-      'pie-ring-graph': {
-        html: `<div class="demo-ring">
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-opacity=".22" stroke-width="2" pathLength="1"></circle>
-            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" pathLength="1" stroke-dasharray="0.68 1" stroke-linecap="round"></circle>
-          </svg>
-        </div>`
-      }
-    };
-
-    const stage = document.getElementById('stage');
-    const nav = document.getElementById('rail-nav');
-
-    function show(key) {
-      nav.querySelectorAll('.nav-item').forEach(
-        (item) => item.classList.toggle('on', item.dataset.comp === key)
-      );
-      stage.innerHTML = components[key].html;
+    for (const [uri, fn] of Object.entries(routes)) {
+      Router.register(uri, TITLES[uri], () => fn());
     }
 
+    Router.setTitleFormat((t) => t || 'Design Guide');
+    M.mount('#app');
+    window.__M = M;
+    window.__Router = Router;
+
+    /* rail wiring: click → Router.set (pushes history + redraws).
+       The active rail item tracks the route via a native hashchange
+       listener — Router.onChange stores only ONE handler, and M.mount
+       must own it for the DOM to re-render on navigation. */
+    const nav = document.getElementById('rail-nav');
+    function syncRail() {
+      const cur = Router.uri;
+      nav.querySelectorAll('[data-route]').forEach(
+        (li) => li.classList.toggle('on', li.dataset.route === cur)
+      );
+    }
+    window.addEventListener('hashchange', syncRail);
+    syncRail();
     nav.addEventListener('click', (e) => {
-      const item = e.target.closest('.nav-item');
-      if (item) show(item.dataset.comp);
+      const li = e.target.closest('[data-route]');
+      if (li) Router.set(li.dataset.route);
     });
-    show('settings');
   </script>
 </body>
 </html>
