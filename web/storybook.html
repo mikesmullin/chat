@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design Guide</title>
+  <!-- the app's real skin, then the storybook layer (wins) -->
+  <link rel="stylesheet" href="/kit.css">
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    /* ================================================================
+     Storybook layer — sits on top of the chat app's skin (kit.css +
+     styles.css) and retints it for this guide: neutral black/charcoal
+     surfaces (no blue in the background family), white ink, indigo +
+     pastel accents. Every component here renders with the indigo accent
+     so the final app will inherit the same language.
+     ================================================================ */
+
+    /* retint the base skin to neutral charcoal (wins because it loads last) */
+    :root {
+      --bg: #0a0b0e;
+      --panel: #121317;
+      --panel-2: #181a20;
+      --line: #1d1f26;
+      --line-2: #262931;
+      --border: #23252c;
+      --text: #f1f3f6;
+      --muted: #8e94a2;
+
+      /* indigo — the only cool accent; kept off the blue side */
+      --accent: #7c7ef8;
+      --accent-soft: #a9accf;
+      --accent-tint: color-mix(in srgb, var(--accent) 10%, transparent);
+      --accent-glow: color-mix(in srgb, var(--accent) 6%, transparent);
+
+      /* pastel family — soft, low-chroma, for non-semantic roles */
+      --pastel-indigo: #b9bcd9;
+      --pastel-violet: #c9bde0;
+      --pastel-pink: #f0b8ce;
+      --pastel-amber: #f5d8a6;
+      --pastel-green: #a8e4b4;
+      --pastel-cyan: #aecbe3;
+      --pastel-red: #f2adab;
+    }
+
+    /* base: keep the near-black base, add the two-column shell */
+    #sb {
+      display: grid;
+      grid-template-columns: 264px 1fr;
+      height: 100%;
+      min-height: 100vh;
+    }
+
+    /* ------------------------------------------------ rail (left) ---- */
+    .sb-rail {
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .rail-head { padding: 24px 20px 14px; }
+    .rail-head h1 {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -.015em;
+      line-height: 1.2;
+      color: var(--text);
+    }
+    .rail-head p {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 3px;
+    }
+    .rail-group { margin-top: 18px; padding: 4px 20px 10px; }
+    .kicker {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .nav-list {
+      list-style: none;
+      padding: 6px 12px 40px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-height: 0;
+      overflow-y: auto;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      width: 100%;
+      text-align: left;
+      padding: 9px 12px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      font: inherit;
+      font-size: 15px;
+      color: var(--muted);
+      cursor: pointer;
+      transition: color .13s, background .13s, border-color .13s;
+    }
+    .nav-item .ph {
+      color: inherit;
+      font-size: 15px;
+      line-height: 1;
+      flex: 0 0 auto;
+      transition: color .13s;
+    }
+    .nav-item span { overflow: hidden; white-space: nowrap; }
+    .nav-item:hover { color: var(--text); background: var(--accent-glow); }
+    .nav-item.on {
+      color: var(--accent-soft);
+      border-color: var(--accent);
+      background: var(--accent-tint);
+    }
+    .nav-item.on .ph { color: var(--accent-soft); }
+
+    /* ------------------------------------------------ content (right) --
+       wide area; the selected component floats alone, centered
+       both ways (margin:auto survives tall content without clipping).
+     */
+    .sb-content {
+      min-height: 100%;
+      overflow-y: auto;
+      background: var(--bg);
+      display: flex;
+      padding: 24px;
+    }
+    .feature {
+      margin: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ================================================================
+     Component: settings button
+     gear (left) · "Settings" (right) — the settings entry point.
+     ================================================================ */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      font: inherit;
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--text);
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      padding: 0;
+      cursor: pointer;
+      transition: color .13s, transform .13s;
+    }
+    .btn:hover {
+      color: var(--accent-soft);
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn .ph {
+      font-size: 16px;
+      line-height: 1;
+      color: var(--muted);
+      transition: color .13s;
+    }
+    .btn:hover .ph { color: var(--accent-soft); }
+    .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* responsive: stack on narrow viewports */
+    @media (max-width: 860px) {
+      #sb { grid-template-columns: 1fr; }
+      .sb-rail {
+        grid-row: 1 / 1;
+        flex-direction: row;
+        align-items: center;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+        overflow: hidden;
+        height: auto;
+      }
+      .rail-head { margin: 0; padding: 12px 16px; display: flex; align-items: center; gap: 16px; }
+      .rail-group { display: none; }
+      .nav-list {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 10px;
+        overflow: hidden;
+        white-space: nowrap;
+      }
+      .sb-content { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="sb">
+    <!-- left rail: component navigator -->
+    <aside class="sb-rail">
+      <header class="rail-head">
+        <h1>Design Guide</h1>
+      </header>
+      <div class="rail-group">
+        <span class="kicker">Components</span>
+      </div>
+      <ul class="nav-list" id="rail-nav">
+        <li class="nav-item on" data-comp="settings">
+          <span>Settings Menu Item</span>
+        </li>
+      </ul>
+    </aside>
+
+    <!-- right: content / central focus for the selected component -->
+    <main class="sb-content">
+      <section class="feature" id="stage">
+        <button type="button" class="btn btn-settings">
+          <i class="ph ph-gear" aria-hidden="true"></i>
+          <span>Settings</span>
+        </button>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    /*
+     Component catalog — one entry per storybook item.
+     Adding a component = add a <li class="nav-item"> in the rail
+     (data-comp key) + an entry here. The rail click swaps the stage.
+     */
+    const COMPONENTS = {
+      settings: {
+        html: `
+          <button type="button" class="btn btn-settings">
+            <i class="ph ph-gear" aria-hidden="true"></i>
+            <span>Settings</span>
+          </button>
+        `
+      }
+    };
+
+    const nav = document.getElementById('rail-nav');
+    const stage = document.getElementById('stage');
+
+    function show(key) {
+      nav.querySelectorAll('.nav-item').forEach(
+        (item) => item.classList.toggle('on', item.dataset.comp === key)
+      );
+      stage.innerHTML = COMPONENTS[key].html;
+    }
+
+    nav.addEventListener('click', (e) => {
+      const item = e.target.closest('.nav-item');
+      if (item) show(item.dataset.comp);
+    });
+  </script>
+</body>
+</html>
