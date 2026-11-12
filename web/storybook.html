@@ -92,11 +92,13 @@
       min-height: 0; overflow-y: auto;
     }
     .nav-item {
-      display: flex; align-items: center; gap: 11px; width: 100%; text-align: left;
-      padding: 9px 12px; border: 1px solid transparent; border-radius: 7px;
+      display: flex; align-items: center; gap: 11px; justify-content: space-between;
+      width: 100%; text-align: left; padding: 9px 12px;
+      border: 1px solid transparent; border-radius: 7px;
       background: transparent; font: inherit; font-size: 15px; color: var(--muted);
       cursor: pointer; transition: color .13s, background .13s, border-color .13s;
     }
+    .nav-item .counter { font-size: 11px; }
     .nav-item .ph { color: inherit; font-size: 15px; line-height: 1; flex: 0 0 auto; transition: color .13s; }
     .nav-item span { overflow: hidden; white-space: nowrap; }
     .nav-item:hover { color: var(--text); background: var(--accent-glow); }
@@ -278,14 +280,31 @@
       <div class="rail-group">
         <span class="kicker">Components</span>
       </div>
+      <!-- Component count: number of distinct library components a component
+         is built from (0 = atomic, simplest → bottommost is most composite).
+         Order: count ascending, then alphabetical. -->
       <ul class="nav-list" id="rail-nav">
-        <li class="nav-item on" data-route="/">Settings Menu Item</li>
-        <li class="nav-item" data-route="/agents">Agents Menu</li>
-        <li class="nav-item" data-route="/nav-rail">Left Sidebar Navigation</li>
-        <li class="nav-item" data-route="/item-group">Item Group</li>
-        <li class="nav-item" data-route="/counter">Counter</li>
-        <li class="nav-item" data-route="/relative-timestamp">Relative Timestamp</li>
-        <li class="nav-item" data-route="/pie-ring-graph">Pie Ring Graph</li>
+        <li class="nav-item on" data-route="/">
+          <span>Settings Menu Item</span><span class="counter">0</span>
+        </li>
+        <li class="nav-item" data-route="/counter">
+          <span>Counter</span><span class="counter">0</span>
+        </li>
+        <li class="nav-item" data-route="/nav-rail">
+          <span>Left Sidebar Navigation</span><span class="counter">0</span>
+        </li>
+        <li class="nav-item" data-route="/pie-ring-graph">
+          <span>Pie Ring Graph</span><span class="counter">0</span>
+        </li>
+        <li class="nav-item" data-route="/relative-timestamp">
+          <span>Relative Timestamp</span><span class="counter">0</span>
+        </li>
+        <li class="nav-item" data-route="/item-group">
+          <span>Item Group</span><span class="counter">3</span>
+        </li>
+        <li class="nav-item" data-route="/agents">
+          <span>Agents Menu</span><span class="counter">4</span>
+        </li>
       </ul>
     </aside>
 
