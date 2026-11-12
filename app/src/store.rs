@@ -72,6 +72,7 @@ pub fn register() {
         .val("historyList", &js::new_array().into())
         .str("activeSessionId", "")
         .bool("historyOpen", true)
+        .bool("sideOpen", true)
         .bool("isFullscreen", false)
         .val("welcomeStarters", &js::new_array().into())
         // ── scroll ───────────────────────────────────────────────
@@ -458,6 +459,12 @@ fn methods(d: &mut Def) {
     .method("toggleHistory", |_this, _args| {
         let s = store_ref();
         js::set_bool(&s, "historyOpen", !js::get_bool(&s, "historyOpen"));
+        mjs::redraw();
+        JsValue::UNDEFINED
+    })
+    .method("toggleSide", |_this, _args| {
+        let s = store_ref();
+        js::set_bool(&s, "sideOpen", !js::get_bool(&s, "sideOpen"));
         mjs::redraw();
         JsValue::UNDEFINED
     })

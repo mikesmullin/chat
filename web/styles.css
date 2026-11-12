@@ -53,6 +53,13 @@ body {
   .demo { grid-template-columns: 1fr; grid-template-rows: 1fr 40vh; }
   .demo-side { border-left: 0; border-top: 1px solid var(--border); }
 }
+/* Right-rail collapse: drop the track with the pane (display:none alone
+   would leave a 380px hole) and the empty stacked row with it. */
+.demo.side-collapsed { grid-template-columns: 1fr; }
+.demo.side-collapsed .demo-side { display: none; }
+@media (max-width: 900px) {
+  .demo.side-collapsed { grid-template-rows: 1fr; }
+}
 
 /* m-js-cmp-chat — cowork chat UI. Host themes via these tokens (or
    --bg/--panel/--text/--border/--muted/--accent already used by cowork
