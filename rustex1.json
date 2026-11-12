@@ -1,0 +1,15 @@
+{
+  "name": "chat",
+  "port": 3020,
+  "app": {
+    "package": "chat-app",
+    "lib": "chat_app",
+    "profile": "wasm",
+    "watch": ["app", "vendor/rustex1/kit"]
+  },
+  "server": {
+    "package": "chat-server",
+    "watch": ["server", "vendor/rustex1/devserver"]
+  },
+  "static": ["web"]
+}
