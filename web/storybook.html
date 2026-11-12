@@ -260,6 +260,17 @@
     .nav-demo .nav-list { padding-bottom: 8px; }
     .nav-demo .nav-item:hover { background: var(--accent-glow); }
 
+    /* the live storybook rail (left side of the page) gets the same
+     toggle: #sb's grid track animates 264px -> 56px, the rail's text
+     hides, and the icon flips — open by default, same as the component */
+    #sb { transition: grid-template-columns .3s ease-in-out; }
+    #sb.collapsed { grid-template-columns: 56px 1fr; }
+    .sb-rail { position: relative; }
+    .sb-rail.collapsed .rail-head,
+    .sb-rail.collapsed .rail-group,
+    .sb-rail.collapsed .nav-list { display: none; }
+    .sb-rail.collapsed .rail-toggle .ph { transform: scaleX(-1); }
+
     /* top-right open/close toggle — bright, gray, layout glyph. Bare
      button like the settings icon: transparent, hover = color shift, no
      box chrome. */
@@ -317,6 +328,7 @@
       .nav-list { flex-direction: row; flex-wrap: wrap; gap: 8px; padding: 10px; overflow: hidden; white-space: nowrap; }
       .sb-content { padding: 16px; }
       .nav-demo { width: 100%; height: 340px; }
+      .sb-rail .rail-toggle { display: none; }
     }
   </style>
 </head>
@@ -324,6 +336,9 @@
   <div id="sb">
     <!-- left rail: static component navigator (Router drives #app) -->
     <aside class="sb-rail">
+      <button type="button" class="rail-toggle" aria-label="Toggle sidebar" aria-expanded="true" aria-pressed="true">
+        <i class="ph ph-sidebar-simple"></i>
+      </button>
       <header class="rail-head">
         <h1>Design Guide</h1>
       </header>
@@ -449,10 +464,17 @@
       const collapsed = demo.classList.toggle('collapsed');
       btn.setAttribute('aria-expanded', String(!collapsed));
       btn.setAttribute('aria-pressed', String(!collapsed));
+      /* live rail: its width is the #sb grid track — move that too */
+      if (demo.classList.contains('sb-rail')) {
+        document.getElementById('sb').classList.toggle('collapsed', collapsed);
+      }
     }
     document.addEventListener('click', (e) => {
       const btn = e.target.closest('.rail-toggle');
-      if (btn) railToggle(btn.closest('.nav-demo'), btn);
+      if (btn) {
+        const demo = btn.closest('.nav-demo') || btn.closest('.sb-rail');
+        if (demo) railToggle(demo, btn);
+      }
     });
 
     /* --- composite components: DONE / WORKING / IDLE (attention first) --- */
