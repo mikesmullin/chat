@@ -141,7 +141,8 @@
      Mono, muted, small. Inline; placed by its host, no self-alignment. */
     .counter {
       font-family: var(--mono);
-      font-size: 11px;
+      font-size: 12px;
+      line-height: inherit;
       color: var(--muted);
       font-weight: 400;
       flex: 0 0 auto;
@@ -164,7 +165,6 @@
       display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
       font-size: 12px;
     }
-    .item-head-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
     .item-head-name { font-weight: 600; }
     /* .item-head .counter — inline, no margin-left:auto */
     .item-list { list-style: none; margin: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -318,7 +318,6 @@
     const itemGroup = function(state, label, count, rows) {
       return `<div class="item-group ${state}">
         <div class="item-head">
-          <span class="item-head-dot"></span>
           <span class="item-head-name">${label}</span>
           ${counter(count)}
         </div>
@@ -390,7 +389,6 @@
       'item-group': {
         html: `<div class="item-group done">
           <div class="item-head">
-            <span class="item-head-dot"></span>
             <span class="item-head-name">Done</span>
             ${counter(2)}
           </div>
