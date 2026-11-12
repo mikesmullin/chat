@@ -2,3 +2,4 @@ target/
 tools/
 web/pkg/
 .git/
+/tmp/
