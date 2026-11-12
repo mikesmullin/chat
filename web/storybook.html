@@ -94,7 +94,8 @@
     .nav-item {
       display: flex; align-items: center; gap: 11px; justify-content: space-between;
       width: 100%; text-align: left; padding: 9px 12px;
-      border: 1px solid transparent; border-radius: 7px;
+      border: none;
+      border-left: 2px solid transparent;
       background: transparent; font: inherit; font-size: 15px; color: var(--muted);
       cursor: pointer; transition: color .13s, background .13s, border-color .13s;
     }
@@ -102,7 +103,7 @@
     .nav-item .ph { color: inherit; font-size: 15px; line-height: 1; flex: 0 0 auto; transition: color .13s; }
     .nav-item span { overflow: hidden; white-space: nowrap; }
     .nav-item:hover { color: var(--text); background: var(--accent-glow); }
-    .nav-item.on { color: var(--accent-soft); border-color: var(--accent); background: var(--accent-tint); }
+    .nav-item.on { color: var(--accent-soft); border-left-color: var(--accent); background: var(--accent-tint); }
     .nav-item.on .ph { color: var(--accent-soft); }
 
     /* ---- content (right) ---- */
