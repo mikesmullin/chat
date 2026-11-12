@@ -125,7 +125,10 @@
 
     /* ================================================================
      Sub-component: relative timestamp — how long in the state, short
-     format (3m, 20m, 1h). Reused in every grouped list. */
+     format (3m, 20m, 1h). Reused in every grouped list. Live instances
+     (data-timer) are redrawn by a single global window timer — direct
+     textContent manipulation, not an m-js redraw — so every live instance
+     on the page ticks in step. */
     .relative-timestamp {
       font-family: var(--mono);
       font-size: 12px;
@@ -135,6 +138,9 @@
     }
     .relative-timestamp.demo-set { display: flex; gap: 6px; align-items: baseline; }
     .relative-timestamp.demo-set span { white-space: nowrap; }
+    /* live instance in the demo set: reserve width so 1s → 10s → 60s
+     doesn't shift the other values */
+    .relative-timestamp.demo-set [data-timer] { min-width: 2ch; }
 
     /* the "agents" menu title: normal weight, dim gray (near #666) */
     .agents-header {
@@ -434,6 +440,7 @@
       '/counter': () => `<div class="counter-demo">${counter(1)}${counter(3)}${counter(24)}${counter(128)}</div>`,
       '/relative-timestamp': () => `<div class="relative-timestamp demo-set">
         <span>3m</span><span>20m</span><span>45m</span><span>1h</span>
+        <span class="relative-timestamp" data-timer="now"></span>
       </div>`,
       '/pie-ring-graph': () => `<div class="demo-ring">
         <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -442,6 +449,20 @@
         </svg>
       </div>`,
     };
+
+    /* Relative timestamp heartbeat: one global window interval, epoch
+     pinned to page load. Drives every live instance on the page
+     (data-timer) by direct textContent swap — not an m-js redraw.
+     So the counter keeps counting across route navigation. */
+    window.__relTimeEpoch = Date.now();
+    function relTimeTick() {
+      const elapsed = Math.max(0, Math.floor((Date.now() - window.__relTimeEpoch) / 1000));
+      if (elapsed <= 0) return;
+      document.querySelectorAll('.relative-timestamp[data-timer]').forEach((el) => {
+        el.textContent = `${elapsed}s`;
+      });
+    }
+    window.setInterval(relTimeTick, 1000);
 
     /* title per route */
     const TITLES = {
@@ -470,9 +491,10 @@
     const nav = document.getElementById('rail-nav');
     function syncRail() {
       const cur = Router.uri;
-      nav.querySelectorAll('[data-route]').forEach(
-        (li) => li.classList.toggle('on', li.dataset.route === cur)
-      );
+      nav.querySelectorAll('[data-route]').forEach((li) => {
+        li.classList.toggle('on', li.dataset.route === cur);
+        li.style.borderColor = li.classList.contains('on') ? 'var(--accent)' : 'transparent';
+      });
     }
     window.addEventListener('hashchange', syncRail);
     syncRail();
