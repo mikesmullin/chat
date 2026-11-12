@@ -248,9 +248,41 @@
       border: 1px solid var(--border);
       border-radius: 14px;
       display: flex; flex-direction: column; overflow: hidden;
+      transition: width .3s ease-in-out, border-radius .3s ease-in-out;
+      position: relative;
     }
+    /* collapsed = width shrinks toward the left edge; the icon stays
+     centered in the 56px column so it remains clickable. */
+    .nav-demo.collapsed { width: 56px; }
+    .nav-demo.collapsed .rail-head,
+    .nav-demo.collapsed .rail-group,
+    .nav-demo.collapsed .nav-list { display: none; }
     .nav-demo .nav-list { padding-bottom: 8px; }
     .nav-demo .nav-item:hover { background: var(--accent-glow); }
+
+    /* top-right open/close toggle — bright, gray, layout glyph. Bare
+     button like the settings icon: transparent, hover = color shift, no
+     box chrome. */
+    .rail-toggle {
+      position: absolute; top: 14px; right: 14px; z-index: 1;
+      width: 30px; height: 30px; display: flex;
+      align-items: center; justify-content: center;
+      background: transparent; border: 0; border-radius: 0;
+      cursor: pointer;
+      padding: 0;
+    }
+    .rail-toggle .ph {
+      font-size: 17px; line-height: 1;
+      color: var(--text);
+      transition: transform .3s ease-in-out, color .13s;
+    }
+    .rail-toggle:hover .ph { color: var(--accent-soft); }
+    .rail-toggle:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    /* when collapsed, the icon points the other way (slide back) */
+    .nav-demo.collapsed .rail-toggle .ph { transform: scaleX(-1); }
 
     /* demo chrome for sub-component showcases (only; the components
        themselves stay bare) */
@@ -399,6 +431,9 @@
 
     /* --- left sidebar navigation: the rail itself --- */
     const railNav = () => `<div class="nav-demo">
+      <button type="button" class="rail-toggle" aria-label="Toggle sidebar" aria-expanded="true" aria-pressed="true">
+        <i class="ph ph-sidebar-simple"></i>
+      </button>
       <div class="rail-head"><h1>Design Guide</h1></div>
       <div class="rail-group"><span class="kicker">Components</span></div>
       <ul class="nav-list">
@@ -407,6 +442,18 @@
         <li class="nav-item"><span>Item Group</span></li>
       </ul>
     </div>`;
+
+    /* toggle wiring — the .collapsed class + width transition do the
+     collapse/expand; we only flip the class and update a11y attrs */
+    function railToggle(demo, btn) {
+      const collapsed = demo.classList.toggle('collapsed');
+      btn.setAttribute('aria-expanded', String(!collapsed));
+      btn.setAttribute('aria-pressed', String(!collapsed));
+    }
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.rail-toggle');
+      if (btn) railToggle(btn.closest('.nav-demo'), btn);
+    });
 
     /* --- composite components: DONE / WORKING / IDLE (attention first) --- */
     const agentsMenu = () => `<div class="agents-menu">
