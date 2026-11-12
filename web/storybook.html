@@ -254,7 +254,18 @@
     .demo-ring { width: 64px; height: 64px; color: var(--accent); }
     .demo-ring svg, .demo-ring .pie-ring svg { width: 100%; height: 100%; display: block; }
 
-    /* responsive */
+    /* the standalone ring loops 0% → 100% → 0% (fill circle only; the
+       static track is the first circle). 3s ease-in-out for a smooth pulse. */
+    @keyframes ringfill {
+      0%   { stroke-dasharray: 0 1; }
+      50%  { stroke-dasharray: 1 0; }
+      100% { stroke-dasharray: 0 1; }
+    }
+    .demo-ring circle:last-of-type {
+      stroke-dasharray: 1 0;
+      animation: ringfill 3s ease-in-out infinite;
+    }
+
     @media (max-width: 860px) {
       #sb { grid-template-columns: 1fr; }
       .sb-rail {
