@@ -16,9 +16,14 @@
 
      Composition rule (2026-11-12): components are built from other
      components. An item group contains state labels, relative
-     timestamps, pie rings, and the nav rail is itself a component.
-     Each unit below has its own class; composed components reuse the
-     same classes, so the sub-component and its parent render identically.
+     timestamps, counters, pie rings, and the nav rail is itself a
+     component. Each unit below has its own class; composed components
+     reuse the same classes, so the sub-component and its parent render
+     identically.
+
+     Group order: Done, Working, Idle — things needing attention first.
+     Counters sit inline, immediately right of the group name (not
+     floated to the edge).
      ================================================================ */
 
     /* retint the base skin to neutral charcoal (wins because it loads last) */
@@ -121,8 +126,21 @@
     .relative-timestamp .demo-set span { white-space: nowrap; }
 
     /* ================================================================
+     Sub-component: counter — the item count for a group (or list).
+     Mono, muted, small. Inline; placed by its host, no self-alignment. */
+    .counter {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 400;
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+
+    /* ================================================================
      Sub-component: item group — the reusable grouping.
      State = color code + dot + name + counter, then a list of rows.
+     Counter sits inline, immediately right of the name.
      Rows are agent rows (robot, name, summary, meta) — see below.
      ================================================================ */
     .item-group { color: var(--muted); margin-bottom: 18px; max-width: 480px; width: 100%; }
@@ -131,13 +149,12 @@
     .item-group:last-child { margin-bottom: 0; }
 
     .item-head {
-      display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+      display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
       font-size: 12px;
     }
     .item-head-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
     .item-head-name { font-weight: 600; }
-    .item-head-count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); font-weight: 400; }
-
+    /* .item-head .counter — inline, no margin-left:auto */
     .item-list { list-style: none; margin: 0; display: flex; flex-direction: column; gap: 2px; }
 
     .item-row {
@@ -201,13 +218,12 @@
     .nav-demo .nav-list { padding-bottom: 8px; }
     .nav-demo .nav-item:hover { background: var(--accent-glow); }
 
-    /* demo chrome for sub-component showcases (only, the components
+    /* demo chrome for sub-component showcases (only; the components
        themselves stay bare) */
     .demo-cap {
       display: flex; align-items: center; gap: 8px;
       font-size: 12px; color: var(--muted); margin-bottom: 10px;
     }
-    .demo-cap .item-head-name { font-size: 12px; }
     .demo-ring { width: 64px; height: 64px; color: var(--accent); }
     .demo-ring svg, .demo-ring .pie-ring svg { width: 100%; height: 100%; display: block; }
 
@@ -242,6 +258,7 @@
         <li class="nav-item" data-comp="agents"><span>Agents Menu</span></li>
         <li class="nav-item" data-comp="nav-rail"><span>Left Sidebar Navigation</span></li>
         <li class="nav-item" data-comp="item-group"><span>Item Group</span></li>
+        <li class="nav-item" data-comp="counter"><span>Counter</span></li>
         <li class="nav-item" data-comp="relative-timestamp"><span>Relative Timestamp</span></li>
         <li class="nav-item" data-comp="pie-ring-graph"><span>Pie Ring Graph</span></li>
       </ul>
@@ -259,17 +276,22 @@
      Adding a component = one <li class="nav-item"> in the rail
      (data-comp key) + one entry here. The rail click swaps the stage.
 
-     Composition: agents-menu is built from item-group + relative-timestamp
-     + pie-ring-graph (same classes, same rendering). The rail item is a
-     second instance of the left-sidebar-navigation component.
+     Composition: agents-menu is built from item-group + relative-
+     timestamp + counter + pie-ring-graph (same classes, same builders).
+     The rail item is a second instance of the left-sidebar-navigation
+     component.
      */
+
     // --- reusable sub-components (shared classes, used by composites) ---
     const relativeTimestamp = function(value) {
       return `<span class="relative-timestamp">${value}</span>`;
     };
+    const counter = function(n) {
+      return `<span class="counter">${n}</span>`;
+    };
     const pieRing = function(fraction, color) {
       const f = Number(fraction).toFixed(2);
-      return `<svg viewBox="0 0 16 16" class="pie-ring" aria-hidden="true" ${color ? `style="color:${color}"` : ''}>
+      return `<svg viewBox="0 0 16 16" class="pie-ring" aria-hidden="true" ${color ? 'style="color:' + color + '"':''}>
         <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-opacity=".22" stroke-width="2" pathLength="1"></circle>
         <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2" pathLength="1" stroke-dasharray="${f} 1" stroke-linecap="round"></circle>
       </svg>`;
@@ -280,13 +302,13 @@
       return pieRing(0.68, 'var(--pastel-amber)');
     };
 
-    // --- item group: state dot + name + counter + list of rows ---
+    // --- item group: state dot + name + inline counter + list of rows ---
     const itemGroup = function(state, label, count, rows) {
       return `<div class="item-group ${state}">
         <div class="item-head">
           <span class="item-head-dot"></span>
           <span class="item-head-name">${label}</span>
-          <span class="item-head-count">${count}</span>
+          ${counter(count)}
         </div>
         <ul class="item-list">
           ${rows.join('\n')}
@@ -319,21 +341,21 @@
       </div>`;
     };
 
-    // --- composite components ---
+    // --- composite components: DONE / WORKING / IDLE (attention first) ---
     const agentsMenu = function() {
-      return `<div class="item-group-parent">
+      return `<div class="agents-demo">
         <p class="agents-header">agents</p>
-        ${itemGroup('idle', 'Idle', 3, [
-          agentRow('Alice', 'Refactored the retry logic in the fetch client', '20m', 'idle'),
-          agentRow('Bob', 'Waiting on CI for the cache patch', '3m', 'idle'),
-          agentRow('Fay', 'Tidying the session store after the migration', '45m', 'idle'),
+        ${itemGroup('done', 'Done', 2, [
+          agentRow('Eve', 'Finished the onboarding copy and tone guide', '1h', 'done'),
+          agentRow('Dan', 'Fixed the session timeout bug', '45m', 'done'),
         ])}
         ${itemGroup('working', 'Working', 1, [
           agentRow('Carol', 'Migrating the auth service to the new schema', '12m', 'working'),
         ])}
-        ${itemGroup('done', 'Done', 2, [
-          agentRow('Eve', 'Finished the onboarding copy and tone guide', '1h', 'done'),
-          agentRow('Dan', 'Fixed the session timeout bug', '45m', 'done'),
+        ${itemGroup('idle', 'Idle', 3, [
+          agentRow('Alice', 'Refactored the retry logic in the fetch client', '20m', 'idle'),
+          agentRow('Bob', 'Waiting on CI for the cache patch', '3m', 'idle'),
+          agentRow('Fay', 'Tidying the session store after the migration', '45m', 'idle'),
         ])}
       </div>`;
     };
@@ -348,26 +370,31 @@
         `
       },
       agents: {
-        html: `<div class="agents-demo">
-          ${agentsMenu()}
-        </div>`
+        html: `<div class="agents-demo">${agentsMenu()}</div>`
       },
       'nav-rail': {
         html: `<div class="nav-demo-wrap">${railNav()}</div>`
       },
       'item-group': {
-        html: `
-          <div class="item-group done">
-            <div class="item-head">
-              <span class="item-head-dot"></span>
-              <span class="item-head-name">Done</span>
-              <span class="item-head-count">2</span>
-            </div>
-            <ul class="item-list">
-              ${agentRow('Eve', 'Finished the onboarding copy and tone guide', '1h', 'done')}
-              ${agentRow('Dan', 'Fixed the session timeout bug', '45m', 'done')}
-            </ul>
-          </div>`
+        html: `<div class="item-group done">
+          <div class="item-head">
+            <span class="item-head-dot"></span>
+            <span class="item-head-name">Done</span>
+            ${counter(2)}
+          </div>
+          <ul class="item-list">
+            ${agentRow('Eve', 'Finished the onboarding copy and tone guide', '1h', 'done')}
+            ${agentRow('Dan', 'Fixed the session timeout bug', '45m', 'done')}
+          </ul>
+        </div>`
+      },
+      counter: {
+        html: `<div style="display:flex;gap:16px;align-items:baseline;">
+          ${counter(1)}
+          ${counter(3)}
+          ${counter(24)}
+          ${counter(128)}
+        </div>`
       },
       'relative-timestamp': {
         html: `<div class="relative-timestamp demo-set">
