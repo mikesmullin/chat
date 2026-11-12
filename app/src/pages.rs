@@ -147,17 +147,12 @@ fn main_col(pane: &Pane) -> Node {
 fn topbar(pane: &Pane) -> Node {
     if pane.sidebar {
         // Demo sidebar: no tabs toggle, no tab strip, no fullscreen button —
-        // the status readout (show-status) plus this pane's own collapse
-        // button. Reopen from the fullscreen topbar's sidebar toggle.
+        // just the status readout (show-status). Collapsing is owned by the
+        // one sidebar toggle in the fullscreen topbar, which stays visible
+        // while the rail is hidden.
         return m("header")
             .class("topbar sheet-chat-top")
-            .kids(vec![
-                m("button")
-                    .class("icon-btn")
-                    .attr("type", "button")
-                    .attr("title", "Collapse sidebar")
-                    .on("click", &format!("$store.{STORE}.toggleSide()"))
-                    .child(Node::icon("sidebar")),
+            .child(
                 m("div").class("sheet-chat-tabs").child(
                     m("div").class("chat-header-meta").kids(vec![
                         m("span")
@@ -169,8 +164,8 @@ fn topbar(pane: &Pane) -> Node {
                             .show(&format!("$store.{STORE}.elapsed"))
                             .text(&format!("$store.{STORE}.elapsed")),
                     ]),
-                ),
-            ]);
+                )
+            );
     }
     m("header").class("topbar").kids(vec![
         m("button")
