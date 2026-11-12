@@ -51,6 +51,9 @@
       --pastel-green: #a8e4b4;
       --pastel-cyan: #aecbe3;
       --pastel-red: #f2adab;
+
+      /* dim gray, near #666 — idle state + its symbol */
+      --gray-dim: #6e717a;
     }
 
     /* base: the two-column shell */
@@ -144,8 +147,9 @@
      Rows are agent rows (robot, name, summary, meta) — see below.
      ================================================================ */
     .item-group { color: var(--muted); margin-bottom: 18px; max-width: 480px; width: 100%; }
+    .item-group.idle { color: var(--gray-dim); }
     .item-group.working { color: var(--pastel-amber); }
-    .item-group.done { color: var(--accent-soft); }
+    .item-group.done { color: var(--accent); }
     .item-group:last-child { margin-bottom: 0; }
 
     .item-head {
@@ -177,7 +181,7 @@
        not inherited, because the row overrides color to ink) */
     .state-idle {
       width: 10px; height: 10px; border-radius: 50%;
-      border: 2px solid var(--muted); background: transparent;
+      border: 2px solid var(--gray-dim); background: transparent;
       flex: 0 0 auto;
     }
     .state-done {
