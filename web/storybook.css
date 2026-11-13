@@ -135,6 +135,64 @@
 }
 
 /* ================================================================
+   Form field chrome — charcoal retint of the kit widgets, scoped to #sb.
+   The kit defaults are dark-blue with an orange focus glow, both
+   off-palette here; these rules route everything through storybook
+   tokens. Shared by every input component and the automation form.
+   ================================================================ */
+#sb input[type="text"],
+#sb input[type="number"],
+#sb textarea,
+#sb .segmented,
+#sb .chips,
+#sb .switch {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+#sb input:focus,
+#sb textarea:focus,
+#sb .segmented:focus,
+#sb .chips:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+#sb .field-hint { color: var(--muted); }
+#sb .stepper .step {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--muted);
+}
+#sb .stepper .step:hover {
+  color: var(--accent-soft);
+  background: var(--panel);
+}
+#sb .stepper:focus-within .step { border-color: var(--accent); }
+#sb .seg:hover {
+  color: var(--text);
+  background: var(--accent-glow);
+}
+#sb .seg.on {
+  color: var(--accent-soft);
+  background: var(--accent-tint);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 48%, transparent);
+}
+#sb .chip {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--text);
+}
+#sb .switch.on {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+#sb .btn.primary {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  color: var(--accent-soft);
+}
+#sb .btn.primary:hover { background: var(--accent-glow); }
+
+/* ================================================================
    Page-level responsive rules
    ================================================================ */
 @media (max-width: 860px) {

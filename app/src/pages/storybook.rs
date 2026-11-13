@@ -12,6 +12,17 @@
 //!   /storybook/item-group -> Item Group
 //!   /storybook/agents     -> Agents Menu
 //!   /storybook/sandboxes  -> Sandboxes Menu
+//!   /storybook/automation -> New Automation (form of fields + validation)
+//!   /storybook/field      -> Field (label + control + hint)
+//!   /storybook/label      -> Label
+//!   /storybook/hint       -> Hint Text
+//!   /storybook/text-input -> Text Input (bare kit uiText)
+//!   /storybook/toggle     -> Toggle Button (bare kit uiToggle)
+//!   /storybook/range      -> Range Input (bare kit uiNumber stepper)
+//!   /storybook/radio      -> Radio Input (bare kit uiChoice)
+//!   /storybook/text-area  -> Text Area (bare kit uiArea)
+//!   /storybook/tags       -> Tag Input (bare kit uiChips)
+//!   /storybook/validation -> Validation Info (error / ok)
 //!   /storybook/tab        -> Tab (single unit, three static samples)
 //!   /storybook/tab-bar    -> Tab Bar (live: add / pick / close)
 //!
@@ -23,7 +34,11 @@ use rustex1_kit::mjs::{self, Def};
 use rustex1_kit::{js, lifecycle, Runtime};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
-use crate::components::{agents_menu, item_group, nav_rail, relative_timestamp, sandboxes_menu, tab};
+use crate::components::{
+    agents_menu, automation_form, field, hint_text, item_group, label, nav_rail, radio_input,
+    range_input, relative_timestamp, sandboxes_menu, tab, tag_input, text_area, text_input,
+    toggle_button, validation_info,
+};
 
 /// the two-column shell: rail (left) + centred content (right).
 fn shell(active: &str, content: Node) -> Node {
@@ -199,6 +214,77 @@ pub fn register(rt: &mut Runtime) {
             "route /storybook/sandboxes",
             "Sandboxes Menu",
             sandboxes_menu::sandboxes_menu(),
+        )
+    });
+
+    // the new-automation form (fields + validation, bound to the draft store).
+    rt.route("/storybook/automation", "New Automation", |_| {
+        route_def(
+            "route /storybook/automation",
+            "New Automation",
+            automation_form::automation_form(),
+        )
+    });
+
+    // one field row: label + control + hint.
+    rt.route("/storybook/field", "Field", |_| {
+        route_def("route /storybook/field", "Field", field::demo())
+    });
+
+    // the field's label.
+    rt.route("/storybook/label", "Label", |_| {
+        route_def("route /storybook/label", "Label", label::demo())
+    });
+
+    // the field's hint line.
+    rt.route("/storybook/hint", "Hint Text", |_| {
+        route_def("route /storybook/hint", "Hint Text", hint_text::demo())
+    });
+
+    // bare single-line input.
+    rt.route("/storybook/text-input", "Text Input", |_| {
+        route_def(
+            "route /storybook/text-input",
+            "Text Input",
+            text_input::demo(),
+        )
+    });
+
+    // bare boolean switch.
+    rt.route("/storybook/toggle", "Toggle Button", |_| {
+        route_def(
+            "route /storybook/toggle",
+            "Toggle Button",
+            toggle_button::demo(),
+        )
+    });
+
+    // bare numeric stepper.
+    rt.route("/storybook/range", "Range Input", |_| {
+        route_def("route /storybook/range", "Range Input", range_input::demo())
+    });
+
+    // bare single-choice segmented control.
+    rt.route("/storybook/radio", "Radio Input", |_| {
+        route_def("route /storybook/radio", "Radio Input", radio_input::demo())
+    });
+
+    // bare multiline input.
+    rt.route("/storybook/text-area", "Text Area", |_| {
+        route_def("route /storybook/text-area", "Text Area", text_area::demo())
+    });
+
+    // bare token box.
+    rt.route("/storybook/tags", "Tag Input", |_| {
+        route_def("route /storybook/tags", "Tag Input", tag_input::demo())
+    });
+
+    // the form's verdict line: error / ok samples.
+    rt.route("/storybook/validation", "Validation Info", |_| {
+        route_def(
+            "route /storybook/validation",
+            "Validation Info",
+            validation_info::demo(),
         )
     });
 
