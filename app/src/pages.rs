@@ -20,6 +20,8 @@ use rustex1_kit::{mjs, Runtime};
 
 use crate::store::STORE;
 
+pub mod storybook;
+
 /// One pane of the demo. The fullscreen pane is the primary chat; the sidebar
 /// is the compact rail the demo mounts beside it — same store, fewer chrome.
 struct Pane {
@@ -38,6 +40,8 @@ pub fn register(rt: &mut Runtime) {
         d.tree(shell());
         d.finish()
     });
+
+    storybook::register(rt);
 }
 
 fn shell() -> Node {
