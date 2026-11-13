@@ -16,6 +16,7 @@
 use rustex1_kit::{self as kit, App, Runtime};
 use wasm_bindgen::prelude::*;
 
+mod api;
 mod helpers;
 mod pages;
 mod store;

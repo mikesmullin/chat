@@ -20,6 +20,7 @@ use rustex1_kit::{mjs, Runtime};
 
 use crate::store::STORE;
 
+pub mod home;
 pub mod storybook;
 
 /// One pane of the demo. The fullscreen pane is the primary chat; the sidebar
@@ -35,8 +36,17 @@ const SIDE: Pane = Pane { p: "chat-side", sidebar: true };
 
 pub fn register(rt: &mut Runtime) {
     mjs::router_set_mode("path");
+    // the home shell owns a CSS block and the `home` store (aside collapse)
+    home::register();
+    // `/` is the three-column app shell, composed from the storybook
+    // components. The original chat demo still exists, at /chat-demo.
     rt.route("/", "Chat", |_params| {
         let mut d = Def::new().named("route /");
+        d.tree(home::shell());
+        d.finish()
+    });
+    rt.route("/chat-demo", "Chat (demo)", |_params| {
+        let mut d = Def::new().named("route /chat-demo");
         d.tree(shell());
         d.finish()
     });

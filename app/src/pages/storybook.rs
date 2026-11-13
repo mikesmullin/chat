@@ -26,7 +26,8 @@
 //!   /storybook/session-history -> Session History (past sessions)
 //!   /storybook/session   -> Session (transcript of message cards)
 //!   /storybook/session-panel -> Session Panel (transcript + composer)
-//!   /storybook/composer  -> Composer (draft + row: selects, ctx pie, send)
+//!   /storybook/composer  -> Composer (draft + row: dropdowns, ctx pie, send)
+//!   /storybook/dropdown  -> Dropdown (themed select: icon + value + caret)
 //!   /storybook/system-card -> System Card (system prompt)
 //!   /storybook/user-card -> User Card (user prompt bubble)
 //!   /storybook/assistant-card -> Assistant Card (response block)
@@ -49,7 +50,8 @@ use rustex1_kit::{js, lifecycle, Runtime};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use crate::components::{
-    agents_menu, approval_card, assistant_card, automation_form, composer, error_card,
+    agents_menu, approval_card, assistant_card, automation_form, composer, dropdown,
+    error_card,
     field, hint_text, item_group, label, nav_rail, radio_input, range_input,
     reasoning_card, relative_timestamp, sandboxes_menu, session, session_history,
     session_panel, system_card, tab, tag_input, task_list, text_area, text_input, thinking, toggle_button, tool_call_card, tool_response_card,
@@ -326,9 +328,14 @@ pub fn register(rt: &mut Runtime) {
         )
     });
 
-    // the prompt bar: draft + selects + ctx pie + send/stop.
+    // the prompt bar: draft + dropdowns + ctx pie + send/stop.
     rt.route("/storybook/composer", "Composer", |_| {
         route_def("route /storybook/composer", "Composer", composer::demo())
+    });
+
+    // the themed select: icon + mono value + caret, dark menu.
+    rt.route("/storybook/dropdown", "Dropdown", |_| {
+        route_def("route /storybook/dropdown", "Dropdown", dropdown::demo())
     });
 
     // one route per message card, each alone on screen.
