@@ -11,7 +11,7 @@
 //! Owns its CSS; injected at boot by `components::register`.
 
 use rustex1_kit::h::{lit, m, Node};
-use crate::components::state_symbols;
+use crate::components::session_state;
 
 /// the item group's styles (group + head + list + rows + state symbols' layout).
 pub const CSS: &str = r#"
@@ -52,16 +52,9 @@ pub const CSS: &str = r#"
 
 /// one agent row.
 fn row(name: &str, summary: &str, reltime: &str, tone: &str) -> Node {
-    // per-state symbol.
-    let symbol = if tone == "done" {
-        state_symbols::done()
-    } else if tone == "working" {
-        // the amber cooldown ring, reusing the pie-ring widget.
-        Node::host("uiPieRing", &[("color", "var(--pastel-amber)")])
-            .bind("fraction", "0.68")
-    } else {
-        state_symbols::idle()
-    };
+    // per-state symbol — the shared `uiSessionState` unit, so the row's
+    // symbol is literally the same markup featured at /storybook/session-state.
+    let symbol = session_state::symbol(tone);
     m("li")
         .class("item-row")
         .kids(vec![

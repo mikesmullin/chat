@@ -8,7 +8,8 @@ pub mod pie_ring_graph;
 pub mod reltime;
 pub mod relative_timestamp;
 pub mod settings_menu_item;
-pub mod state_symbols;
+pub mod session_state;
+pub mod tab;
 
 /// register the storybook's leaf widgets.
 ///
@@ -19,7 +20,8 @@ pub fn register() {
     pie_ring_graph::register();
     settings_menu_item::register();
     reltime::register();
-    state_symbols::register();
+    session_state::register();
+    tab::register();
 
     css::inject("item-group", item_group::CSS);
     css::inject("agents-menu", agents_menu::CSS);
