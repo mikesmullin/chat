@@ -98,6 +98,43 @@
 }
 
 /* ================================================================
+   Scrollbars — thin, rounded, dark (apple-style), scoped to #sb
+   (transparent track, muted-translucent thumb, 8px / 4px visible).
+   Token-routed: no raw hexes, so a palette change stays one edit.
+   ================================================================ */
+#sb, #sb * {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 32%, transparent) transparent;
+}
+#sb::-webkit-scrollbar,
+#sb *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+#sb::-webkit-scrollbar-track,
+#sb *::-webkit-scrollbar-track {
+  background: transparent;
+}
+#sb::-webkit-scrollbar-thumb,
+#sb *::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 32%, transparent);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 8px;
+}
+#sb::-webkit-scrollbar-thumb:hover,
+#sb *::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 8px;
+}
+#sb::-webkit-scrollbar-corner,
+#sb *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ================================================================
    Page-level responsive rules
    ================================================================ */
 @media (max-width: 860px) {

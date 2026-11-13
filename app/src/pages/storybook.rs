@@ -11,6 +11,7 @@
 //!   /storybook/session-state -> Session State (done / working / idle symbols)
 //!   /storybook/item-group -> Item Group
 //!   /storybook/agents     -> Agents Menu
+//!   /storybook/sandboxes  -> Sandboxes Menu
 //!   /storybook/tab        -> Tab (single unit, three static samples)
 //!   /storybook/tab-bar    -> Tab Bar (live: add / pick / close)
 //!
@@ -22,7 +23,7 @@ use rustex1_kit::mjs::{self, Def};
 use rustex1_kit::{js, lifecycle, Runtime};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
-use crate::components::{agents_menu, item_group, nav_rail, relative_timestamp, tab};
+use crate::components::{agents_menu, item_group, nav_rail, relative_timestamp, sandboxes_menu, tab};
 
 /// the two-column shell: rail (left) + centred content (right).
 fn shell(active: &str, content: Node) -> Node {
@@ -189,6 +190,15 @@ pub fn register(rt: &mut Runtime) {
             "route /storybook/agents",
             "Agents Menu",
             agents_menu::agents_menu(),
+        )
+    });
+
+    // the sandboxes menu (one group per host computer).
+    rt.route("/storybook/sandboxes", "Sandboxes Menu", |_| {
+        route_def(
+            "route /storybook/sandboxes",
+            "Sandboxes Menu",
+            sandboxes_menu::sandboxes_menu(),
         )
     });
 
