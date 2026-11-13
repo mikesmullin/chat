@@ -24,10 +24,10 @@ const ENTRIES: [(&'static str, &'static str, &'static str); 10] = [
     ("Relative Timestamp", "/storybook/reltime", "0"),
     ("Settings Menu Item", "/storybook", "0"),
     ("Session State", "/storybook/session-state", "1"),
+    ("Tab", "/storybook/tab", "2"),
     ("Item Group", "/storybook/item-group", "3"),
-    ("Tab", "/storybook/tab", "3"),
+    ("Tab Bar", "/storybook/tab-bar", "3"),
     ("Agents Menu", "/storybook/agents", "4"),
-    ("Tab Bar", "/storybook/tab-bar", "4"),
 ];
 
 /// The layout toggle. Fires `toggleRail($event)` — a method each storybook

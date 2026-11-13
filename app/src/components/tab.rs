@@ -1,28 +1,29 @@
 //! `uiTab` — one tab of a tab bar. The tab's **state** lives in the `tabbook`
 //! store (same shape as the chat app's own tabs: a list + an `activeId` +
-//! `newTab`/`selectTab`/`closeTab` store methods).
+//! `addTab`/`pickTab`/`closeTab` store methods).
 //!
 //! ## Structure
-//! The display (number + state symbol) is the reusable `uiTab` unit. The
-//! *actions* (pick / close) live on the `x-for` **row**, as direct children,
-//! matching the chat app's tab row exactly — mjs reliably handles `@click`
-//! handlers on row-level elements, but not on elements nested inside a
-//! sub-component (that nesting is what made the close button inert).
+//! The display (icon + title + state symbol) is the reusable `uiTab` unit:
+//! a robot icon by default (the same glyph the agents-menu rows use), a
+//! title that may be a number or text, and the shared `uiSessionState`
+//! symbol. The *actions* (pick / close) live on the `x-for` **row**, as
+//! direct children, matching the chat app's tab row exactly — mjs reliably
+//! handles `@click` handlers on row-level elements, but not on elements
+//! nested inside a sub-component (that nesting is what made the close
+//! button inert).
 //!
 //! - `.tab` row: `@click` → `pickTab(tab.id)`
 //! - `.tab-x` button (direct row child): `@click.stop` → `closeTab(tab.id)`
-//! - `uiTab` (display host): number (shared counter) + state symbol (shared
-//!   session-state unit)
+//! - `uiTab` (display host): icon + title + `uiSessionState` symbol
 
 use wasm_bindgen::JsValue;
 
 use rustex1_kit::h::{m, Node};
 use rustex1_kit::mjs;
 use rustex1_kit::mjs::Def;
+use rustex1_kit::js;
 
 use crate::css;
-
-use rustex1_kit::js;
 
 pub const NAME: &str = "uiTab";
 
@@ -30,16 +31,19 @@ const STORE: &str = "tabbook";
 
 const CSS: &str = r#"
 .tab {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  display: inline-flex; align-items: center;
+  gap: 6px;
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel-2);
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 1.3;
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
+  min-width: fit-content;
   transition: border-color .13s, background-color .13s, color .13s;
 }
 .tab:hover:not(.tab.active) {
@@ -56,15 +60,38 @@ const CSS: &str = r#"
   background: var(--accent-tint);
   color: var(--accent-soft);
 }
-/* the display unit (uiTab): number + state symbol, fills the tab */
-.ui-tab { display: inline-flex; align-items: center; gap: 6px; }
+/* the display unit: icon + title + state symbol. A true flex row — the
+   title stretches, the icon and symbol are fixed-size, so the ring (14x14
+   square, flex 0 0 auto via the global .pie-ring/.state-* rules) never
+   squishes in a tight row. */
+.ui-tab {
+  display: flex; align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 1.3em;
+}
+/* the icon: the only <i> inside a tab, styled here (robot glyph by default,
+   named phosphor icon via the `icon` prop) */
+.ui-tab i {
+  flex: 0 0 auto;
+  font-size: 14px; line-height: 1.3;
+}
+.ui-tab .ui-tab-title {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* the close button: bare glyph, inherits the tab's ink, indigo hover */
 .tab-x {
   flex: 0 0 auto;
   border: 0; background: transparent;
-  padding: 0 1px;
+  padding: 0 2px;
   border-radius: 4px;
   color: inherit; cursor: pointer;
+  line-height: 1.3;
   transition: color .13s, background-color .13s;
 }
 .tab-x:hover { color: var(--accent-soft); }
@@ -72,10 +99,6 @@ const CSS: &str = r#"
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-.tab .ph { font-size: 12px; line-height: 1; flex: 0 0 auto; }
-.tab .counter { font-size: 13px; }
-/* the pie ring keeps the 14px size of the agents-menu symbol */
-.tab .pie-ring { width: 14px; height: 14px; vertical-align: middle; }
 /* the live bar (tab-bar): rows + plus button */
 .tab-bar { display: inline-flex; align-items: center; gap: 8px; }
 .tab-plus {
@@ -86,6 +109,7 @@ const CSS: &str = r#"
   background: var(--panel-2);
   color: var(--muted);
   cursor: pointer;
+  line-height: 1.3;
   transition: color .13s, border-color .13s, background-color .13s;
 }
 .tab-plus:hover {
@@ -96,38 +120,49 @@ const CSS: &str = r#"
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.tab-plus .ph { font-size: 14px; line-height: 1; }
+.tab-plus .ph { font-size: 14px; line-height: 1.3; }
 /* demo chrome: the static row of three on /storybook/tab */
 .tab-demo { display: flex; gap: 8px; }
 "#;
 
-/// One tab DISPLAY host for the STATIC feature demo. String `state` is wrapped
-/// in single quotes so m-js reads a JS string literal.
-pub fn tab_display(n: i32, state: &str) -> Node {
-    Node::host("uiTab", &[])
-        .attr("class", "ui-tab")
-        .bind("n", &format!("{}", n))
-        .bind("state", &format!("'{}'", state))
+/// One tab DISPLAY host for the STATIC feature demo. Strings are wrapped in
+/// single quotes so m-js reads a JS string literal.
+pub fn tab_display(icon: &str, title: &str, tone: &str) -> Node {
+    Node::host_bound("uiTab", &[
+        ("class", "ui-tab"),
+        ("icon", &format!("'{}'", icon)),
+        ("title", &format!("'{}'", title)),
+        ("tone", &format!("'{}'", tone)),
+    ])
 }
 
-/// Feature demo: three static tabs — one active (n=1), two not (n=2, n=3).
-/// A design sample: the close button is inert (no `@click` handler bound).
+/// Feature demo: three static tabs — one active numeric, one numeric
+/// working, one text-titled idle; each shows the full composition (icon +
+/// title + symbol + close), the close button being inert in this static
+/// sample (no store).
 pub fn demo() -> Node {
+    let close = m("button")
+        .class("tab-x")
+        .attr("type", "button")
+        .child(Node::icon("x"));
     m("div")
         .class("tab-demo")
         .kids(vec![
             m("span")
                 .class("tab active")
                 .attr("aria-pressed", "true")
-                .child(tab_display(1, "done")),
+                .child(tab_display("robot", "1", "done"))
+                .child(close.clone()),
             m("span")
                 .class("tab")
                 .attr("aria-pressed", "false")
-                .child(tab_display(2, "working")),
+                .child(tab_display("robot", "2", "working"))
+                .child(close.clone()),
             m("span")
                 .class("tab")
                 .attr("aria-pressed", "false")
-                .child(tab_display(3, "idle")),
+                .child(tab_display("robot", "Idle", "idle"))
+                .child(close.clone()),
         ])
 }
 
@@ -135,7 +170,7 @@ pub fn demo() -> Node {
 /// (no sub-component boundary) so its `@click` and the child close button's
 /// `@click.stop` both reliably fire — the chat-app pattern.
 pub fn tab_bar() -> Node {
-    let st = format!("$store.{}", STORE); // e.g. `$store.tabbook`
+    let st = format!("$store.{}", STORE);
     m("div")
         .class("tab-bar")
         .kids(vec![
@@ -146,11 +181,12 @@ pub fn tab_bar() -> Node {
                 .bind("class", &format!("{{ active: tab.id === {}.activeId }}", st))
                 .on("click", &format!("{}.pickTab(tab.id)", st))
                 .kids(vec![
-                    Node::host("uiTab", &[])
-                        .attr("class", "ui-tab")
-                        .bind("n", "(i + 1)")
-                        // m-js reads `tab.state` from the x-for row.
-                        .bind("state", "tab.state"),
+                    Node::host_bound("uiTab", &[
+                        ("class", "ui-tab"),
+                        ("icon", "'robot'"),
+                        ("title", &format!("tab.label + ''")),
+                        ("tone", &format!("tab.state")),
+                    ]),
                     m("button")
                         .class("tab-x")
                         .attr("type", "button")
@@ -175,38 +211,51 @@ pub fn register() {
 }
 
 /// Props (host-provided, with defaults):
-/// - `n`   — 1-indexed number shown in the tab (default 1)
-/// - `state` — `done` / `working` / `idle` (default `done`)
+/// - `icon`  — phosphor glyph name; empty string means the robot icon (default "")
+/// - `title` — tab title; a number or text (default "")
+/// - `tone`  — `done` / `working` / `idle` (default `done`)
 fn def() -> Def {
     let mut d = Def::new().named(NAME);
-    d.prop_num("n", 1.0)
-        .prop_str("state", "done")
+    d.prop_str("icon", "")
+        .prop_str("title", "")
+        .prop_str("tone", "done")
         .tree(
             m("span")
                 .class("ui-tab")
                 .kids(vec![
-                    // the number is the shared counter unit.
-                    Node::host("uiCounter", &[]).bind("value", "n"),
-                    // the state symbol is the shared session-state unit.
-                    Node::host("uiSessionState", &[]).bind("tone", "state"),
+                    // icon: robot by default, otherwise a named phosphor glyph.
+                    // Parens are required: without them the ternary binds looser
+                    // than `+`/`===` and m-js evaluates it to just the glyph.
+                    Node::icon_dyn("(icon === '' ? 'robot' : icon)")
+                        .class("ui-tab-icon"),
+                    // title: number or text, ellipsised when it overflows.
+                    m("span")
+                        .class("ui-tab-title")
+                        .text("title"),
+                    // state symbol: the shared `uiSessionState` unit, so a tab's
+                    // symbol is literally the same markup featured alone at
+                    // /storybook/session-state.
+                    Node::host("uiSessionState", &[])
+                        .bind("tone", "tone"),
                 ]),
         );
     d
 }
 
-/// seed: 3 tabs (ids 1/2/3, done/working/idle), active = 1.
+/// seed: 3 tabs (ids 1/2/3, done/working/idle, labels 1/2/3), active = 1.
 fn seed_tabs() -> JsValue {
     let a = js_sys::Array::new();
-    for (id, state) in [(1.0, "done"), (2.0, "working"), (3.0, "idle")] {
+    for (id, state, label) in [(1.0, "done", 1.0), (2.0, "working", 2.0), (3.0, "idle", 3.0)] {
         let t = js::obj();
         js::set_num(&t, "id", id);
+        js::set_num(&t, "label", label);
         js::set_str(&t, "state", state);
         a.push(&t.into());
     }
     a.into()
 }
 
-/// `addTab`: append the next tab (id = length + 1), cycle its state,
+/// `addTab`: append the next tab (id = max existing + 1), cycle its state,
 /// make it active. Mirrors `store.newTab`.
 fn add_tab_store(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
@@ -225,6 +274,7 @@ fn add_tab_store(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let state = states[((n - 1.0) as usize) % 3];
     let t = js::obj();
     js::set_num(&t, "id", n);
+    js::set_num(&t, "label", n);
     js::set_str(&t, "state", state);
     let pushed = tabs.clone();
     pushed.push(&t.into());
