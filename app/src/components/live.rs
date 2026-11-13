@@ -61,8 +61,12 @@ fn open_session_by_id(id: &str) {
         for m in msgs.iter() {
             add_html(&m);
         }
-        js::set(&s, "messages", &msgs.into());
+        js::set(&s, "messages", &msgs.clone().into());
         js::set(&s, "session", &js::get(&v, "session"));
+        // Rebuild the session totals from the reloaded transcript, so
+        // reopening a session shows what it has cost so far rather than
+        // starting from zero.
+        store_metrics(&s, &session_metrics(&msgs));
         // Seed the allowlist editor: the session's override if it has one,
         // else the agent default. The baseline is what "overridden" is
         // measured against.
@@ -70,6 +74,14 @@ fn open_session_by_id(id: &str) {
         js::set_str(&s, "allowlist", &text);
         let overridden = js::get_bool(&v, "allowlistOverridden");
         js::set_bool(&s, "allowlistOverridden", overridden);
+        // Restore the policy so switching sessions shows each one's own.
+        let unrestricted = js::get_str(&v, "allowlistMode") == "unrestricted";
+        js::set_bool(&s, "unrestricted", unrestricted);
+        js::set_str(
+            &mjs::store_ref("dropdown"),
+            "policy",
+            if unrestricted { "Unrestricted" } else { "Allowlist" },
+        );
         if !overridden {
             js::set_str(&s, "allowlistBaseline", &text);
         }
@@ -117,23 +129,6 @@ fn new_session(_this: JsValue, _args: js_sys::Array) -> JsValue {
             clear_stream(&s);
         }
         mjs::redraw();
-        load_sessions(JsValue::UNDEFINED, js_sys::Array::new());
-    });
-    JsValue::UNDEFINED
-}
-
-/// `closeSession(id)` — a tab's `×`.
-fn close_session(_this: JsValue, args: js_sys::Array) -> JsValue {
-    let id = js::arg_str(&args, 0);
-    if id.is_empty() {
-        return JsValue::UNDEFINED;
-    }
-    let s = mjs::store_ref(STORE);
-    if js::get_str(&s, "activeId") == id {
-        js::set_str(&s, "activeId", "");
-        js::set(&s, "messages", &js_sys::Array::new().into());
-    }
-    api::delete_session(&id, |_| {
         load_sessions(JsValue::UNDEFINED, js_sys::Array::new());
     });
     JsValue::UNDEFINED
@@ -241,7 +236,11 @@ fn on_row(row: &JsValue) {
                 // The sealed bubble replaces the streamed one.
                 "assistant" => {
                     let streamed = js::get_str(&s, "streamText");
-                    let final_text = if text.is_empty() { streamed } else { text };
+                    let final_text = if text.is_empty() { streamed } else { text.clone() };
+                    // Fold this turn into the running totals. The rates come
+                    // from this turn's telemetry; the counts accumulate.
+                    let tel = js::get(&card, "telemetry");
+                    add_turn_metrics(&s, &tel, &final_text);
                     if !final_text.trim().is_empty() {
                         push_message(&s, "assistant", &final_text, "");
                     }
@@ -315,11 +314,23 @@ pub fn register() {
         .str("allowlistBaseline", "")
         .bool("allowlistOpen", false)
         .bool("allowlistOverridden", false)
+        // True while the session runs with `*`. The rules survive it.
+        .bool("unrestricted", false)
         .bool("waiting", false)
         // Sticky scroll: true while the reader is at (or near) the bottom.
         .bool("stickBottom", true)
         .num("promptTokens", 0.0)
         .num("totalTokens", 0.0)
+        // Metrics for the most recent turn that reported any, rendered
+        // under the composer. Held as pre-built HTML for the same reason
+        // the markdown is: a binding would rebuild it on every redraw.
+        .str("lastMetrics", "")
+        // Running session totals behind the rendered row.
+        .num("mTps", 0.0)
+        .num("mDur", 0.0)
+        .num("mIn", 0.0)
+        .num("mOut", 0.0)
+        .num("mBytes", 0.0)
         .method("loadSessions", load_sessions)
         .method("openSession", open_session)
         .method("newSession", new_session)
@@ -331,7 +342,8 @@ pub fn register() {
         .method("deleteSession", delete_session)
         .method("toggleAllowlist", toggle_allowlist)
         .method("saveAllowlist", save_allowlist)
-        .method("revertAllowlist", revert_allowlist);
+        .method("revertAllowlist", revert_allowlist)
+        .method("setPolicy", set_policy);
     mjs::store(STORE, &d.finish());
 }
 
@@ -645,4 +657,124 @@ fn keep_pinned(_this: JsValue, args: js_sys::Array) -> JsValue {
 fn pin_to_bottom() {
     let s = mjs::store_ref(STORE);
     js::set_bool(&s, "stickBottom", true);
+}
+
+
+/// `setPolicy(mode)` — the composer's policy dropdown.
+///
+/// `Allowlist` enforces the rules and reveals the editor, because choosing
+/// it is almost always a prelude to reading or changing them.
+/// `Unrestricted` runs with `*`. It is a **temporary override, not an
+/// edit**: the rules are left exactly as written and come back when the
+/// policy is switched back, so turning it on is never destructive.
+fn set_policy(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let mode = js::arg_str(&args, 0);
+    let unrestricted = mode == "Unrestricted";
+    let s = mjs::store_ref(STORE);
+    js::set_bool(&s, "unrestricted", unrestricted);
+    // Picking "Allowlist" opens the editor; picking "Unrestricted" leaves
+    // whatever was open alone, so the rules stay readable while inert.
+    if !unrestricted {
+        js::set_bool(&s, "allowlistOpen", true);
+    }
+    mjs::redraw();
+
+    let id = js::get_str(&s, "activeId");
+    if id.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let payload = js::obj();
+    js::set_str(&payload, "sessionId", &id);
+    // No `allowlist` key: the server only patches the rules when it is
+    // present, so this changes the mode and nothing else.
+    js::set_str(
+        &payload,
+        "mode",
+        if unrestricted { "unrestricted" } else { "allowlist" },
+    );
+    rustex1_kit::api::post_json("/api/allowlist", &payload.into(), |_| {});
+    JsValue::UNDEFINED
+}
+
+
+// ===========================================================================
+// Session metrics.
+// ===========================================================================
+
+/// Sum one session's telemetry: totals across every assistant turn, rates
+/// from the most recent one that reported them.
+fn session_metrics(msgs: &js_sys::Array) -> helpers::SessionMetrics {
+    let mut m = helpers::SessionMetrics::default();
+    for row in msgs.iter() {
+        if js::get_str(&row, "kind") != "assistant" {
+            continue;
+        }
+        let tel = js::get(&row, "telemetry");
+        if tel.is_falsy() {
+            continue;
+        }
+        m.input_tokens += nonneg(&tel, "prompt_tokens");
+        m.output_tokens += nonneg(&tel, "completion_tokens");
+        // Response bytes are the text's own UTF-8 size; the server does not
+        // send it because only the rendered message knows it.
+        m.bytes += js::get_str(&row, "text").len() as f64;
+        // Last turn wins for the rates.
+        let tps = nonneg(&tel, "tok_per_sec");
+        if tps > 0.0 {
+            m.tok_per_sec = tps;
+        }
+        let dur = nonneg(&tel, "duration_ms");
+        if dur > 0.0 {
+            m.duration_ms = dur;
+        }
+    }
+    m
+}
+
+fn nonneg(o: &JsValue, key: &str) -> f64 {
+    let v = js::get_num(o, key);
+    if v.is_finite() && v > 0.0 {
+        v
+    } else {
+        0.0
+    }
+}
+
+/// Add one completed turn to the session totals and re-render the row.
+///
+/// Kept incremental rather than recomputed from `messages`: the sealed card
+/// arrives before the message list is reconciled with the server, so
+/// summing the list here would miss the turn that just finished.
+fn add_turn_metrics(s: &JsValue, tel: &JsValue, text: &str) {
+    let mut m = helpers::SessionMetrics {
+        tok_per_sec: js::get_num(s, "mTps"),
+        duration_ms: js::get_num(s, "mDur"),
+        input_tokens: js::get_num(s, "mIn"),
+        output_tokens: js::get_num(s, "mOut"),
+        bytes: js::get_num(s, "mBytes"),
+    };
+    if !tel.is_falsy() {
+        m.input_tokens += nonneg(tel, "prompt_tokens");
+        m.output_tokens += nonneg(tel, "completion_tokens");
+        let tps = nonneg(tel, "tok_per_sec");
+        if tps > 0.0 {
+            m.tok_per_sec = tps;
+        }
+        let dur = nonneg(tel, "duration_ms");
+        if dur > 0.0 {
+            m.duration_ms = dur;
+        }
+    }
+    m.bytes += text.len() as f64;
+    store_metrics(s, &m);
+}
+
+/// Persist the running totals plus their rendered row.
+fn store_metrics(s: &JsValue, m: &helpers::SessionMetrics) {
+    js::set_num(s, "mTps", m.tok_per_sec);
+    js::set_num(s, "mDur", m.duration_ms);
+    js::set_num(s, "mIn", m.input_tokens);
+    js::set_num(s, "mOut", m.output_tokens);
+    js::set_num(s, "mBytes", m.bytes);
+    js::set_str(s, "lastMetrics", &helpers::metrics_html(m));
 }

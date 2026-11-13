@@ -153,12 +153,24 @@ pub const CSS: &str = r#"
   outline: none;
 }
 .mjs-chat .allowlist-ta:focus { border-color: var(--mjs-accent); color: var(--mjs-ink); }
-/* the shield reads as lit while the panel is open */
-.mjs-chat .composer-box .allowlist-toggle.active {
-  color: var(--mjs-accent);
-  border-color: var(--mjs-accent);
-  background: color-mix(in srgb, var(--mjs-accent) 14%, transparent);
+/* The turn's metrics, under the composer envelope. Same chip vocabulary as
+   the per-card gutter, so the numbers read as one family. */
+.mjs-chat .composer-metrics {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  /* Left padding matches `.allowlist-label`, so the metrics and the
+     allowlist heading below them share one left edge. */
+  padding: 2px 4px 4px 2px;
+  font-size: 11px;
+  color: var(--mjs-dim);
+  user-select: none;
 }
+.mjs-chat .composer-metrics .metric-chip:last-child { margin-right: 0; }
+
+.mjs-chat .composer-box .dropdown.dd-policy { margin-right: 2px; }
 
 /* ---- send / stop: one round button ------------------------------ */
 .mjs-chat .composer-box .btn-primary,
@@ -298,6 +310,13 @@ const LIVE_WAITING: &str = "$store.live.waiting";
 pub fn panel_live() -> Node {
     m("footer").class("composer composer-flat").child(
         m("div").class("composer-inner").kids(vec![
+            // Metrics for the last turn, above the composer and above where
+            // the allowlist appears. Left-aligned to the same edge as the
+            // allowlist label below it, so the two stack on one margin.
+            m("div")
+                .class("composer-metrics")
+                .show("$store.live.lastMetrics")
+                .inner_html("$store.live.lastMetrics"),
             allowlist_panel(),
             m("div").class("composer-box").kids(vec![
                 m("textarea")
@@ -308,17 +327,10 @@ pub fn panel_live() -> Node {
                     // promises it, so the binding has to honour it.
                     .on("keydown.enter", "$event.shiftKey || ($event.preventDefault(), $store.live.send())"),
                 m("div").class("composer-row").kids(vec![
-                    m("button")
-                        .class("icon-btn allowlist-toggle")
-                        .attr("type", "button")
-                        .attr("title", "Allowed commands")
-                        .attr("aria-label", "Toggle the allowlist")
-                        .bind(
-                            "class",
-                            "($store.live.allowlistOpen ? 'active' : '')",
-                        )
-                        .on("click", "$store.live.toggleAllowlist()")
-                        .child(Node::icon("shield-check")),
+                    // Tool policy. Was a bare shield toggle; a dropdown makes
+                    // the two states nameable, and "Unrestricted" visible
+                    // rather than implied by an absent panel.
+                    dropdown::policy("dd-policy"),
                     dropdown::model("dd-model"),
                     dropdown::level(""),
                     ctx_pie_live(),
@@ -397,7 +409,11 @@ fn ctx_pie_live() -> Node {
 fn allowlist_panel() -> Node {
     m("div")
         .class("allowlist-panel")
-        .show("$store.live.allowlistOpen")
+        // Hidden entirely while unrestricted: the rules have no effect then,
+        // and an editable box whose contents are ignored invites the reader
+        // to trust it. The rules are kept, not cleared — switching back to
+        // Allowlist brings the panel and its text straight back.
+        .show("$store.live.allowlistOpen && !$store.live.unrestricted")
         .kids(vec![
             m("label").class("allowlist-label").kids(vec![
                 lit("allowed commands (one rule per line)"),

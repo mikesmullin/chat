@@ -43,9 +43,13 @@ pub const CSS: &str = r#"
   border-radius: 7px;
   background: transparent;
   color: var(--text);
-  font-family: var(--mono);
+  /* The page's own face, not mono: these are labels, and the only reason
+     they were mono was that the reference screenshot happened to be. */
+  font-family: var(--sans);
   font-size: 12px;
-  line-height: 1.4;
+  /* One line-height for the whole trigger, so the label's box is the
+     reference the icon and caret centre against. */
+  line-height: 18px;
   cursor: pointer;
   white-space: nowrap;
   transition: border-color .13s, background-color .13s;
@@ -56,8 +60,14 @@ pub const CSS: &str = r#"
 
 /* the icon carries the role colour, and only while the dropdown is
    hovered — at rest it is muted, like the caret. */
+/* Everything in the trigger is centred on the line box — icon, label and
+   caret share one centre line. (An earlier revision nudged the glyphs down
+   0.18em to sit on the text's x-height instead; that is optically truer for
+   the word but leaves the glyph off-centre in its own row, which reads worse
+   beside the other controls. Box centring wins here.) */
 .dropdown-icon {
   font-size: 14px;
+  line-height: 18px;
   flex: 0 0 auto;
   color: var(--muted);
   transition: color .13s;
@@ -65,14 +75,22 @@ pub const CSS: &str = r#"
 .dropdown:hover .dropdown-icon.tone-green { color: var(--pastel-green); }
 /* the same indigo the send button and the context ring are painted with */
 .dropdown:hover .dropdown-icon.tone-accent { color: var(--accent); }
+/* Policy: muted while the allowlist is enforced, warning-red once every
+   tool is permitted. Unlike the other two this is NOT hover-only — an
+   unrestricted session must announce itself at rest. */
+.dropdown:hover .dropdown-icon.tone-policy { color: var(--muted); }
+.dropdown .dropdown-icon.tone-policy.unrestricted,
+.dropdown:hover .dropdown-icon.tone-policy.unrestricted { color: var(--pastel-red); }
 
 .dropdown-value { overflow: hidden; text-overflow: ellipsis; }
 .dropdown-caret {
   font-size: 11px;
+  line-height: 18px;
   color: var(--gray-dim);
   flex: 0 0 auto;
   transition: transform .13s;
 }
+/* Keep the nudge in the rotated state too, else the caret jumps on open. */
 .dropdown.open .dropdown-caret { transform: rotate(180deg); }
 
 /* ---- menu: the page's own dark surface -------------------------- */
@@ -103,7 +121,7 @@ pub const CSS: &str = r#"
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 12px;
   line-height: 1.4;
   text-align: left;
@@ -114,20 +132,33 @@ pub const CSS: &str = r#"
 .dropdown-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .dropdown-item.on { color: var(--accent-soft); background: var(--accent-tint); }
 .dropdown-item-label { flex: 1 1 auto; }
-.dropdown-item-check { font-size: 12px; color: var(--accent); flex: 0 0 auto; }
+.dropdown-item-check {
+  font-size: 12px;
+  color: var(--accent);
+  flex: 0 0 auto;
+}
 
 /* standalone demo: the pair from the design reference, on one line */
 .dropdown-demo { display: flex; align-items: center; gap: 18px; }
 "#;
 
 /// one menu row: the value, plus a check when it is the current one.
-fn item(key: &str, value: &str) -> Node {
+///
+/// `after` is an optional expression run once the value is set, with `{}`
+/// replaced by the chosen option — the seam that lets a dropdown *do*
+/// something rather than only record a choice.
+fn item(key: &str, value: &str, after: Option<&str>) -> Node {
     let is_on = format!("$store.{STORE}.{key} === '{value}'");
+    let mut click = format!("$store.{STORE}.pick('{key}', '{value}')");
+    if let Some(expr) = after {
+        click.push_str("; ");
+        click.push_str(&expr.replace("{}", value));
+    }
     m("button")
         .class("dropdown-item")
         .attr("type", "button")
         .bind("class", &format!("({is_on} ? 'on' : '')"))
-        .on("click", &format!("$store.{STORE}.pick('{key}', '{value}')"))
+        .on("click", &click)
         .kids(vec![
             m("span").class("dropdown-item-label").child(lit(value)),
             m("i").class("ph ph-check dropdown-item-check").show(&is_on),
@@ -142,6 +173,18 @@ fn item(key: &str, value: &str) -> Node {
 /// - `extra`   — extra class on the root, for host layout (e.g. `dd-model`)
 /// - `options` — the menu, in order
 pub fn dropdown(key: &str, icon: &str, tone: &str, extra: &str, options: &[&str]) -> Node {
+    dropdown_ex(key, icon, tone, extra, options, None)
+}
+
+/// [`dropdown`] plus a side effect on pick. See [`item`] for `after`.
+pub fn dropdown_ex(
+    key: &str,
+    icon: &str,
+    tone: &str,
+    extra: &str,
+    options: &[&str],
+    after: Option<&str>,
+) -> Node {
     let is_open = format!("$store.{STORE}.open === '{key}'");
     m("div")
         .class(&format!("dropdown {extra}"))
@@ -153,7 +196,14 @@ pub fn dropdown(key: &str, icon: &str, tone: &str, extra: &str, options: &[&str]
                 .attr("type", "button")
                 .on("click", &format!("$store.{STORE}.toggle('{key}')"))
                 .kids(vec![
-                    m("i").class(&format!("ph ph-{icon} dropdown-icon tone-{tone}")),
+                    m("i")
+                        .class(&format!("ph ph-{icon} dropdown-icon tone-{tone}"))
+                        .bind(
+                            "class",
+                            &format!(
+                                "($store.{STORE}.{key} === 'Unrestricted' ? 'unrestricted' : '')"
+                            ),
+                        ),
                     m("span")
                         .class("dropdown-value")
                         .text(&format!("$store.{STORE}.{key}")),
@@ -162,7 +212,7 @@ pub fn dropdown(key: &str, icon: &str, tone: &str, extra: &str, options: &[&str]
             m("div")
                 .class("dropdown-menu")
                 .show(&is_open)
-                .kids(options.iter().map(|o| item(key, o)).collect()),
+                .kids(options.iter().map(|o| item(key, o, after)).collect()),
         ])
 }
 
@@ -181,6 +231,24 @@ pub fn model(extra: &str) -> Node {
 /// the reasoning-level dropdown — brain glyph, the accent indigo.
 pub fn level(extra: &str) -> Node {
     dropdown("level", "brain", "accent", extra, LEVELS)
+}
+
+pub const POLICIES: &[&str] = &["Allowlist", "Unrestricted"];
+
+/// The tool-policy picker that replaces the composer's bare shield button.
+///
+/// `Allowlist` reveals the rules editor; `Unrestricted` runs with `*`. The
+/// shield turns pastel-red while unrestricted, because "every tool is
+/// permitted" should not look like the resting state.
+pub fn policy(extra: &str) -> Node {
+    dropdown_ex(
+        "policy",
+        "shield-check",
+        "policy",
+        extra,
+        POLICIES,
+        Some("$store.live.setPolicy('{}')"),
+    )
 }
 
 /// standalone demo: the pair, as the design reference shows them.
@@ -232,6 +300,7 @@ pub fn register() {
     d.str("open", "")
         .str("model", "claude-opus-5-5")
         .str("level", "high")
+        .str("policy", "Allowlist")
         .method("toggle", toggle)
         .method("pick", pick)
         .method("closeIf", close_if);
