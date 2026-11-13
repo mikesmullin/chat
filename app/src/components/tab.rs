@@ -23,6 +23,7 @@ use rustex1_kit::mjs;
 use rustex1_kit::mjs::Def;
 use rustex1_kit::js;
 
+use crate::components::session_history;
 use crate::css;
 
 pub const NAME: &str = "uiTab";
@@ -242,14 +243,17 @@ fn def() -> Def {
     d
 }
 
-/// seed: 3 tabs (ids 1/2/3, done/working/idle, labels 1/2/3), active = 1.
+/// seed: one tab per session, taken from the same `session_history::SAMPLES`
+/// the history rail lists — so "one tab per session" holds literally, and the
+/// two columns cannot drift apart. Ids are 1-based; the first is active.
 fn seed_tabs() -> JsValue {
+    let states = ["done", "working", "idle"];
     let a = js_sys::Array::new();
-    for (id, state, label) in [(1.0, "done", 1.0), (2.0, "working", 2.0), (3.0, "idle", 3.0)] {
+    for (i, row) in session_history::SAMPLES.iter().enumerate() {
         let t = js::obj();
-        js::set_num(&t, "id", id);
-        js::set_num(&t, "label", label);
-        js::set_str(&t, "state", state);
+        js::set_num(&t, "id", (i + 1) as f64);
+        js::set_str(&t, "label", row.title);
+        js::set_str(&t, "state", states[i % states.len()]);
         a.push(&t.into());
     }
     a.into()
@@ -274,7 +278,7 @@ fn add_tab_store(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let state = states[((n - 1.0) as usize) % 3];
     let t = js::obj();
     js::set_num(&t, "id", n);
-    js::set_num(&t, "label", n);
+    js::set_str(&t, "label", "New session");
     js::set_str(&t, "state", state);
     let pushed = tabs.clone();
     pushed.push(&t.into());
@@ -327,4 +331,50 @@ fn store_register() {
         .method("closeTab", close_tab_store)
         .finish();
     mjs::store(STORE, &d.finish());
+}
+
+/// The tab bar bound to the live session list — one tab per angela session.
+///
+/// Same structure as [`tab_bar`]: the row is a direct element so its
+/// `@click` and the close button's `@click.stop` both fire, and the display
+/// unit stays the `uiTab` widget.
+pub fn tab_bar_live() -> Node {
+    let st = "$store.live";
+    m("div").class("tab-bar").kids(vec![
+        m("span")
+            .for_each(&format!("s in {st}.tabs"))
+            .key("s.id")
+            .attr("class", "tab")
+            .bind("class", &format!("{{ active: s.id === {st}.activeId }}"))
+            .on("click", &format!("{st}.openSession(s.id)"))
+            .bind("title", "s.title || s.id")
+            .kids(vec![
+                Node::host_bound(
+                    "uiTab",
+                    &[
+                        ("class", "ui-tab"),
+                        ("icon", "'robot'"),
+                        // The tab shows its session's stable 1-based number,
+                        // not the prompt: a title is far too long for a tab,
+                        // and the number is what the user counts by.
+                        ("title", "(s.ordinal || '?') + ''"),
+                        // running → amber working ring, else a done dot.
+                        ("tone", "(s.status === 'running' ? 'working' : 'done')"),
+                    ],
+                ),
+                m("button")
+                    .class("tab-x")
+                    .attr("type", "button")
+                    .attr("aria-label", "close tab")
+                    .attr("title", "Close this tab (the session is kept)")
+                    .on("click.stop", &format!("{st}.closeTab(s.id)"))
+                    .child(Node::icon("x")),
+            ]),
+        m("button")
+            .class("tab-plus")
+            .attr("type", "button")
+            .attr("aria-label", "new session")
+            .on("click", &format!("{st}.newSession()"))
+            .child(Node::icon("plus")),
+    ])
 }

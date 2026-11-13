@@ -16,13 +16,19 @@
 /* retint the app skin to neutral charcoal, scoped to the storybook shell
    (not :root - the storybook is a route inside the app, so a global
    override would leak the charcoal theme onto the chat view) */
-#sb {
-  --bg: #0a0b0e;
-  --panel: #121317;
-  --panel-2: #181a20;
-  --line: #1d1f26;
-  --line-2: #262931;
-  --border: #23252c;
+#sb,
+#home {
+  /* Three-step neutral ramp. The base is the page itself (the rail is
+     part of it, with no surface of its own); --panel is the content
+     column's card; --panel-2 is anything raised ON that card (message
+     cards, the composer envelope, inputs, menus). Pure neutral greys —
+     no blue cast. */
+  --bg: #080808;
+  --panel: #161616;
+  --panel-2: #242424;
+  --line: #1e1e1e;
+  --line-2: #2e2e2e;
+  --border: #272727;
   --text: #f1f3f6;
   --muted: #8e94a2;
 
@@ -45,20 +51,28 @@
   --gray-dim: #6e717a;
 }
 
-/* ---- shell ---- */
+/* ---- shell ----
+   The page is the black base; the rail sits directly on it with no
+   surface of its own, and the content column is a rounded card floating
+   on top. */
 #sb {
   display: grid;
   grid-template-columns: 264px 1fr;
   height: 100%;
   min-height: 100vh;
+  background: var(--bg);
 }
 #sb.collapsed { grid-template-columns: 56px 1fr; }
 #sb { transition: grid-template-columns .3s ease-in-out; }
 
 /* ---- content (right) ---- */
 .sb-content {
-  min-width: 0; min-height: 100%; overflow-y: auto;
-  background: var(--bg); display: flex; padding: 24px;
+  min-width: 0; overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  margin: 10px 10px 10px 0;
+  display: flex; padding: 24px;
 }
 .feature { margin: auto; display: flex; align-items: center; justify-content: center; width: 100%; }
 
@@ -102,36 +116,59 @@
    (transparent track, muted-translucent thumb, 8px / 4px visible).
    Token-routed: no raw hexes, so a palette change stays one edit.
    ================================================================ */
-#sb, #sb * {
+/* Firefox has no scrollbar pseudo-elements, so it gets the standard
+   properties. `thin` draws no stepper arrows there. */
+:is(#sb, #home), :is(#sb, #home) * {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--muted) 32%, transparent) transparent;
 }
-#sb::-webkit-scrollbar,
-#sb *::-webkit-scrollbar {
+
+/* Chromium/WebKit: the standard properties and the pseudo-elements are
+   mutually exclusive — setting `scrollbar-width` makes the engine IGNORE
+   every `::-webkit-scrollbar-*` rule, which silently killed the no-arrows
+   rule below. Hand the standard properties back to `auto` here so the
+   pseudo-elements take effect and we keep full control of the shape. */
+@supports selector(::-webkit-scrollbar) {
+  :is(#sb, #home), :is(#sb, #home) * {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+}
+
+:is(#sb, #home)::-webkit-scrollbar,
+:is(#sb, #home) *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-#sb::-webkit-scrollbar-track,
-#sb *::-webkit-scrollbar-track {
+:is(#sb, #home)::-webkit-scrollbar-track,
+:is(#sb, #home) *::-webkit-scrollbar-track {
   background: transparent;
 }
-#sb::-webkit-scrollbar-thumb,
-#sb *::-webkit-scrollbar-thumb {
+:is(#sb, #home)::-webkit-scrollbar-thumb,
+:is(#sb, #home) *::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--muted) 32%, transparent);
   background-clip: content-box;
   border: 2px solid transparent;
   border-radius: 8px;
 }
-#sb::-webkit-scrollbar-thumb:hover,
-#sb *::-webkit-scrollbar-thumb:hover {
+:is(#sb, #home)::-webkit-scrollbar-thumb:hover,
+:is(#sb, #home) *::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--muted) 55%, transparent);
   background-clip: content-box;
   border: 2px solid transparent;
   border-radius: 8px;
 }
-#sb::-webkit-scrollbar-corner,
-#sb *::-webkit-scrollbar-corner {
+:is(#sb, #home)::-webkit-scrollbar-corner,
+:is(#sb, #home) *::-webkit-scrollbar-corner {
   background: transparent;
+}
+/* No stepper arrows. Both `display:none` and a zero size are needed: some
+   builds still reserve the button box with only one of them. */
+:is(#sb, #home)::-webkit-scrollbar-button,
+:is(#sb, #home) *::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 /* ================================================================
@@ -143,7 +180,7 @@
    re-pointed; raw content colors (reasoning violet, approval amber)
    stay as the app paints them.
    ================================================================ */
-#sb .mjs-chat {
+:is(#sb, #home) .mjs-chat {
   --mjs-accent-2: var(--accent-soft);
   --mjs-ok: var(--pastel-green);
   --mjs-err: var(--pastel-red);
@@ -159,57 +196,57 @@
    off-palette here; these rules route everything through storybook
    tokens. Shared by every input component and the automation form.
    ================================================================ */
-#sb input[type="text"],
-#sb input[type="number"],
-#sb textarea,
-#sb .segmented,
-#sb .chips,
-#sb .switch {
+:is(#sb, #home) input[type="text"],
+:is(#sb, #home) input[type="number"],
+:is(#sb, #home) textarea,
+:is(#sb, #home) .segmented,
+:is(#sb, #home) .chips,
+:is(#sb, #home) .switch {
   background: var(--panel-2);
   border-color: var(--border);
 }
-#sb input:focus,
-#sb textarea:focus,
-#sb .segmented:focus,
-#sb .chips:focus-within {
+:is(#sb, #home) input:focus,
+:is(#sb, #home) textarea:focus,
+:is(#sb, #home) .segmented:focus,
+:is(#sb, #home) .chips:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-tint);
 }
-#sb .field-hint { color: var(--muted); }
-#sb .stepper .step {
+:is(#sb, #home) .field-hint { color: var(--muted); }
+:is(#sb, #home) .stepper .step {
   background: var(--panel-2);
   border-color: var(--border);
   color: var(--muted);
 }
-#sb .stepper .step:hover {
+:is(#sb, #home) .stepper .step:hover {
   color: var(--accent-soft);
   background: var(--panel);
 }
-#sb .stepper:focus-within .step { border-color: var(--accent); }
-#sb .seg:hover {
+:is(#sb, #home) .stepper:focus-within .step { border-color: var(--accent); }
+:is(#sb, #home) .seg:hover {
   color: var(--text);
   background: var(--accent-glow);
 }
-#sb .seg.on {
+:is(#sb, #home) .seg.on {
   color: var(--accent-soft);
   background: var(--accent-tint);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 48%, transparent);
 }
-#sb .chip {
+:is(#sb, #home) .chip {
   background: var(--panel);
   border-color: var(--border);
   color: var(--text);
 }
-#sb .switch.on {
+:is(#sb, #home) .switch.on {
   background: var(--accent-tint);
   border-color: var(--accent);
 }
-#sb .btn.primary {
+:is(#sb, #home) .btn.primary {
   background: var(--accent-tint);
   border-color: var(--accent);
   color: var(--accent-soft);
 }
-#sb .btn.primary:hover { background: var(--accent-glow); }
+:is(#sb, #home) .btn.primary:hover { background: var(--accent-glow); }
 
 /* ================================================================
    Page-level responsive rules
@@ -219,12 +256,12 @@
   .sb-rail {
     grid-row: 1 / 1; flex-direction: row; align-items: center;
     border-right: 0; border-bottom: 1px solid var(--border);
-    overflow: hidden; height: auto;
+    overflow: hidden; height: auto; margin-right: 0;
   }
   .rail-head { margin: 0; padding: 12px 16px; display: flex; align-items: center; gap: 16px; }
   .rail-group { display: none; }
   .nav-list { flex-direction: row; flex-wrap: wrap; gap: 8px; padding: 10px; overflow: hidden; white-space: nowrap; }
-  .sb-content { padding: 16px; }
+  .sb-content { padding: 16px; margin: 0 10px 10px; }
   .nav-demo { width: 100%; height: 340px; }
   .rail-toggle { display: none; }
 }

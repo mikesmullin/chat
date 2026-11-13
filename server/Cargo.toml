@@ -3,7 +3,7 @@ name = "chat-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "chat server — static + HMR (rustex1 devserver) with /api/* forwarded to angela"
+description = "chat server — static + HMR (rustex1 devserver) with angela embedded; one process, no proxy"
 
 [[bin]]
 name = "chat-server"
@@ -11,4 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 rustex1-devserver = { path = "../vendor/rustex1/devserver" }
+# angela runs IN this process: the chat app is one server, not a web tier in
+# front of a separate agent daemon.
+angela = { path = "../../../angela-rs" }
 serde_json = "1"
