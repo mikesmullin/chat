@@ -7,6 +7,7 @@ pub mod nav_rail;
 pub mod pie_ring_graph;
 pub mod reltime;
 pub mod relative_timestamp;
+pub mod sandboxes_menu;
 pub mod settings_menu_item;
 pub mod session_state;
 pub mod tab;
@@ -25,5 +26,6 @@ pub fn register() {
 
     css::inject("item-group", item_group::CSS);
     css::inject("agents-menu", agents_menu::CSS);
+    css::inject("sandboxes-menu", sandboxes_menu::CSS);
     css::inject("nav-rail", nav_rail::CSS);
 }

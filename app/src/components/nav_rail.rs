@@ -17,12 +17,13 @@ use rustex1_kit::h::{lit, m, Node};
 /// the fixed catalog of storybook components, depth-first (0 = atomic, most
 /// composite last); ties break alphabetically. The count shown in the rail
 /// is the number of distinct library components the item is built from.
-const ENTRIES: [(&'static str, &'static str, &'static str); 10] = [
+const ENTRIES: [(&'static str, &'static str, &'static str); 11] = [
     ("Counter", "/storybook/counter", "0"),
     ("Left Sidebar Navigation", "/storybook/nav-rail", "0"),
     ("Pie Ring Graph", "/storybook/pie-ring", "0"),
     ("Relative Timestamp", "/storybook/reltime", "0"),
     ("Settings Menu Item", "/storybook", "0"),
+    ("Sandboxes Menu", "/storybook/sandboxes", "1"),
     ("Session State", "/storybook/session-state", "1"),
     ("Tab", "/storybook/tab", "2"),
     ("Item Group", "/storybook/item-group", "3"),
