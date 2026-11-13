@@ -17,15 +17,27 @@ use rustex1_kit::h::{lit, m, Node};
 /// the fixed catalog of storybook components, depth-first (0 = atomic, most
 /// composite last); ties break alphabetically. The count shown in the rail
 /// is the number of distinct library components the item is built from.
-const ENTRIES: [(&'static str, &'static str, &'static str); 22] = [
+const ENTRIES: [(&'static str, &'static str, &'static str); 36] = [
+    ("Approval Card", "/storybook/approval-card", "0"),
+    ("Assistant Card", "/storybook/assistant-card", "0"),
     ("Counter", "/storybook/counter", "0"),
+    ("Error Card", "/storybook/error-card", "0"),
     ("Hint Text", "/storybook/hint", "0"),
     ("Label", "/storybook/label", "0"),
     ("Left Sidebar Navigation", "/storybook/nav-rail", "0"),
     ("Pie Ring Graph", "/storybook/pie-ring", "0"),
+    ("Reasoning Card", "/storybook/reasoning-card", "0"),
     ("Relative Timestamp", "/storybook/reltime", "0"),
+    ("Session History", "/storybook/session-history", "0"),
     ("Settings Menu Item", "/storybook", "0"),
+    ("System Card", "/storybook/system-card", "0"),
+    ("Task List", "/storybook/task-list", "0"),
+    ("Thinking", "/storybook/thinking", "0"),
+    ("Tool Call Card", "/storybook/tool-call-card", "0"),
+    ("Tool Response Card", "/storybook/tool-response-card", "0"),
+    ("User Card", "/storybook/user-card", "0"),
     ("Validation Info", "/storybook/validation", "0"),
+    ("Composer", "/storybook/composer", "1"),
     ("Radio Input", "/storybook/radio", "1"),
     ("Range Input", "/storybook/range", "1"),
     ("Sandboxes Menu", "/storybook/sandboxes", "1"),
@@ -39,6 +51,8 @@ const ENTRIES: [(&'static str, &'static str, &'static str); 22] = [
     ("Item Group", "/storybook/item-group", "3"),
     ("Tab Bar", "/storybook/tab-bar", "3"),
     ("Agents Menu", "/storybook/agents", "4"),
+    ("Session", "/storybook/session", "5"),
+    ("Session Panel", "/storybook/session-panel", "8"),
     ("New Automation", "/storybook/automation", "10"),
 ];
 
