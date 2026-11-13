@@ -8,8 +8,11 @@
 //!   /storybook/nav-rail   -> Left Sidebar Navigation (standalone demo)
 //!   /storybook/pie-ring   -> Pie Ring Graph
 //!   /storybook/reltime    -> Relative Timestamp (live — the kit `uiRelTime`)
+//!   /storybook/session-state -> Session State (done / working / idle symbols)
 //!   /storybook/item-group -> Item Group
 //!   /storybook/agents     -> Agents Menu
+//!   /storybook/tab        -> Tab (single unit, three static samples)
+//!   /storybook/tab-bar    -> Tab Bar (live: add / pick / close)
 //!
 //! The rail is rebuilt on every page (each route re-renders the whole `#app`
 //! tree), highlighting whichever entry matches the current component.
@@ -19,7 +22,7 @@ use rustex1_kit::mjs::{self, Def};
 use rustex1_kit::{js, lifecycle, Runtime};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
-use crate::components::{agents_menu, item_group, nav_rail, relative_timestamp};
+use crate::components::{agents_menu, item_group, nav_rail, relative_timestamp, tab};
 
 /// the two-column shell: rail (left) + centred content (right).
 fn shell(active: &str, content: Node) -> Node {
@@ -187,6 +190,31 @@ pub fn register(rt: &mut Runtime) {
             "Agents Menu",
             agents_menu::agents_menu(),
         )
+    });
+
+    // the state symbol unit — done / working / idle, featured alone.
+    rt.route("/storybook/session-state", "Session State", |_| {
+        route_def(
+            "route /storybook/session-state",
+            "Session State",
+            m("div")
+                .class("state-demo")
+                .kids(vec![
+                    // default `tone = "done"`.
+                    Node::host("uiSessionState", &[]),
+                    Node::host("uiSessionState", &[]).bind("tone", "'working'"),
+                    Node::host("uiSessionState", &[]).bind("tone", "'idle'"),
+                ]),
+        )
+    });
+    // a single tab unit, featured alone: three static samples
+    // (n=1 active, n=2 working, n=3 idle).
+    rt.route("/storybook/tab", "Tab", |_| {
+        route_def("route /storybook/tab", "Tab", tab::demo())
+    });
+    // the live tab bar: tabs close, the plus adds, click sets the active tab.
+    rt.route("/storybook/tab-bar", "Tab Bar", |_| {
+        route_def("route /storybook/tab-bar", "Tab Bar", tab::tab_bar())
     });
 }
 

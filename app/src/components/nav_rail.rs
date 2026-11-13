@@ -15,15 +15,19 @@
 use rustex1_kit::h::{lit, m, Node};
 
 /// the fixed catalog of storybook components, depth-first (0 = atomic, most
-/// composite last) — the same ordering the HTML rail used.
-const ENTRIES: [(&'static str, &'static str, &'static str); 7] = [
-    ("Settings Menu Item", "/storybook", "0"),
+/// composite last); ties break alphabetically. The count shown in the rail
+/// is the number of distinct library components the item is built from.
+const ENTRIES: [(&'static str, &'static str, &'static str); 10] = [
     ("Counter", "/storybook/counter", "0"),
     ("Left Sidebar Navigation", "/storybook/nav-rail", "0"),
     ("Pie Ring Graph", "/storybook/pie-ring", "0"),
     ("Relative Timestamp", "/storybook/reltime", "0"),
+    ("Settings Menu Item", "/storybook", "0"),
+    ("Session State", "/storybook/session-state", "1"),
     ("Item Group", "/storybook/item-group", "3"),
+    ("Tab", "/storybook/tab", "3"),
     ("Agents Menu", "/storybook/agents", "4"),
+    ("Tab Bar", "/storybook/tab-bar", "4"),
 ];
 
 /// The layout toggle. Fires `toggleRail($event)` — a method each storybook
