@@ -135,6 +135,25 @@
 }
 
 /* ================================================================
+   Chat components — remap the app's `--mjs-*` tokens to storybook
+   tokens, scoped to #sb. The chat classes (.history, .bubble-*,
+   .tool-card, .composer…) stay verbatim — the contract — and surfaces
+   that resolve through tokens pick up charcoal + indigo automatically.
+   Only the accents the app hard-codes (user blue, ok/err/wait) are
+   re-pointed; raw content colors (reasoning violet, approval amber)
+   stay as the app paints them.
+   ================================================================ */
+#sb .mjs-chat {
+  --mjs-accent-2: var(--accent-soft);
+  --mjs-ok: var(--pastel-green);
+  --mjs-err: var(--pastel-red);
+  --mjs-wait: var(--pastel-amber);
+  --mjs-user: var(--accent-tint);
+  --mjs-user-border: var(--accent);
+  --mjs-tool: var(--panel-2);
+}
+
+/* ================================================================
    Form field chrome — charcoal retint of the kit widgets, scoped to #sb.
    The kit defaults are dark-blue with an orange focus glow, both
    off-palette here; these rules route everything through storybook

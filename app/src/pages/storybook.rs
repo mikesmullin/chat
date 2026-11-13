@@ -23,6 +23,20 @@
 //!   /storybook/text-area  -> Text Area (bare kit uiArea)
 //!   /storybook/tags       -> Tag Input (bare kit uiChips)
 //!   /storybook/validation -> Validation Info (error / ok)
+//!   /storybook/session-history -> Session History (past sessions)
+//!   /storybook/session   -> Session (transcript of message cards)
+//!   /storybook/session-panel -> Session Panel (transcript + composer)
+//!   /storybook/composer  -> Composer (draft + row: selects, ctx pie, send)
+//!   /storybook/system-card -> System Card (system prompt)
+//!   /storybook/user-card -> User Card (user prompt bubble)
+//!   /storybook/assistant-card -> Assistant Card (response block)
+//!   /storybook/reasoning-card -> Reasoning Card (thinking block)
+//!   /storybook/tool-call-card -> Tool Call Card
+//!   /storybook/tool-response-card -> Tool Response Card
+//!   /storybook/error-card -> Error Card
+//!   /storybook/approval-card -> Approval Card (allow / always / deny)
+//!   /storybook/thinking -> Thinking (working indicator)
+//!   /storybook/task-list -> Task List (todo panel)
 //!   /storybook/tab        -> Tab (single unit, three static samples)
 //!   /storybook/tab-bar    -> Tab Bar (live: add / pick / close)
 //!
@@ -35,9 +49,11 @@ use rustex1_kit::{js, lifecycle, Runtime};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use crate::components::{
-    agents_menu, automation_form, field, hint_text, item_group, label, nav_rail, radio_input,
-    range_input, relative_timestamp, sandboxes_menu, tab, tag_input, text_area, text_input,
-    toggle_button, validation_info,
+    agents_menu, approval_card, assistant_card, automation_form, composer, error_card,
+    field, hint_text, item_group, label, nav_rail, radio_input, range_input,
+    reasoning_card, relative_timestamp, sandboxes_menu, session, session_history,
+    session_panel, system_card, tab, tag_input, task_list, text_area, text_input, thinking, toggle_button, tool_call_card, tool_response_card,
+    user_card, validation_info,
 };
 
 /// the two-column shell: rail (left) + centred content (right).
@@ -286,6 +302,85 @@ pub fn register(rt: &mut Runtime) {
             "Validation Info",
             validation_info::demo(),
         )
+    });
+
+    // the sidebar session list.
+    rt.route("/storybook/session-history", "Session History", |_| {
+        route_def(
+            "route /storybook/session-history",
+            "Session History",
+            session_history::demo(),
+        )
+    });
+
+    // the transcript column: message cards in order.
+    rt.route("/storybook/session", "Session", |_| {
+        route_def("route /storybook/session", "Session", session::demo())
+    });
+    // the whole middle column: transcript above, composer below.
+    rt.route("/storybook/session-panel", "Session Panel", |_| {
+        route_def(
+            "route /storybook/session-panel",
+            "Session Panel",
+            session_panel::demo(),
+        )
+    });
+
+    // the prompt bar: draft + selects + ctx pie + send/stop.
+    rt.route("/storybook/composer", "Composer", |_| {
+        route_def("route /storybook/composer", "Composer", composer::demo())
+    });
+
+    // one route per message card, each alone on screen.
+    rt.route("/storybook/system-card", "System Card", |_| {
+        route_def("route /storybook/system-card", "System Card", system_card::demo())
+    });
+    rt.route("/storybook/user-card", "User Card", |_| {
+        route_def("route /storybook/user-card", "User Card", user_card::demo())
+    });
+    rt.route("/storybook/assistant-card", "Assistant Card", |_| {
+        route_def(
+            "route /storybook/assistant-card",
+            "Assistant Card",
+            assistant_card::demo(),
+        )
+    });
+    rt.route("/storybook/reasoning-card", "Reasoning Card", |_| {
+        route_def(
+            "route /storybook/reasoning-card",
+            "Reasoning Card",
+            reasoning_card::demo(),
+        )
+    });
+    rt.route("/storybook/tool-call-card", "Tool Call Card", |_| {
+        route_def(
+            "route /storybook/tool-call-card",
+            "Tool Call Card",
+            tool_call_card::demo(),
+        )
+    });
+    rt.route("/storybook/tool-response-card", "Tool Response Card", |_| {
+        route_def(
+            "route /storybook/tool-response-card",
+            "Tool Response Card",
+            tool_response_card::demo(),
+        )
+    });
+    rt.route("/storybook/error-card", "Error Card", |_| {
+        route_def("route /storybook/error-card", "Error Card", error_card::demo())
+    });
+    rt.route("/storybook/approval-card", "Approval Card", |_| {
+        route_def(
+            "route /storybook/approval-card",
+            "Approval Card",
+            approval_card::demo(),
+        )
+    });
+    rt.route("/storybook/thinking", "Thinking", |_| {
+        route_def("route /storybook/thinking", "Thinking", thinking::demo())
+    });
+    rt.route("/storybook/task-list", "Task List", |_| {
+        route_def("route /storybook/task-list", "Task List", task_list::demo())
     });
 
     // the state symbol unit — done / working / idle, featured alone.
