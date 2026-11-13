@@ -29,6 +29,14 @@ const CSS: &str = r#"
 }
 /* feature demo: the three states side by side (done / working / idle) */
 .state-demo { display: flex; align-items: center; gap: 36px; }
+/* the widget root must be a flex container so its fixed-size children
+   (the 8px done dot, 10px idle ring, 14px pie ring) size correctly —
+   a plain inline root collapses them to zero-width inline boxes. */
+.ui-state-root {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
 "#;
 
 /// One state symbol — the single source of truth for the per-row glyph.
@@ -53,6 +61,7 @@ fn def() -> Def {
     let mut d = Def::new().named(NAME);
     d.prop_str("tone", "done").tree(
         m("span")
+            .class("ui-state-root")
             .kids(vec![
                 m("span").class("state-done").ignore().iff("tone === 'done'"),
                 Node::host("uiPieRing", &[("color", "var(--pastel-amber)")])
