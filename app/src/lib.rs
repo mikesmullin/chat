@@ -19,6 +19,8 @@ use wasm_bindgen::prelude::*;
 mod helpers;
 mod pages;
 mod store;
+mod components;
+mod css;
 
 /// How often the wall re-reads sessions. The list changes on its own (another
 /// tab, a `/new`, a delete), so the poll is the reconciler.
@@ -29,6 +31,10 @@ struct Chat;
 impl App for Chat {
     fn register_stores(&self, _rt: &mut Runtime) {
         store::register();
+    }
+
+    fn register_components(&self, _rt: &mut Runtime) {
+        components::register();
     }
 
     fn register_routes(&self, rt: &mut Runtime) {
