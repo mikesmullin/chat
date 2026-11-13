@@ -472,30 +472,6 @@ fn unmask_code(s: &str, spans: &[String]) -> String {
     out
 }
 
-/// `` `code` `` — done before the others so `**` inside code stays literal.
-fn inline_code(s: &str) -> String {
-    let mut out = String::new();
-    let mut parts = s.split('`');
-    if let Some(first) = parts.next() {
-        out.push_str(first);
-    }
-    let mut open = true;
-    for part in parts {
-        if open {
-            out.push_str("<code>");
-        } else {
-            out.push_str("</code>");
-        }
-        out.push_str(part);
-        open = !open;
-    }
-    // An unterminated run would leave a dangling tag.
-    if !open {
-        out.push_str("</code>");
-    }
-    out
-}
-
 /// `[text](url)`. Only http/https/mailto survive: a `javascript:` href would
 /// be script execution by another name.
 fn links(s: &str) -> String {
@@ -756,5 +732,151 @@ mod streaming_md_tests {
         assert!(h.contains("`foo") || h.contains("<code>foo</code>"), "{h}");
         // whichever it chooses, it must be balanced
         assert_eq!(h.matches("<code>").count(), h.matches("</code>").count());
+    }
+}
+
+
+/// What the composer's metric row shows.
+///
+/// Two different things, deliberately: rates describe the **last** turn
+/// (an average over a whole session would flatten to meaninglessness),
+/// while totals describe the **session** (what this conversation has cost
+/// so far). The icons say which is which — a gauge and a clock read as
+/// "right now", arrows and a disk read as "so far".
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SessionMetrics {
+    /// Last turn.
+    pub tok_per_sec: f64,
+    /// Total wall time of the last turn, tool execution included.
+    /// (The backend also reports `ttft_ms`; the row shows duration, which
+    /// answers "how long did that take" rather than "when did it start".)
+    pub duration_ms: f64,
+    /// Session totals.
+    pub input_tokens: f64,
+    pub output_tokens: f64,
+    pub bytes: f64,
+}
+
+/// Render the metric row.
+pub fn metrics_html(m: &SessionMetrics) -> String {
+    let mut chips = String::new();
+    let chip = |icon: &str, text: String| {
+        format!("<span class=\"metric-chip\"><i class=\"ph ph-{icon}\"></i><span>{text}</span></span>")
+    };
+    if m.tok_per_sec.is_finite() && m.tok_per_sec > 0.0 {
+        // Whole tokens per second: the decimals were noise at this scale,
+        // and they changed on every turn without meaning anything.
+        chips.push_str(&chip("gauge", format!("{:.0} tok/s", m.tok_per_sec)));
+    }
+    // `↑ 1,761  ↓ 31 tok` — the arrows already say in and out, so the unit
+    // is written once, on the last of the pair. When only one of them has a
+    // value it carries the unit itself, so the row never reads `↑ 1,761`
+    // with no indication of what was counted.
+    let has_in = m.input_tokens.is_finite() && m.input_tokens > 0.0;
+    let has_out = m.output_tokens.is_finite() && m.output_tokens > 0.0;
+    if has_in {
+        let unit = if has_out { "" } else { " tok" };
+        chips.push_str(&chip(
+            "arrow-up",
+            format!("{}{unit}", fmt_count(m.input_tokens)),
+        ));
+    }
+    if has_out {
+        chips.push_str(&chip(
+            "arrow-down",
+            format!("{} tok", fmt_count(m.output_tokens)),
+        ));
+    }
+    if m.bytes.is_finite() && m.bytes > 0.0 {
+        chips.push_str(&chip("database", format!("{} bytes", fmt_count(m.bytes))));
+    }
+    if m.duration_ms.is_finite() && m.duration_ms > 0.0 {
+        // `0.330s elapsed` — the same `{:.3}s` the per-card gutter uses,
+        // with the word that says what the number is.
+        chips.push_str(&chip(
+            "timer",
+            format!("{} elapsed", format_elapsed(m.duration_ms)),
+        ));
+    }
+    chips
+}
+
+/// Byte counts, kept short so the chip row stays one line.
+/// Byte counts, kept short so the chip row stays one line.
+/// Thousands separators below 10k, then k/M — a 4-digit count is still
+/// readable, a 7-digit one is not.
+fn fmt_count(n: f64) -> String {
+    let n = n.max(0.0);
+    if n < 10_000.0 {
+        let i = n as u64;
+        let s = i.to_string();
+        // group thousands: 1771 -> 1,771
+        let mut out = String::new();
+        for (idx, ch) in s.chars().enumerate() {
+            if idx > 0 && (s.len() - idx) % 3 == 0 {
+                out.push(',');
+            }
+            out.push(ch);
+        }
+        out
+    } else if n < 1_000_000.0 {
+        format!("{:.1}k", n / 1000.0)
+    } else {
+        format!("{:.1}M", n / 1_000_000.0)
+    }
+}
+
+#[cfg(test)]
+mod metric_tests {
+    use super::*;
+
+    #[test]
+    fn counts_stay_short() {
+        assert_eq!(fmt_count(0.0), "0");
+        assert_eq!(fmt_count(871.0), "871");
+        assert_eq!(fmt_count(1771.0), "1,771");
+        assert_eq!(fmt_count(9999.0), "9,999");
+        assert_eq!(fmt_count(10_000.0), "10.0k");
+        assert_eq!(fmt_count(1_500_000.0), "1.5M");
+    }
+
+    #[test]
+    fn a_lone_token_count_still_carries_the_unit() {
+        let only_in = metrics_html(&SessionMetrics { input_tokens: 42.0, ..Default::default() });
+        assert!(only_in.contains("42 tok"), "{only_in}");
+        let only_out = metrics_html(&SessionMetrics { output_tokens: 7.0, ..Default::default() });
+        assert!(only_out.contains("7 tok"), "{only_out}");
+    }
+
+    #[test]
+    fn the_timer_reads_as_a_sentence() {
+        let m = SessionMetrics { duration_ms: 330.0, ..Default::default() };
+        assert!(metrics_html(&m).contains("0.330s elapsed"));
+        let m = SessionMetrics { duration_ms: 1304.0, ..Default::default() };
+        assert!(metrics_html(&m).contains("1.304s elapsed"));
+    }
+
+    #[test]
+    fn rates_are_last_turn_and_totals_are_the_session() {
+        let m = SessionMetrics { tok_per_sec: 267.07, duration_ms: 412.0,
+                                 input_tokens: 5312.0, output_tokens: 193.0, bytes: 1771.0 };
+        let h = metrics_html(&m);
+        assert!(h.contains("267 tok/s"), "{h}");
+        assert!(!h.contains("267.07"), "no decimals: {h}");
+        assert!(h.contains("ph-arrow-up") && h.contains(">5,312<"), "{h}");
+        assert!(h.contains("ph-arrow-down") && h.contains("193 tok"), "{h}");
+        assert_eq!(h.matches(" tok<").count(), 1, "the unit is written once: {h}");
+        assert!(!h.contains(" in<") && !h.contains(" out<"), "{h}");
+        assert!(h.contains("1,771 bytes"), "{h}");
+        assert!(h.contains("0.412s elapsed"), "{h}");
+        assert!(!h.contains(" tps"), "renamed to tok/s: {h}");
+    }
+
+    #[test]
+    fn a_zero_metric_is_omitted_rather_than_shown_as_zero() {
+        let h = metrics_html(&SessionMetrics { tok_per_sec: 12.0, ..Default::default() });
+        assert!(h.contains("tok/s"));
+        assert!(!h.contains("in") || !h.contains("arrow-up"), "{h}");
+        assert!(!h.contains("bytes"), "{h}");
     }
 }

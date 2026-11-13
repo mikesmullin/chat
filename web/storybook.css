@@ -212,6 +212,16 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-tint);
 }
+/* The kit hardcodes a blue-slate `#55697d` for placeholders (kit.css:453),
+   which is a raw hex no token can reach. Route it through the palette so it
+   reads as grey like the rest of the dim text. `opacity: 1` because some
+   engines dim a placeholder further on top of the colour. */
+:is(#sb, #home) input::placeholder,
+:is(#sb, #home) textarea::placeholder {
+  color: var(--gray-dim);
+  opacity: 1;
+}
+
 :is(#sb, #home) .field-hint { color: var(--muted); }
 :is(#sb, #home) .stepper .step {
   background: var(--panel-2);
