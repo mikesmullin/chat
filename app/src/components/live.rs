@@ -86,7 +86,16 @@ fn open_session_by_id(id: &str) {
             js::set_str(&s, "allowlistBaseline", &text);
         }
         clear_stream(&s);
+        // The roster and the cursor come back on the same response, so the
+        // attribution map is ready before the first row renders.
+        store_roster(&s, &js_sys::Array::from(&js::get(&v, "participants")));
+        js::set_str(&s, "cursor", &js::get_str(&v, "cursor"));
         mjs::redraw();
+        // The tree and the memory view are separate reads: neither is needed
+        // to draw the transcript, and asking for both up front would make
+        // opening a session wait on work most sessions never show.
+        load_branches(&want);
+        load_view(JsValue::UNDEFINED, js_sys::Array::new());
     });
 }
 
@@ -104,6 +113,11 @@ fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
         return JsValue::UNDEFINED;
     }
     let s = mjs::store_ref(STORE);
+    // Each session decides for itself whether it is threaded; carrying the
+    // last one's answer over would show a flat conversation under a
+    // "Threaded" label. `loadView` turns it back on if this one is compacted.
+    js::set_bool(&s, "threadView", false);
+    js::set(&s, "threads", &js_sys::Array::new().into());
     // Opening from the history rail puts it on the strip if it is not there.
     add_open_id(&id);
     rebuild_tabs(&s);
@@ -237,12 +251,16 @@ fn on_row(row: &JsValue) {
                 "assistant" => {
                     let streamed = js::get_str(&s, "streamText");
                     let final_text = if text.is_empty() { streamed } else { text.clone() };
+                    // In a group conversation the card names its speaker;
+                    // without the label three agents' bubbles are
+                    // indistinguishable.
+                    let handle = js::get_str(&card, "handle");
                     // Fold this turn into the running totals. The rates come
                     // from this turn's telemetry; the counts accumulate.
                     let tel = js::get(&card, "telemetry");
                     add_turn_metrics(&s, &tel, &final_text);
                     if !final_text.trim().is_empty() {
-                        push_message(&s, "assistant", &final_text, "");
+                        push_message_as(&s, "assistant", &final_text, "", &handle);
                     }
                     js::set_str(&s, "streamText", "");
                     js::set_str(&s, "streamHtml", "");
@@ -267,6 +285,11 @@ fn on_row(row: &JsValue) {
         }
         "done" => {
             js::set_bool(&s, "waiting", false);
+            // A new message changes the tree's leaf set, so a threaded view
+            // on screen is now one message short.
+            if js::get_bool(&s, "threadView") {
+                load_view(JsValue::UNDEFINED, js_sys::Array::new());
+            }
             mjs::redraw();
         }
         _ => {}
@@ -275,12 +298,20 @@ fn on_row(row: &JsValue) {
 
 /// Append one message to the transcript.
 fn push_message(s: &JsValue, kind: &str, text: &str, name: &str) {
+    push_message_as(s, kind, text, name, "")
+}
+
+/// Append one message, attributed to a participant's handle.
+fn push_message_as(s: &JsValue, kind: &str, text: &str, name: &str, handle: &str) {
     let list = js_sys::Array::from(&js::get(s, "messages"));
     let m = js::obj();
     js::set_str(&m, "kind", kind);
     js::set_str(&m, "text", text);
     if !name.is_empty() {
         js::set_str(&m, "name", name);
+    }
+    if !handle.is_empty() {
+        js::set_str(&m, "handle", handle);
     }
     // A client-made row needs an id for `:key`; the server's ids are event
     // ids, so prefix to guarantee no collision.
@@ -331,6 +362,34 @@ pub fn register() {
         .num("mIn", 0.0)
         .num("mOut", 0.0)
         .num("mBytes", 0.0)
+        // --- the memory tree ------------------------------------------------
+        // `threads` is a FLAT list that renders nested (each row carries its
+        // own `depth`): m-js diffs a keyed list far more cheaply than a
+        // recursive tree, and the nesting here is purely presentational.
+        .val("threads", &js_sys::Array::new().into())
+        // True once something has actually been folded into a thread.
+        .bool("compacted", false)
+        // Show the threaded history instead of the flat transcript.
+        .bool("threadView", false)
+        .bool("compacting", false)
+        .num("memCount", 0.0)
+        // 0 = the server's default budget. Set it to force threading on a
+        // conversation that would otherwise still fit.
+        .num("memoryHigh", 0.0)
+        // --- the roster -----------------------------------------------------
+        .val("participants", &js_sys::Array::new().into())
+        // participant id -> handle, so a message can be attributed without
+        // searching the roster on every row.
+        .val("handles", &js::obj().into())
+        .num("agentCount", 0.0)
+        .bool("isGroup", false)
+        .bool("rosterOpen", false)
+        .str("newAgent", "")
+        // --- branches -------------------------------------------------------
+        .str("cursor", "")
+        .val("branches", &js_sys::Array::new().into())
+        .bool("hasBranches", false)
+        .bool("branchOpen", false)
         .method("loadSessions", load_sessions)
         .method("openSession", open_session)
         .method("newSession", new_session)
@@ -343,7 +402,16 @@ pub fn register() {
         .method("toggleAllowlist", toggle_allowlist)
         .method("saveAllowlist", save_allowlist)
         .method("revertAllowlist", revert_allowlist)
-        .method("setPolicy", set_policy);
+        .method("setPolicy", set_policy)
+        .method("loadView", load_view)
+        .method("compact", compact)
+        .method("toggleThread", toggle_thread)
+        .method("toggleThreadView", toggle_thread_view)
+        .method("addAgent", add_agent)
+        .method("removeAgent", remove_agent)
+        .method("forkAt", fork_at)
+        .method("switchBranch", switch_branch)
+        .method("handleOf", handle_of);
     mjs::store(STORE, &d.finish());
 }
 
@@ -777,4 +845,487 @@ fn store_metrics(s: &JsValue, m: &helpers::SessionMetrics) {
     js::set_num(s, "mOut", m.output_tokens);
     js::set_num(s, "mBytes", m.bytes);
     js::set_str(s, "lastMetrics", &helpers::metrics_html(m));
+}
+
+// ===========================================================================
+// The memory tree in the UI: threads you can open one level at a time
+// ===========================================================================
+//
+// `threads` is a **flat** array that renders as a nested list, because m-js
+// diffs a keyed list far more cheaply than it diffs a recursive component
+// tree, and the nesting here is only ever presentational. Each entry carries
+// its own `depth`, and the template indents by it.
+//
+// Opening a thread splices its two halves in directly after it. Nothing is
+// fetched until someone opens something, so the top of a very long
+// conversation costs exactly as many rows as it shows.
+
+/// Build one thread row from a `/view` or `/zoom` part.
+fn thread_row(part: &JsValue, depth: f64) -> JsValue {
+    let row = js::obj();
+    let r = js::get_str(part, "ref");
+    js::set_str(&row, "ref", &r);
+    // The key has to be unique across the whole flat list, and the same
+    // reference can legitimately appear at two depths while a parent is open.
+    js::set_str(&row, "id", &format!("t{depth}-{r}"));
+    js::set(&row, "from", &js::get(part, "id"));
+    js::set(&row, "n", &js::get(part, "n"));
+    js::set(&row, "level", &js::get(part, "level"));
+    js::set_num(&row, "depth", depth);
+    js::set_bool(&row, "leaf", js::get_bool(part, "leaf"));
+    js::set_bool(&row, "built", js::get_bool(part, "built"));
+    js::set_bool(&row, "clipped", js::get_bool(part, "clipped"));
+    js::set_bool(&row, "expanded", false);
+    js::set_bool(&row, "loading", false);
+    let text = js::get_str(part, "text");
+    js::set_str(&row, "text", &text);
+    // A summary is prose from a model, so it gets the same markdown
+    // treatment as an answer.
+    js::set_str(&row, "html", &helpers::markdown_to_html(&text));
+    // A leaf carries the original message, which renders as the card it
+    // always was rather than as a summary line.
+    let msg = js::get(part, "message");
+    if !msg.is_undefined() && !msg.is_null() {
+        add_html(&msg);
+        js::set(&row, "message", &msg);
+    }
+    // How many messages this line stands for — the count the UI shows on a
+    // collapsed thread.
+    let n = js::get(part, "n").as_f64().unwrap_or(1.0);
+    js::set_str(
+        &row,
+        "label",
+        &if n <= 1.0 {
+            String::new()
+        } else {
+            format!("{} messages", helpers::fmt_count(n))
+        },
+    );
+    row.into()
+}
+
+/// `loadView()` — pull the memory view for the open session.
+fn load_view(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let id = js::get_str(&s, "activeId");
+    if id.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let want = id.clone();
+    api::memory_view(&id, move |v| {
+        let s = mjs::store_ref(STORE);
+        if js::get_str(&s, "activeId") != want {
+            return;
+        }
+        let parts = js_sys::Array::from(&js::get(&v, "parts"));
+        let rows = js_sys::Array::new();
+        for p in parts.iter() {
+            rows.push(&thread_row(&p, 0.0));
+        }
+        js::set(&s, "threads", &rows.into());
+        js::set_bool(&s, "compacted", js::get_bool(&v, "compacted"));
+        js::set_num(&s, "memCount", js::get(&v, "count").as_f64().unwrap_or(0.0));
+        // The threaded view is only worth showing once something has
+        // actually been folded; before that it is the flat transcript with
+        // extra chrome.
+        if js::get_bool(&v, "compacted") {
+            js::set_bool(&s, "threadView", true);
+        }
+        mjs::redraw();
+    });
+    JsValue::UNDEFINED
+}
+
+/// `compact()` — run compaction on the open conversation.
+///
+/// Explicit rather than automatic: compaction spends model calls, and the
+/// moment a conversation gets re-shaped under the reader is a moment they
+/// should have asked for.
+fn compact(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let id = js::get_str(&s, "activeId");
+    if id.is_empty() || js::get_bool(&s, "compacting") {
+        return JsValue::UNDEFINED;
+    }
+    js::set_bool(&s, "compacting", true);
+    mjs::redraw();
+    let payload = js::obj();
+    let high = js::get(&s, "memoryHigh").as_f64().unwrap_or(0.0);
+    if high > 0.0 {
+        js::set_num(&payload, "high", high);
+    }
+    api::compact(&id, &payload.into(), move |_| {
+        let s = mjs::store_ref(STORE);
+        js::set_bool(&s, "compacting", false);
+        load_view(JsValue::UNDEFINED, js_sys::Array::new());
+        mjs::redraw();
+    });
+    JsValue::UNDEFINED
+}
+
+/// Index of the thread row with this key, or -1.
+fn thread_index(rows: &js_sys::Array, key: &str) -> i32 {
+    for (i, r) in rows.iter().enumerate() {
+        if js::get_str(&r, "id") == key {
+            return i as i32;
+        }
+    }
+    -1
+}
+
+/// `toggleThread(key)` — open a thread one level, or close it.
+fn toggle_thread(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let key = js::arg_str(&args, 0);
+    let s = mjs::store_ref(STORE);
+    let rows = js_sys::Array::from(&js::get(&s, "threads"));
+    let at = thread_index(&rows, &key);
+    if at < 0 {
+        return JsValue::UNDEFINED;
+    }
+    let row = rows.get(at as u32);
+    if js::get_bool(&row, "leaf") {
+        // A width-1 part is already the original message; there is nothing
+        // under it to open.
+        return JsValue::UNDEFINED;
+    }
+    if js::get_bool(&row, "expanded") {
+        collapse_at(&s, &rows, at);
+        return JsValue::UNDEFINED;
+    }
+
+    let id = js::get_str(&s, "activeId");
+    let from = js::get(&row, "from").as_f64().unwrap_or(0.0);
+    let n = js::get(&row, "n").as_f64().unwrap_or(1.0);
+    js::set_bool(&row, "loading", true);
+    mjs::redraw();
+
+    let key2 = key.clone();
+    api::zoom(&id, from, n, move |v| {
+        let s = mjs::store_ref(STORE);
+        let rows = js_sys::Array::from(&js::get(&s, "threads"));
+        let at = thread_index(&rows, &key2);
+        if at < 0 {
+            return;
+        }
+        let row = rows.get(at as u32);
+        js::set_bool(&row, "loading", false);
+        let depth = js::get(&row, "depth").as_f64().unwrap_or(0.0);
+
+        let kids = js_sys::Array::new();
+        if js::get_str(&v, "kind") == "halves" {
+            for p in js_sys::Array::from(&js::get(&v, "parts")).iter() {
+                kids.push(&thread_row(&p, depth + 1.0));
+            }
+        }
+        if kids.length() == 0 {
+            mjs::redraw();
+            return;
+        }
+        js::set_bool(&row, "expanded", true);
+        // Splice the halves in right after their parent. The parent stays
+        // visible as the thread's header, so you can see what you opened.
+        let next = js_sys::Array::new();
+        for (i, r) in rows.iter().enumerate() {
+            next.push(&r);
+            if i as i32 == at {
+                for k in kids.iter() {
+                    next.push(&k);
+                }
+            }
+        }
+        // Replace the array rather than mutating it: an in-place splice may
+        // not notify.
+        js::set(&s, "threads", &next.into());
+        mjs::redraw();
+    });
+    JsValue::UNDEFINED
+}
+
+/// Close a thread: drop every row nested under it.
+fn collapse_at(s: &JsValue, rows: &js_sys::Array, at: i32) {
+    let row = rows.get(at as u32);
+    let depth = js::get(&row, "depth").as_f64().unwrap_or(0.0);
+    js::set_bool(&row, "expanded", false);
+    let next = js_sys::Array::new();
+    let mut skipping = false;
+    for (i, r) in rows.iter().enumerate() {
+        let d = js::get(&r, "depth").as_f64().unwrap_or(0.0);
+        if i as i32 == at {
+            skipping = true;
+            next.push(&r);
+            continue;
+        }
+        if skipping {
+            // Everything deeper than the parent belongs to it; the first row
+            // back at the parent's own depth ends the subtree.
+            if d > depth {
+                continue;
+            }
+            skipping = false;
+        }
+        next.push(&r);
+    }
+    js::set(s, "threads", &next.into());
+    mjs::redraw();
+}
+
+/// `toggleThreadView()` — flat transcript or threaded history.
+fn toggle_thread_view(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let on = !js::get_bool(&s, "threadView");
+    js::set_bool(&s, "threadView", on);
+    if on {
+        load_view(JsValue::UNDEFINED, js_sys::Array::new());
+    }
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+// ===========================================================================
+// The roster: who is in the conversation
+// ===========================================================================
+
+/// Store the roster and build the id → handle map the transcript uses to
+/// attribute each message.
+fn store_roster(s: &JsValue, list: &js_sys::Array) {
+    js::set(s, "participants", &list.clone().into());
+    let by_id = js::obj();
+    let mut agents = 0.0;
+    for p in list.iter() {
+        let id = js::get(&p, "id").as_f64().unwrap_or(-1.0);
+        js::set_str(&by_id, &format!("{id}"), &js::get_str(&p, "handle"));
+        if js::get_str(&p, "kind") == "agent" && js::get_bool(&p, "active") {
+            agents += 1.0;
+        }
+    }
+    js::set(s, "handles", &by_id);
+    js::set_num(s, "agentCount", agents);
+    // Two or more agents is what makes this a group conversation, which is
+    // what the server uses to pick the group turn path.
+    js::set_bool(s, "isGroup", agents > 1.0);
+}
+
+/// `addAgent()` — seat another agent from the composer's roster bar.
+fn add_agent(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let id = js::get_str(&s, "activeId");
+    if id.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let name = {
+        let typed = js::arg_str(&args, 0);
+        if typed.trim().is_empty() {
+            js::get_str(&s, "newAgent")
+        } else {
+            typed
+        }
+    };
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let payload = js::obj();
+    js::set_str(&payload, "kind", "agent");
+    js::set_str(&payload, "handle", &name);
+    js::set_str(&payload, "displayName", &name);
+    // Also treated as an agent-definition name, so seating a configured
+    // agent picks up its system prompt and model server-side.
+    js::set_str(&payload, "agentName", &name);
+    let want = id.clone();
+    api::add_participant(&id, &payload.into(), move |_| {
+        let s = mjs::store_ref(STORE);
+        js::set_str(&s, "newAgent", "");
+        if js::get_str(&s, "activeId") == want {
+            load_roster(&want);
+        }
+        mjs::redraw();
+    });
+    JsValue::UNDEFINED
+}
+
+/// `removeAgent(id)` — unseat a participant.
+fn remove_agent(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let pid = js::arg_num(&args, 0, 0.0);
+    if pid <= 0.0 {
+        return JsValue::UNDEFINED;
+    }
+    let s = mjs::store_ref(STORE);
+    let id = js::get_str(&s, "activeId");
+    api::remove_participant(pid, move |_| {
+        if !id.is_empty() {
+            load_roster(&id);
+        }
+        mjs::redraw();
+    });
+    JsValue::UNDEFINED
+}
+
+fn load_roster(id: &str) {
+    let want = id.to_string();
+    rustex1_kit::api::get(
+        &format!("/api/sessions/{id}/participants"),
+        None,
+        move |v| {
+            let s = mjs::store_ref(STORE);
+            if js::get_str(&s, "activeId") != want {
+                return;
+            }
+            store_roster(&s, &js_sys::Array::from(&js::get(&v, "participants")));
+            mjs::redraw();
+        },
+    );
+}
+
+// ===========================================================================
+// Branching: the cursor picks which version of the conversation you are in
+// ===========================================================================
+
+/// `forkAt(eventId)` — point the cursor at an earlier message.
+///
+/// This is the whole fork operation. The branch you were on is untouched and
+/// still reachable; the next message you send simply hangs off the node you
+/// chose instead of off the tail.
+fn fork_at(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let event_id = js::arg_str(&args, 0);
+    let s = mjs::store_ref(STORE);
+    let id = js::get_str(&s, "activeId");
+    if id.is_empty() || event_id.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let payload = js::obj();
+    js::set_str(&payload, "eventId", &event_id);
+    let want = id.clone();
+    api::set_cursor(&id, &payload.into(), move |v| {
+        let s = mjs::store_ref(STORE);
+        if js::get_str(&s, "activeId") != want {
+            return;
+        }
+        js::set_str(&s, "cursor", &js::get_str(&v, "cursor"));
+        // Re-read rather than trusting the local list: the rendered
+        // conversation is now a different path through the tree.
+        open_session_by_id(&want);
+        load_branches(&want);
+        mjs::redraw();
+    });
+    JsValue::UNDEFINED
+}
+
+/// Pull the forest and keep the fork points: nodes with more than one child
+/// are where the conversation actually diverged, and they are the only ones
+/// worth offering as a branch switch.
+fn load_branches(id: &str) {
+    let want = id.to_string();
+    api::tree(id, move |v| {
+        let s = mjs::store_ref(STORE);
+        if js::get_str(&s, "activeId") != want {
+            return;
+        }
+        let nodes = js_sys::Array::from(&js::get(&v, "nodes"));
+        let on_path = js_sys::Array::from(&js::get(&v, "onPath"));
+        let mut counts: std::collections::HashMap<String, Vec<JsValue>> =
+            std::collections::HashMap::new();
+        for n in nodes.iter() {
+            let parent = js::get_str(&n, "parentId");
+            if parent.is_empty() {
+                continue;
+            }
+            counts.entry(parent).or_default().push(n);
+        }
+        let on: Vec<String> = on_path.iter().map(|x| x.as_string().unwrap_or_default()).collect();
+        let out = js_sys::Array::new();
+        for n in nodes.iter() {
+            let nid = js::get_str(&n, "id");
+            let kids = match counts.get(&nid) {
+                Some(k) if k.len() > 1 => k,
+                _ => continue,
+            };
+            for (i, k) in kids.iter().enumerate() {
+                let kid = js::get_str(k, "id");
+                let b = js::obj();
+                js::set_str(&b, "id", &kid);
+                js::set_str(&b, "forkOf", &nid);
+                js::set_num(&b, "n", (i + 1) as f64);
+                js::set_num(&b, "of", kids.len() as f64);
+                js::set_bool(&b, "current", on.contains(&kid));
+                // Switching lands on the branch's TIP, not on the node where
+                // it split off: a branch chip means "show me that version of
+                // the conversation", and stopping at the fork would show one
+                // message of it.
+                js::set_str(&b, "tip", &branch_tip(k, &counts));
+                // Label the branch with the first real message under it,
+                // not with the node that happens to sit at the fork. A fork
+                // often lands on a `reasoning` or `gen_info` node, and
+                // "The user just said hi…" tells you nothing about which
+                // branch you would be switching to.
+                js::set_str(&b, "text", &helpers::clip(&first_message_under(k, &counts), 60));
+                out.push(&b.into());
+            }
+        }
+        js::set(&s, "branches", &out.into());
+        js::set_bool(&s, "hasBranches", !counts.values().all(|v| v.len() < 2));
+        mjs::redraw();
+    });
+}
+
+/// `switchBranch(eventId)` — render a different branch from a fork point.
+fn switch_branch(this: JsValue, args: js_sys::Array) -> JsValue {
+    fork_at(this, args)
+}
+
+/// `handleOf(participantId)` — the `@handle` that authored a message.
+fn handle_of(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let pid = js::arg_num(&args, 0, 0.0);
+    let s = mjs::store_ref(STORE);
+    let map = js::get(&s, "handles");
+    let h = js::get_str(&map, &format!("{pid}"));
+    JsValue::from_str(&h)
+}
+
+
+/// The text of the first message at or below `node`, following the eldest
+/// child at each step.
+///
+/// Bounded by a step count rather than a visited set: the tree is acyclic by
+/// construction (a parent's `seq` is always smaller than its child's), so the
+/// only thing worth guarding against here is a pathologically deep branch.
+fn first_message_under(
+    node: &JsValue,
+    children: &std::collections::HashMap<String, Vec<JsValue>>,
+) -> String {
+    let mut cur = node.clone();
+    for _ in 0..64 {
+        if js::get_str(&cur, "kind") == "context_window" {
+            let text = js::get_str(&cur, "content");
+            if !text.trim().is_empty() {
+                return text;
+            }
+        }
+        let id = js::get_str(&cur, "id");
+        match children.get(&id).and_then(|k| k.first()) {
+            Some(next) => cur = next.clone(),
+            None => break,
+        }
+    }
+    // Nothing said on this branch yet: name what is actually there.
+    format!("({})", js::get_str(node, "kind"))
+}
+
+
+/// The deepest node on a branch, following the eldest child at each step.
+///
+/// Bounded by a step count rather than a visited set: the tree is acyclic by
+/// construction, so this guards only against a pathologically long branch.
+fn branch_tip(
+    node: &JsValue,
+    children: &std::collections::HashMap<String, Vec<JsValue>>,
+) -> String {
+    let mut cur = node.clone();
+    for _ in 0..4096 {
+        let id = js::get_str(&cur, "id");
+        match children.get(&id).and_then(|k| k.first()) {
+            Some(next) => cur = next.clone(),
+            None => return id,
+        }
+    }
+    js::get_str(&cur, "id")
 }

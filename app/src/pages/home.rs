@@ -30,7 +30,7 @@ use rustex1_kit::h::{m, Node};
 use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
-use crate::components::{agents_menu, composer, session, session_history, tab};
+use crate::components::{agents_menu, composer, roster, session, session_history, tab, thread};
 use crate::css;
 
 const STORE: &str = "home";
@@ -114,6 +114,12 @@ pub const CSS: &str = r#"
    the rail and the tab strip already use */
 .home-main .composer-inner { padding: 0 10px 10px; }
 .home-main .messages { padding-left: 10px; padding-right: 10px; }
+/* The flat/threaded switch wraps `.messages` in a div. `.messages` owns the
+   overflow, so the wrapper has to be a transparent flex pass-through or it
+   clips the transcript instead of letting it scroll. */
+.home-main .main > div:has(> .messages) {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
+}
 
 /* ---- right aside ------------------------------------------------- */
 .home-aside-head {
@@ -171,9 +177,26 @@ fn main_col() -> Node {
                 .class("mjs-chat mode-sidebar")
                 .attr("aria-label", "Session panel")
                 .child(
-                    m("section")
-                        .class("main")
-                        .kids(vec![session::messages_live(), composer::panel_live()]),
+                    m("section").class("main").kids(vec![
+                        // Who is here, and which branch you are on: both
+                        // change what the next turn does, so both belong
+                        // above the transcript rather than in a menu.
+                        roster::roster(),
+                        roster::branches(),
+                        thread::memory_bar(),
+                        // Flat or threaded. Two templates rather than one
+                        // with conditional children: the two lists are keyed
+                        // differently (message ids vs tree coordinates), and
+                        // sharing one `x-for` would make the diff re-key
+                        // every row on the switch.
+                        m("div")
+                            .show("!$store.live.threadView")
+                            .child(session::messages_live()),
+                        m("div")
+                            .show("$store.live.threadView")
+                            .child(session::messages_threaded()),
+                        composer::panel_live(),
+                    ]),
                 ),
         ),
     ])

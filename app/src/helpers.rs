@@ -805,7 +805,8 @@ pub fn metrics_html(m: &SessionMetrics) -> String {
 /// Byte counts, kept short so the chip row stays one line.
 /// Thousands separators below 10k, then k/M — a 4-digit count is still
 /// readable, a 7-digit one is not.
-fn fmt_count(n: f64) -> String {
+/// Group thousands, then abbreviate: `1,771` / `12.4k` / `3.1M`.
+pub fn fmt_count(n: f64) -> String {
     let n = n.max(0.0);
     if n < 10_000.0 {
         let i = n as u64;
@@ -878,5 +879,33 @@ mod metric_tests {
         assert!(h.contains("tok/s"));
         assert!(!h.contains("in") || !h.contains("arrow-up"), "{h}");
         assert!(!h.contains("bytes"), "{h}");
+    }
+}
+
+
+/// Truncate to `n` characters with an ellipsis, counting characters rather
+/// than bytes so a multi-byte glyph is never cut in half.
+pub fn clip(text: &str, n: usize) -> String {
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let chars: Vec<char> = flat.chars().collect();
+    if chars.len() <= n {
+        flat
+    } else {
+        format!("{}…", chars[..n].iter().collect::<String>())
+    }
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::clip;
+
+    #[test]
+    fn clipping_counts_characters_not_bytes() {
+        assert_eq!(clip("hello", 10), "hello");
+        assert_eq!(clip("hello world", 5), "hello…");
+        // Newlines collapse: a summary line is one line.
+        assert_eq!(clip("a\n\nb", 10), "a b");
+        // Four 3-byte characters: a byte-based cut would split one.
+        assert_eq!(clip("哦哦哦哦", 2), "哦哦…");
     }
 }

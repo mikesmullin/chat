@@ -35,6 +35,51 @@ pub fn delete_session<F: FnMut(JsValue) + 'static>(id: &str, then: F) {
     rustex1_kit::api::get(&format!("/api/sessions/{id}"), Some("DELETE"), then);
 }
 
+/// `GET /api/sessions/:id/view` — the memory tree's view: the threads and
+/// messages covering the whole conversation, oldest first.
+pub fn memory_view<F: FnMut(JsValue) + 'static>(id: &str, then: F) {
+    rustex1_kit::api::get(&format!("/api/sessions/{id}/view"), None, then);
+}
+
+/// `POST /api/sessions/:id/compact` — build the summary tree and fit the view.
+pub fn compact<F: FnMut(JsValue) + 'static>(id: &str, payload: &JsValue, then: F) {
+    rustex1_kit::api::post_json(&format!("/api/sessions/{id}/compact"), payload, then);
+}
+
+/// `GET /api/sessions/:id/zoom?id=&n=` — open one thread, one level.
+///
+/// One level per request is the point: a deep history is walked only where
+/// someone actually looked, so opening the top of a thousand-message
+/// conversation costs two lines, not a thousand.
+pub fn zoom<F: FnMut(JsValue) + 'static>(session: &str, from: f64, n: f64, then: F) {
+    rustex1_kit::api::get(
+        &format!("/api/sessions/{session}/zoom?id={from}&n={n}"),
+        None,
+        then,
+    );
+}
+
+/// `POST /api/sessions/:id/participants` — seat another agent.
+pub fn add_participant<F: FnMut(JsValue) + 'static>(id: &str, payload: &JsValue, then: F) {
+    rustex1_kit::api::post_json(&format!("/api/sessions/{id}/participants"), payload, then);
+}
+
+/// `DELETE /api/participants/:id` — unseat one (deactivated if it has spoken).
+pub fn remove_participant<F: FnMut(JsValue) + 'static>(pid: f64, then: F) {
+    rustex1_kit::api::get(&format!("/api/participants/{pid}"), Some("DELETE"), then);
+}
+
+/// `POST /api/sessions/:id/cursor` — move the cursor, which is how a branch
+/// is chosen and how a fork begins.
+pub fn set_cursor<F: FnMut(JsValue) + 'static>(id: &str, payload: &JsValue, then: F) {
+    rustex1_kit::api::post_json(&format!("/api/sessions/{id}/cursor"), payload, then);
+}
+
+/// `GET /api/sessions/:id/tree` — every branch, for the branch picker.
+pub fn tree<F: FnMut(JsValue) + 'static>(id: &str, then: F) {
+    rustex1_kit::api::get(&format!("/api/sessions/{id}/tree"), None, then);
+}
+
 /// `POST /api/chat`, consuming the NDJSON stream row by row.
 ///
 /// `on_row` fires for every complete line as it arrives; `on_end` fires once,
