@@ -35,7 +35,10 @@ fn angela(port: u16) -> &'static AngelaServer {
         // The reported port is this server's: embedded angela has no port of
         // its own, and `/api/health` saying 0 would just be a lie.
         let state = AppState::new(&root, port).expect("angela state");
-        eprintln!("angela embedded · sessions in {}/.angela/sessions", root.display());
+        eprintln!(
+            "angela embedded · conversations in {}/.angela/conversations.db",
+            root.display()
+        );
         AngelaServer::new(Arc::new(state))
     })
 }
