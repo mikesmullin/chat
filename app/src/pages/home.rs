@@ -30,7 +30,9 @@ use rustex1_kit::h::{m, Node};
 use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
-use crate::components::{agents_menu, composer, roster, session, session_history, tab, thread};
+use crate::components::{
+    agent_editor, agents_menu, composer, roster, session, session_history, tab, thread,
+};
 use crate::css;
 
 const STORE: &str = "home";
@@ -155,7 +157,7 @@ fn rail() -> Node {
         .attr("aria-label", "Sessions and agents")
         .kids(vec![
             session_history::session_history_live(),
-            m("div").class("home-agents").child(agents_menu::agents_menu()),
+            m("div").class("home-agents").child(agents_menu::agents_menu_live()),
         ])
 }
 
@@ -202,7 +204,7 @@ fn main_col() -> Node {
     ])
 }
 
-/// right column: empty for now, with its collapse toggle.
+/// right column: the inspector, with its collapse toggle.
 fn aside() -> Node {
     m("aside")
         .class("home-aside")
@@ -220,7 +222,12 @@ fn aside() -> Node {
                     .on("click", &format!("$store.{STORE}.toggleAside()"))
                     .child(Node::icon("sidebar-simple")),
             ),
-            m("div").class("home-aside-body"),
+            // The inspector: contextual, so its contents are whatever is
+            // selected elsewhere. Today that is an agent definition.
+            m("div").class("home-aside-body").kids(vec![
+                agent_editor::agent_editor(),
+                agent_editor::inspector_empty(),
+            ]),
         ])
 }
 
