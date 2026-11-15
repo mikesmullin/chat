@@ -1,5 +1,7 @@
 use crate::css;
 
+pub mod agent_editor;
+pub mod agents;
 pub mod agents_menu;
 pub mod approval_card;
 pub mod assistant_card;
@@ -47,6 +49,8 @@ pub mod validation_info;
 /// Widget CSS is injected inside each widget's `register()`. Route-tree CSS
 /// (no widget registration) is injected here, from each tree's own `CSS` const.
 pub fn register() {
+    agent_editor::register();
+    agents::register();
     approval_card::register();
     assistant_card::register();
     automation_form::register();
@@ -85,7 +89,7 @@ pub fn register() {
     validation_info::register();
 
     css::inject("item-group", item_group::CSS);
-    css::inject("agents-menu", agents_menu::CSS);
+    agents_menu::register();
     css::inject("sandboxes-menu", sandboxes_menu::CSS);
     css::inject("nav-rail", nav_rail::CSS);
 }

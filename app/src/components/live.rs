@@ -99,11 +99,33 @@ fn open_session_by_id(id: &str) {
     });
 }
 
+/// Forget who was in the last conversation.
+///
+/// Every field `store_roster` writes, so nothing survives a switch: a roster
+/// left over from the previous session is indistinguishable from this one's,
+/// and it decides which turn path the composer thinks it is on.
+fn clear_roster(s: &JsValue) {
+    js::set(s, "participants", &js_sys::Array::new().into());
+    js::set(s, "others", &js_sys::Array::new().into());
+    js::set(s, "handles", &js::obj().into());
+    js::set(s, "accents", &js::obj().into());
+    js::set_num(s, "agentCount", 0.0);
+    js::set_bool(s, "isGroup", false);
+    js::set_str(s, "cursor", "");
+    js::set(s, "branches", &js_sys::Array::new().into());
+    js::set_bool(s, "hasBranches", false);
+}
+
 fn clear_stream(s: &JsValue) {
     js::set_str(s, "streamText", "");
     js::set_str(s, "streamHtml", "");
     js::set_str(s, "streamReasoning", "");
     js::set_str(s, "streamReasoningHtml", "");
+    // Each turn's reasoning starts shut, whatever the reader did with the
+    // last one: leaving it open would make the next turn's reasoning the
+    // biggest thing on screen without them asking for it again.
+    js::set_bool(s, "streamReasoningOpen", false);
+    js::set_str(s, "streamHandle", "");
 }
 
 /// `openSession(id)` — a click in the history rail or the tab bar.
@@ -118,6 +140,9 @@ fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     // "Threaded" label. `loadView` turns it back on if this one is compacted.
     js::set_bool(&s, "threadView", false);
     js::set(&s, "threads", &js_sys::Array::new().into());
+    // Likewise the roster: the fetch below replaces it, and until it lands
+    // the old session's agents would be shown as this one's.
+    clear_roster(&s);
     // Opening from the history rail puts it on the strip if it is not there.
     add_open_id(&id);
     rebuild_tabs(&s);
@@ -141,6 +166,14 @@ fn new_session(_this: JsValue, _args: js_sys::Array) -> JsValue {
             js::set_str(&s, "activeId", &id);
             js::set(&s, "messages", &js_sys::Array::new().into());
             clear_stream(&s);
+            // A new conversation is empty of agents. Without this the
+            // previous session's roster stayed on screen — and since
+            // nothing re-read it, those agents looked seated in a
+            // conversation that had never heard of them.
+            clear_roster(&s);
+            // …and then read the real one back, so the new session's state
+            // comes from the server rather than from what we assumed.
+            open_session_by_id(&id);
         }
         mjs::redraw();
         load_sessions(JsValue::UNDEFINED, js_sys::Array::new());
@@ -154,6 +187,13 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let draft = js::get_str(&s, "draft");
     let content = draft.trim().to_string();
     if content.is_empty() || js::get_bool(&s, "waiting") {
+        return JsValue::UNDEFINED;
+    }
+    // A slash command is an instruction to the app, not a message to the
+    // conversation — it never reaches a model and never enters the
+    // transcript, so it is handled before anything else happens.
+    if content.starts_with('/') {
+        run_command(&s, &content);
         return JsValue::UNDEFINED;
     }
 
@@ -212,7 +252,17 @@ fn on_row(row: &JsValue) {
             mjs::redraw();
         }
         // High-frequency: append to one string, never rebuild the list.
+        // Who the in-flight rows belong to, so they take that agent's colour
+        // before the sealed card arrives to say so.
+        "speaking" => {
+            js::set_str(&s, "streamHandle", &js::get_str(row, "handle"));
+            mjs::redraw();
+        }
         "assistant_delta" => {
+            let h = js::get_str(row, "handle");
+            if !h.is_empty() {
+                js::set_str(&s, "streamHandle", &h);
+            }
             let next = js::get_str(&s, "streamText") + &js::get_str(row, "text");
             js::set_str(&s, "streamText", &next);
             // Re-render on each delta rather than in a template binding: a
@@ -224,6 +274,12 @@ fn on_row(row: &JsValue) {
             mjs::redraw();
         }
         "reasoning_delta" => {
+            // Reasoning usually streams before any content does, so this is
+            // where the live card learns whose colour to wear.
+            let h = js::get_str(row, "handle");
+            if !h.is_empty() {
+                js::set_str(&s, "streamHandle", &h);
+            }
             let next = js::get_str(&s, "streamReasoning") + &js::get_str(row, "text");
             js::set_str(&s, "streamReasoning", &next);
             // Same prefix-safe renderer as the answer: half-arrived markdown
@@ -248,37 +304,34 @@ fn on_row(row: &JsValue) {
             let text = js::get_str(&card, "text");
             match kind.as_str() {
                 // The sealed bubble replaces the streamed one.
+                // The sealed bubble replaces the streamed one.
                 "assistant" => {
                     let streamed = js::get_str(&s, "streamText");
                     let final_text = if text.is_empty() { streamed } else { text.clone() };
-                    // In a group conversation the card names its speaker;
-                    // without the label three agents' bubbles are
-                    // indistinguishable.
-                    let handle = js::get_str(&card, "handle");
                     // Fold this turn into the running totals. The rates come
                     // from this turn's telemetry; the counts accumulate.
-                    let tel = js::get(&card, "telemetry");
-                    add_turn_metrics(&s, &tel, &final_text);
+                    add_turn_metrics(&s, &js::get(&card, "telemetry"), &final_text);
                     if !final_text.trim().is_empty() {
-                        push_message_as(&s, "assistant", &final_text, "", &handle);
+                        push_card(&s, &card, "assistant", Some(&final_text));
                     }
                     js::set_str(&s, "streamText", "");
                     js::set_str(&s, "streamHtml", "");
                 }
                 "reasoning" => {
                     if !text.trim().is_empty() {
-                        push_message(&s, "reasoning", &text, "");
+                        push_card(&s, &card, "reasoning", None);
                     }
                     js::set_str(&s, "streamReasoning", "");
                     js::set_str(&s, "streamReasoningHtml", "");
                 }
-                "tool_call" => {
-                    push_message(&s, "tool_call", &text, &js::get_str(&card, "name"));
-                }
-                "tool_result" => {
-                    push_message(&s, "tool_result", &text, &js::get_str(&card, "name"));
-                }
+                // Everything the turn produced goes through one path, so a
+                // streaming turn and a reloaded one draw the same rail.
+                "tool_call" | "tool_result" | "system_prompt" | "agent_prompt"
+                | "decision" => push_card(&s, &card, &kind, None),
                 "error" => push_message(&s, "error", &text, ""),
+                // The server explaining itself — e.g. that the conversation
+                // has no agents in it yet.
+                "system" => push_message(&s, "system", &text, ""),
                 _ => {}
             }
             mjs::redraw();
@@ -294,6 +347,72 @@ fn on_row(row: &JsValue) {
         }
         _ => {}
     }
+}
+
+/// Append a card from the wire, keeping every field its template reads.
+///
+/// `text_override` is for the assistant row, whose final text may be what was
+/// streamed rather than what the sealed card carries.
+fn push_card(s: &JsValue, card: &JsValue, kind: &str, text_override: Option<&str>) {
+    let list = js_sys::Array::from(&js::get(s, "messages"));
+    let m = js::obj();
+    js::set_str(&m, "kind", kind);
+    for key in ["text", "handle", "turn", "eventId", "name", "model", "error", "ts"] {
+        let v = js::get_str(card, key);
+        if !v.is_empty() {
+            js::set_str(&m, key, &v);
+        }
+    }
+    if let Some(t) = text_override {
+        js::set_str(&m, "text", t);
+    }
+    for key in ["bytes", "historyTurns", "confidence", "round"] {
+        if let Some(n) = js::get(card, key).as_f64() {
+            js::set_num(&m, key, n);
+        }
+    }
+    // Structured fields the cards render directly.
+    for key in ["verdict", "speak", "args", "ok", "denied", "telemetry"] {
+        let v = js::get(card, key);
+        if !v.is_undefined() {
+            js::set(&m, key, &v);
+        }
+    }
+    js::set_bool(&m, "visible", true);
+    js::set_str(&m, "id", &{
+        let e = js::get_str(card, "eventId");
+        if e.is_empty() {
+            format!("local-{}", list.length())
+        } else {
+            e
+        }
+    });
+    add_html(&m.clone().into());
+    attach_turn(&list, &m.clone().into(), &js::get_str(card, "turn"));
+    let next = list.clone();
+    next.push(&m.into());
+    js::set(s, "messages", &next.into());
+}
+
+/// Join a live row to the run the server says it belongs to.
+///
+/// `turnLast` moves: it is set on each arrival and cleared from the row
+/// before, so the rail's end keeps pace as a turn produces more. Doing this
+/// on the client matters because a streaming turn must draw the same rail the
+/// reloaded transcript will — and the reloaded one computes it server-side.
+fn attach_turn(list: &js_sys::Array, m: &JsValue, turn: &str) {
+    if turn.is_empty() {
+        return;
+    }
+    let mut first = true;
+    for prev in list.iter() {
+        if js::get_str(&prev, "turn") == turn {
+            first = false;
+            js::set_bool(&prev, "turnLast", false);
+        }
+    }
+    js::set_bool(m, "turnFirst", first);
+    js::set_bool(m, "turnLast", true);
 }
 
 /// Append one message to the transcript.
@@ -313,6 +432,13 @@ fn push_message_as(s: &JsValue, kind: &str, text: &str, name: &str, handle: &str
     if !handle.is_empty() {
         js::set_str(&m, "handle", handle);
     }
+    // A locally made row happened now, by definition. Without this the
+    // echoed prompt shows no time until the transcript is re-read.
+    js::set_str(
+        &m,
+        "ts",
+        &js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default(),
+    );
     // A client-made row needs an id for `:key`; the server's ids are event
     // ids, so prefix to guarantee no collision.
     js::set_str(&m, "id", &format!("local-{}", list.length()));
@@ -339,6 +465,12 @@ pub fn register() {
         .str("streamText", "")
         .str("streamHtml", "")
         .str("streamReasoningHtml", "")
+        // Reasoning opens on a click and starts shut, including the one
+        // streaming right now — it is how the answer was reached, not the
+        // answer, so it should not be the biggest thing on screen.
+        .bool("streamReasoningOpen", false)
+        // Who is currently speaking, so the in-flight rows take their colour.
+        .str("streamHandle", "")
         .str("streamReasoning", "")
         .str("projectRoot", "")
         .str("allowlist", "")
@@ -378,13 +510,16 @@ pub fn register() {
         .num("memoryHigh", 0.0)
         // --- the roster -----------------------------------------------------
         .val("participants", &js_sys::Array::new().into())
+        // The roster bar's list: everyone except the reader.
+        .val("others", &js_sys::Array::new().into())
         // participant id -> handle, so a message can be attributed without
         // searching the roster on every row.
         .val("handles", &js::obj().into())
+        // handle -> accent colour, for tinting a row to its author.
+        .val("accents", &js::obj().into())
         .num("agentCount", 0.0)
         .bool("isGroup", false)
         .bool("rosterOpen", false)
-        .str("newAgent", "")
         // --- branches -------------------------------------------------------
         .str("cursor", "")
         .val("branches", &js_sys::Array::new().into())
@@ -396,6 +531,7 @@ pub fn register() {
         .method("closeTab", close_tab)
         .method("send", send)
         .method("relTime", rel_time)
+        .method("relAgo", rel_ago)
         .method("onScroll", on_scroll)
         .method("keepPinned", keep_pinned)
         .method("deleteSession", delete_session)
@@ -407,11 +543,12 @@ pub fn register() {
         .method("compact", compact)
         .method("toggleThread", toggle_thread)
         .method("toggleThreadView", toggle_thread_view)
-        .method("addAgent", add_agent)
         .method("removeAgent", remove_agent)
         .method("forkAt", fork_at)
         .method("switchBranch", switch_branch)
-        .method("handleOf", handle_of);
+        .method("handleOf", handle_of)
+        .method("toggleCard", toggle_reasoning)
+        .method("accentOf", accent_of);
     mjs::store(STORE, &d.finish());
 }
 
@@ -515,6 +652,36 @@ fn rel_time(_this: JsValue, args: js_sys::Array) -> JsValue {
         format!("{}h", (secs / 3600.0).floor() as i64)
     } else {
         format!("{}d", (secs / 86_400.0).floor() as i64)
+    };
+    JsValue::from_str(&out)
+}
+
+/// `relAgo(iso)` — the same elapsed time as [`rel_time`], read as prose.
+///
+/// A byline is a sentence fragment ("fish, 24min ago"), not a column of
+/// figures, so it gets words rather than the rail's compact `24m`. Both read
+/// the same clock; only the rendering differs.
+fn rel_ago(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let iso = js::arg_str(&args, 0);
+    if iso.is_empty() {
+        return JsValue::from_str("");
+    }
+    let then = js_sys::Date::new(&JsValue::from_str(&iso)).get_time();
+    if then.is_nan() {
+        return JsValue::from_str("");
+    }
+    // Clamped at zero: a clock a second out of step should read "just now",
+    // not "in the future".
+    let secs = ((js_sys::Date::now() - then) / 1000.0).max(0.0);
+    let out = if secs < 45.0 {
+        "just now".to_string()
+    } else if secs < 3600.0 {
+        format!("{}min ago", (secs / 60.0).round().max(1.0) as i64)
+    } else if secs < 86_400.0 {
+        format!("{}hr ago", (secs / 3600.0).floor() as i64)
+    } else {
+        let d = (secs / 86_400.0).floor() as i64;
+        format!("{d} day{} ago", if d == 1 { "" } else { "s" })
     };
     JsValue::from_str(&out)
 }
@@ -1091,56 +1258,43 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
     js::set(s, "participants", &list.clone().into());
     let by_id = js::obj();
     let mut agents = 0.0;
+    // Who to show in the roster bar: everyone **except me**. A list that
+    // includes the reader is a list of the room, not of who they are
+    // talking to — and the one entry they can do nothing about.
+    //
+    // There is one human for now, so "me" is the `user` seat. When several
+    // humans can share a conversation this becomes "the viewer", and the
+    // other humans start appearing here, which is the intended shape.
+    let others = js_sys::Array::new();
+    // handle -> colour, so a row can be tinted without searching the roster
+    // on every redraw. Keyed by handle rather than by participant id because
+    // a streamed card names its speaker by handle.
+    let accents = js::obj();
     for p in list.iter() {
         let id = js::get(&p, "id").as_f64().unwrap_or(-1.0);
-        js::set_str(&by_id, &format!("{id}"), &js::get_str(&p, "handle"));
-        if js::get_str(&p, "kind") == "agent" && js::get_bool(&p, "active") {
-            agents += 1.0;
+        let handle = js::get_str(&p, "handle");
+        js::set_str(&by_id, &format!("{id}"), &handle);
+        let colour = js::get_str(&p, "accentColor");
+        js::set_str(
+            &accents,
+            &handle,
+            if colour.is_empty() { crate::components::agents::DEFAULT_ACCENT } else { &colour },
+        );
+        let kind = js::get_str(&p, "kind");
+        if kind == "agent" {
+            if js::get_bool(&p, "active") {
+                agents += 1.0;
+            }
+            others.push(&p);
         }
     }
+    js::set(s, "others", &others.into());
+    js::set(s, "accents", &accents);
     js::set(s, "handles", &by_id);
     js::set_num(s, "agentCount", agents);
     // Two or more agents is what makes this a group conversation, which is
     // what the server uses to pick the group turn path.
     js::set_bool(s, "isGroup", agents > 1.0);
-}
-
-/// `addAgent()` — seat another agent from the composer's roster bar.
-fn add_agent(_this: JsValue, args: js_sys::Array) -> JsValue {
-    let s = mjs::store_ref(STORE);
-    let id = js::get_str(&s, "activeId");
-    if id.is_empty() {
-        return JsValue::UNDEFINED;
-    }
-    let name = {
-        let typed = js::arg_str(&args, 0);
-        if typed.trim().is_empty() {
-            js::get_str(&s, "newAgent")
-        } else {
-            typed
-        }
-    };
-    let name = name.trim().to_string();
-    if name.is_empty() {
-        return JsValue::UNDEFINED;
-    }
-    let payload = js::obj();
-    js::set_str(&payload, "kind", "agent");
-    js::set_str(&payload, "handle", &name);
-    js::set_str(&payload, "displayName", &name);
-    // Also treated as an agent-definition name, so seating a configured
-    // agent picks up its system prompt and model server-side.
-    js::set_str(&payload, "agentName", &name);
-    let want = id.clone();
-    api::add_participant(&id, &payload.into(), move |_| {
-        let s = mjs::store_ref(STORE);
-        js::set_str(&s, "newAgent", "");
-        if js::get_str(&s, "activeId") == want {
-            load_roster(&want);
-        }
-        mjs::redraw();
-    });
-    JsValue::UNDEFINED
 }
 
 /// `removeAgent(id)` — unseat a participant.
@@ -1328,4 +1482,229 @@ fn branch_tip(
         }
     }
     js::get_str(&cur, "id")
+}
+
+
+// ===========================================================================
+// Slash commands
+// ===========================================================================
+
+/// Add a transient notice to the transcript.
+///
+/// Not persisted on purpose: it is the app answering you, not something
+/// anyone said, and a reload should not replay it.
+fn notice(s: &JsValue, text: &str) {
+    push_message(s, "system", text, "");
+    pin_to_bottom();
+    mjs::redraw();
+}
+
+/// Run a `/command` from the composer.
+fn run_command(s: &JsValue, line: &str) {
+    let mut parts = line.split_whitespace();
+    let cmd = parts.next().unwrap_or("").to_ascii_lowercase();
+    let args: Vec<String> = parts.map(|a| a.trim_start_matches('@').to_string()).collect();
+    match cmd.as_str() {
+        "/invite" => invite_command(s, &args),
+        "/uninvite" | "/kick" => uninvite_command(s, &args),
+        "/help" => {
+            js::set_str(s, "draft", "");
+            notice(
+                s,
+                "/invite @name — add an agent to this conversation\n\
+                 /uninvite @name — remove one\n\
+                 /help — this list",
+            );
+        }
+        other => {
+            // Left in the box: a typo should not cost you what you typed.
+            notice(s, &format!("Unknown command {other}. Try /help."));
+        }
+    }
+}
+
+/// `/invite @a @b` — seat agents in the open conversation.
+fn invite_command(s: &JsValue, names: &[String]) {
+    let session = js::get_str(s, "activeId");
+    if session.is_empty() {
+        notice(s, "Open a conversation first, then /invite an agent into it.");
+        return;
+    }
+    if names.is_empty() {
+        notice(s, "Usage: /invite @name — the Agents rail lists what you can invite.");
+        return;
+    }
+
+    // Check against the defined agents before calling: "no agent named X"
+    // here is a better answer than a seat pointing at nothing.
+    let defined = js_sys::Array::from(&js::get(&mjs::store_ref("agents"), "agents"));
+    let known: Vec<String> = defined.iter().map(|a| js::get_str(&a, "name")).collect();
+    let seated: Vec<String> = js_sys::Array::from(&js::get(s, "others"))
+        .iter()
+        .map(|p| js::get_str(&p, "handle"))
+        .collect();
+
+    let mut invited: Vec<String> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    let mut already: Vec<String> = Vec::new();
+    for name in names {
+        if seated.contains(name) {
+            already.push(name.clone());
+        } else if known.contains(name) {
+            invited.push(name.clone());
+        } else {
+            unknown.push(name.clone());
+        }
+    }
+
+    let mut said: Vec<String> = Vec::new();
+    if !already.is_empty() {
+        said.push(format!("already here: @{}", already.join(", @")));
+    }
+    if !unknown.is_empty() {
+        said.push(format!(
+            "no agent named @{} — define it with + in the Agents rail",
+            unknown.join(", @")
+        ));
+    }
+    if invited.is_empty() {
+        if !said.is_empty() {
+            notice(s, &said.join("; "));
+        }
+        return;
+    }
+
+    js::set_str(s, "draft", "");
+    // One request per agent; the roster is re-read once at the end rather
+    // than after each, so the bar does not flicker through intermediate
+    // states on a multi-agent invite.
+    let total = invited.len();
+    let done = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    for name in invited.clone() {
+        let payload = js::obj();
+        js::set_str(&payload, "kind", "agent");
+        js::set_str(&payload, "agentName", &name);
+        js::set_str(&payload, "handle", &name);
+        let session = session.clone();
+        let done = std::rc::Rc::clone(&done);
+        let invited = invited.clone();
+        let said = said.clone();
+        api::add_participant(&session.clone(), &payload.into(), move |v| {
+            done.set(done.get() + 1);
+            let s = mjs::store_ref(STORE);
+            let err = js::get_str(&v, "error");
+            if !err.is_empty() {
+                notice(&s, &err);
+            }
+            if done.get() < total {
+                return;
+            }
+            load_roster(&session);
+            let mut msg = format!("Invited @{}", invited.join(", @"));
+            if !said.is_empty() {
+                msg.push_str(&format!(" ({})", said.join("; ")));
+            }
+            notice(&s, &msg);
+        });
+    }
+}
+
+/// `/uninvite @a` — the counterpart, so a mistaken invite is fixable from
+/// the same place it was made.
+fn uninvite_command(s: &JsValue, names: &[String]) {
+    let session = js::get_str(s, "activeId");
+    if session.is_empty() || names.is_empty() {
+        notice(s, "Usage: /uninvite @name");
+        return;
+    }
+    let seats = js_sys::Array::from(&js::get(s, "others"));
+    let mut removed: Vec<String> = Vec::new();
+    for name in names {
+        let found = seats.iter().find(|p| &js::get_str(p, "handle") == name);
+        let Some(p) = found else { continue };
+        let pid = js::get(&p, "id").as_f64().unwrap_or(0.0);
+        let session = session.clone();
+        api::remove_participant(pid, move |_| {
+            load_roster(&session);
+            mjs::redraw();
+        });
+        removed.push(name.clone());
+    }
+    js::set_str(s, "draft", "");
+    if removed.is_empty() {
+        notice(s, &format!("@{} is not in this conversation.", names.join(", @")));
+    } else {
+        // An agent that has spoken keeps its seat, greyed: its messages are
+        // in the transcript and have to keep an author.
+        notice(s, &format!("Removed @{}", removed.join(", @")));
+    }
+}
+
+
+/// `toggleReasoning(id)` — open or shut one reasoning card.
+///
+/// An empty id means the turn in flight, which has no row of its own and
+/// keeps its state on the store instead.
+fn toggle_reasoning(_this: JsValue, args: js_sys::Array) -> JsValue {
+    // Selecting text inside an open card is a click too. Collapsing it out
+    // from under a reader who was trying to copy a line is the obvious way
+    // to make "click anywhere" annoying, so a click that ended a selection
+    // is not a toggle.
+    if has_selection() {
+        return JsValue::UNDEFINED;
+    }
+    let id = js::arg_str(&args, 0);
+    let s = mjs::store_ref(STORE);
+    if id.is_empty() {
+        let open = js::get_bool(&s, "streamReasoningOpen");
+        js::set_bool(&s, "streamReasoningOpen", !open);
+        mjs::redraw();
+        return JsValue::UNDEFINED;
+    }
+    let list = js_sys::Array::from(&js::get(&s, "messages"));
+    let next = js_sys::Array::new();
+    for msg in list.iter() {
+        if js::get_str(&msg, "id") == id {
+            let open = js::get_bool(&msg, "expanded");
+            js::set_bool(&msg, "expanded", !open);
+        }
+        next.push(&msg);
+    }
+    // Replace the array rather than relying on the in-place flag to notify:
+    // a property written on a row inside a reactive array may not reach the
+    // diff on its own (RUST_M_JS §3).
+    js::set(&s, "messages", &next.into());
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+
+/// Is there a non-empty text selection on the page?
+fn has_selection() -> bool {
+    let sel = js::call(&js_sys::global(), "getSelection", &[]);
+    if sel.is_undefined() || sel.is_null() {
+        return false;
+    }
+    js::call(&sel, "toString", &[])
+        .as_string()
+        .map(|t| !t.trim().is_empty())
+        .unwrap_or(false)
+}
+
+
+/// `accentOf(handle)` — the colour a row is drawn in.
+///
+/// Always a concrete colour, never empty: an empty custom property makes the
+/// declaration that uses it invalid at computed-value time, which falls back
+/// to *inherited*, not to the `var()` fallback — so the row would take its
+/// neighbour's colour rather than the default.
+fn accent_of(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let handle = js::arg_str(&args, 0);
+    let s = mjs::store_ref(STORE);
+    let found = js::get_str(&js::get(&s, "accents"), &handle);
+    JsValue::from_str(if found.is_empty() {
+        crate::components::agents::DEFAULT_ACCENT
+    } else {
+        &found
+    })
 }

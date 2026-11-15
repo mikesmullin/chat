@@ -28,7 +28,8 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .seat i { line-height: 18px; font-size: 12px; }
 :is(#sb, #home) .seat.is-user { color: var(--gray-dim); }
-:is(#sb, #home) .seat.is-agent i { color: var(--accent); }
+:is(#sb, #home) .seat.is-agent { color: var(--agent-accent, #a78bfa); }
+:is(#sb, #home) .seat.is-agent i { color: var(--agent-accent, #a78bfa); }
 /* A seat that has been unseated keeps its messages, so it keeps its chip —
    struck through rather than removed, because its words are still in the
    transcript and attributed to it. */
@@ -40,21 +41,8 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .seat:hover .seat-drop { opacity: 1; }
 :is(#sb, #home) .seat-drop:hover { color: var(--danger, #d9534f); }
-:is(#sb, #home) .roster-add {
-  display: inline-flex; gap: 4px; align-items: center;
-}
-:is(#sb, #home) .roster-add input {
-  width: 92px; background: var(--panel-2); border: 0; border-radius: 999px;
-  padding: 3px 9px; color: var(--fg); font: inherit; line-height: 18px;
-}
-:is(#sb, #home) .roster-add input:focus { outline: none; }
-:is(#sb, #home) .roster-add input::placeholder { color: var(--gray-dim); }
-:is(#sb, #home) .roster-add button {
-  border: 0; background: transparent; color: var(--gray-dim);
-  cursor: pointer; line-height: 18px; padding: 0 2px; font: inherit;
-}
-:is(#sb, #home) .roster-add button:hover { color: var(--accent); }
 :is(#sb, #home) .roster-mode { color: var(--gray-dim); margin-left: auto; }
+:is(#sb, #home) .roster-hint { color: var(--gray-dim); line-height: 18px; }
 :is(#sb, #home) .roster-mode.is-group { color: var(--accent); }
 
 :is(#sb, #home) .branches {
@@ -82,19 +70,24 @@ pub fn roster() -> Node {
         .show(&format!("{st}.activeId"))
         .kids(vec![
             m("span")
-                .for_each(&format!("p in {st}.participants"))
+                .for_each(&format!("p in {st}.others"))
                 .key("p.id")
                 .bind(
                     "class",
                     "('seat ' + (p.kind === 'user' ? 'is-user' : 'is-agent') \
                       + (p.active ? '' : ' is-off'))",
                 )
+                // Each seat wears its own colour, so the roster and the
+                // transcript name the same agent the same way.
+                .bind("style", "('--agent-accent: ' + (p.accentColor || '#a78bfa'))")
                 .kids(vec![
                     m("i").bind(
                         "class",
                         "'ph ' + (p.kind === 'user' ? 'ph-user' : 'ph-robot')",
                     ),
-                    m("span").text("'@' + p.handle"),
+                    // No `@`: the sigil is command syntax, not part of the
+                    // name. The icon and the colour say "participant".
+                    m("span").text("p.handle"),
                     // The human seat is not optional.
                     m("button")
                         .class("seat-drop")
@@ -103,23 +96,19 @@ pub fn roster() -> Node {
                         .on("click", &format!("{st}.removeAgent(p.id)"))
                         .child(Node::icon("x").class("ph ph-x")),
                 ]),
-            m("span").class("roster-add").kids(vec![
-                m("input")
-                    .attr("type", "text")
-                    .attr("placeholder", "add agent")
-                    .model(&format!("{st}.newAgent"))
-                    // Enter is the obvious gesture for a one-field form.
-                    .on("keydown", &format!("($event.key === 'Enter') && {st}.addAgent()")),
-                m("button")
-                    .attr("title", "Seat another agent")
-                    .on("click", &format!("{st}.addAgent()"))
-                    .child(Node::icon("plus").class("ph ph-plus")),
-            ]),
+            // An empty bar with a text box in it does not tell you what to
+            // do. The command that fixes it does.
+            m("span")
+                .class("roster-hint")
+                .show(&format!("{st}.others.length === 0"))
+                .child(lit("No agents yet — type /invite @name")),
             // Which turn path the server will take, named out loud.
             m("span")
                 .bind("class", &format!("('roster-mode ' + ({st}.isGroup ? 'is-group' : ''))"))
+                // Nothing to say when the room is empty: the hint beside it
+                // already covers that case, and "one agent" would be a lie.
                 .text(&format!(
-                    "({st}.isGroup ? 'group · ' + {st}.agentCount + ' agents' : 'one agent')"
+                    "({st}.agentCount === 0 ? ''                       : {st}.isGroup ? 'group · ' + {st}.agentCount + ' agents' : 'one agent')"
                 )),
         ])
 }
