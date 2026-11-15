@@ -29,6 +29,7 @@ pub mod session;
 pub mod session_history;
 pub mod session_panel;
 pub mod session_state;
+pub mod settings;
 pub mod settings_menu_item;
 pub mod system_card;
 pub mod tab;
@@ -51,6 +52,7 @@ pub mod validation_info;
 pub fn register() {
     agent_editor::register();
     agents::register();
+    settings::register();
     approval_card::register();
     assistant_card::register();
     automation_form::register();
