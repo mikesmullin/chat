@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# chat dev server — Rust backend forwards, Rust→wasm frontend, on the rustex1 kit.
+# chat dev server — Rust backend with angela embedded, Rust→wasm frontend,
+# on the rustex1 kit.
 #
 #   ./dev.sh                 build if needed, serve on the port in rustex1.json
 #   ./dev.sh 4000            override the port
 #   ./dev.sh --rebuild       force a fresh wasm build on start
 #
-# The agent API lives in angela (default http://127.0.0.1:8763, env
-# ANGELA_ORIGIN) — start it first or the wall polls red and send() falls back
-# to the local echo transport.
+# angela runs inside chat-server: there is no second daemon to start and no
+# port to coordinate. Its store is <ANGELA_ROOT>/.angela, defaulting to this
+# directory.
 set -euo pipefail
 cd "$(dirname "$0")"
 
