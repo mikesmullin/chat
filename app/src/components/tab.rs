@@ -1,4 +1,4 @@
-//! `uiTab` — one tab of a tab bar. The tab's **state** lives in the `tabbook`
+//! `uiTab` — one tab of a tab bar. The tab's **state** lives in the store
 //! store (same shape as the chat app's own tabs: a list + an `activeId` +
 //! `addTab`/`pickTab`/`closeTab` store methods).
 //!
@@ -16,21 +16,61 @@
 //! - `.tab-x` button (direct row child): `@click.stop` → `closeTab(tab.id)`
 //! - `uiTab` (display host): icon + title + `uiSessionState` symbol
 
-use wasm_bindgen::JsValue;
 
 use rustex1_kit::h::{m, Node};
 use rustex1_kit::mjs;
 use rustex1_kit::mjs::Def;
-use rustex1_kit::js;
 
-use crate::components::session_history;
 use crate::css;
 
 pub const NAME: &str = "uiTab";
 
-const STORE: &str = "tabbook";
 
 const CSS: &str = r#"
+/* ---- the tab strip ----
+   Out of `web/styles.css` with the demo page it used to share. */
+.mjs-chat .tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+/* ---- the tab chip ----
+   Out of `web/styles.css`, where these were the only rules dressing
+   this component — a look kept in a global sheet outlives the markup
+   it was written for. Copied unchanged, still scoped under
+   `.mjs-chat`, so neither specificity nor the cascade moved with
+   them. */
+.mjs-chat .tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--mjs-line);
+  background: var(--mjs-panel-2);
+  color: var(--mjs-ink);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mjs-chat .tab.active {
+  border-color: var(--mjs-accent);
+  background: color-mix(in srgb, var(--mjs-accent) 15%, transparent);
+  color: var(--mjs-accent-2);
+}
+.mjs-chat .tab .x {
+  opacity: 0.6;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
 .tab {
   display: inline-flex; align-items: center;
   gap: 6px;
@@ -170,45 +210,10 @@ pub fn demo() -> Node {
 /// The live bar: `x-for` over the store's `tabs`. The row is a direct element
 /// (no sub-component boundary) so its `@click` and the child close button's
 /// `@click.stop` both reliably fire — the chat-app pattern.
-pub fn tab_bar() -> Node {
-    let st = format!("$store.{}", STORE);
-    m("div")
-        .class("tab-bar")
-        .kids(vec![
-            m("span")
-                .for_each(&format!("(tab, i) in {}.tabs", st))
-                .key("tab.id")
-                .attr("class", "tab")
-                .bind("class", &format!("{{ active: tab.id === {}.activeId }}", st))
-                .on("click", &format!("{}.pickTab(tab.id)", st))
-                .kids(vec![
-                    Node::host_bound("uiTab", &[
-                        ("class", "ui-tab"),
-                        ("icon", "'robot'"),
-                        ("title", &format!("tab.label + ''")),
-                        ("tone", &format!("tab.state")),
-                    ]),
-                    m("button")
-                        .class("tab-x")
-                        .attr("type", "button")
-                        .attr("aria-label", &format!("close tab {}", st))
-                        .on("click.stop", &format!("{}.closeTab(tab.id)", st))
-                        .child(Node::icon("x")),
-                ]),
-            m("button")
-                .class("tab-plus")
-                .attr("type", "button")
-                .attr("aria-label", "new tab")
-                .on("click", &format!("{}.addTab()", st))
-                .child(Node::icon("plus")),
-        ])
-}
-
-/// register the widget + the `tabbook` store.
+/// register the widget.
 pub fn register() {
     css::inject(NAME, CSS);
     mjs::component(NAME, &def().finish());
-    store_register();
 }
 
 /// Props (host-provided, with defaults):
@@ -243,103 +248,11 @@ fn def() -> Def {
     d
 }
 
-/// seed: one tab per session, taken from the same `session_history::SAMPLES`
-/// the history rail lists — so "one tab per session" holds literally, and the
-/// two columns cannot drift apart. Ids are 1-based; the first is active.
-fn seed_tabs() -> JsValue {
-    let states = ["done", "working", "idle"];
-    let a = js_sys::Array::new();
-    for (i, row) in session_history::SAMPLES.iter().enumerate() {
-        let t = js::obj();
-        js::set_num(&t, "id", (i + 1) as f64);
-        js::set_str(&t, "label", row.title);
-        js::set_str(&t, "state", states[i % states.len()]);
-        a.push(&t.into());
-    }
-    a.into()
-}
-
-/// `addTab`: append the next tab (id = max existing + 1), cycle its state,
-/// make it active. Mirrors `store.newTab`.
-fn add_tab_store(_this: JsValue, _args: js_sys::Array) -> JsValue {
-    let s = mjs::store_ref(STORE);
-    let tabs = js_sys::Array::from(&js::get(&s, "tabs"));
-    // New id = highest existing id + 1 (not length + 1), so closing a tab
-    // never re-uses a stale id.
-    let mut max_id = 0.0;
-    for t in tabs.iter() {
-        let id = js::get_num(&t, "id");
-        if id > max_id {
-            max_id = id;
-        }
-    }
-    let n = max_id + 1.0;
-    let states = ["done", "working", "idle"];
-    let state = states[((n - 1.0) as usize) % 3];
-    let t = js::obj();
-    js::set_num(&t, "id", n);
-    js::set_str(&t, "label", "New session");
-    js::set_str(&t, "state", state);
-    let pushed = tabs.clone();
-    pushed.push(&t.into());
-    js::set(&s, "tabs", &pushed.clone().into());
-    js::set_num(&s, "activeId", n);
-    mjs::redraw();
-    JsValue::UNDEFINED
-}
-
-/// `pickTab`: set the active id.
-fn pick_tab_store(_this: JsValue, args: js_sys::Array) -> JsValue {
-    let id = js::arg(&args, 0).as_f64().unwrap_or(-1.0);
-    if id >= 0.0 {
-        js::set_num(&mjs::store_ref(STORE), "activeId", id);
-        mjs::redraw();
-    }
-    JsValue::UNDEFINED
-}
-
-/// `closeTab`: drop the tab with `id`; if it was active, the first survivor
-/// becomes active.
-fn close_tab_store(_this: JsValue, args: js_sys::Array) -> JsValue {
-    let id = js::arg(&args, 0).as_f64().unwrap_or(-1.0);
-    let s = mjs::store_ref(STORE);
-    let tabs = js_sys::Array::from(&js::get(&s, "tabs"));
-    let mut kept = js_sys::Array::new();
-    for t in tabs.iter() {
-        if js::get_num(&t, "id") != id {
-            kept.push(&t);
-        }
-    }
-    js::set(&s, "tabs", &kept.clone().into());
-    if js::get_num(&s, "activeId") == id {
-        if kept.length() > 0 {
-            let first = kept.get(0);
-            js::set_num(&s, "activeId", js::get_num(&first, "id"));
-        }
-    }
-    mjs::redraw();
-    JsValue::UNDEFINED
-}
-
-/// register the `tabbook` store.
-fn store_register() {
-    let mut d = Def::new().named("store tabbook");
-    d.val("tabs", &seed_tabs())
-        .num("activeId", 1.0)
-        .method("addTab", add_tab_store)
-        .method("pickTab", pick_tab_store)
-        .method("closeTab", close_tab_store)
-        .finish();
-    mjs::store(STORE, &d.finish());
-}
-
-/// The tab bar bound to the live session list — one tab per angela session.
+/// The tab strip, over whichever store holds the open tabs.
 ///
-/// Same structure as [`tab_bar`]: the row is a direct element so its
-/// `@click` and the close button's `@click.stop` both fire, and the display
-/// unit stays the `uiTab` widget.
-pub fn tab_bar_live() -> Node {
-    let st = "$store.live";
+/// One definition: `/` passes the live store, the design guide passes the
+/// samples, where opening a tab really does switch it.
+pub fn tab_bar(st: &str) -> Node {
     m("div").class("tab-bar").kids(vec![
         m("span")
             .for_each(&format!("s in {st}.tabs"))

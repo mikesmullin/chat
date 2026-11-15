@@ -63,8 +63,7 @@ pub const CSS: &str = r#"
 "#;
 
 /// The seats, plus the control that adds one.
-pub fn roster() -> Node {
-    let st = "$store.live";
+pub fn roster(st: &str) -> Node {
     m("div")
         .class("roster")
         .show(&format!("{st}.activeId"))
@@ -83,7 +82,7 @@ pub fn roster() -> Node {
                 .kids(vec![
                     m("i").bind(
                         "class",
-                        "'ph ' + (p.kind === 'user' ? 'ph-user' : 'ph-robot')",
+                        "'ph ph-' + (p.kind === 'user' ? 'user' : (p.icon || 'robot'))",
                     ),
                     // No `@`: the sigil is command syntax, not part of the
                     // name. The icon and the colour say "participant".
@@ -114,8 +113,7 @@ pub fn roster() -> Node {
 }
 
 /// The fork points, when the conversation has any.
-pub fn branches() -> Node {
-    let st = "$store.live";
+pub fn branches(st: &str) -> Node {
     m("div")
         .class("branches")
         .show(&format!("{st}.hasBranches"))

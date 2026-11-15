@@ -19,6 +19,7 @@
 use rustex1_kit::h::{lit, m, Node};
 
 use crate::css;
+use crate::components::dropdown;
 
 pub const CSS: &str = r#"
 :is(#sb, #home) .agent-editor {
@@ -47,6 +48,14 @@ pub const CSS: &str = r#"
   resize: vertical;
 }
 :is(#sb, #home) .ae-field textarea { min-height: 64px; font-size: 12px; }
+/* A turn count is two or three digits; a full-width box for it reads as a
+   text field and invites prose. The spinner is noise at this size. */
+:is(#sb, #home) .ae-field input.ae-num { width: 7em; }
+:is(#sb, #home) .ae-field input.ae-num::-webkit-outer-spin-button,
+:is(#sb, #home) .ae-field input.ae-num::-webkit-inner-spin-button {
+  -webkit-appearance: none; margin: 0;
+}
+:is(#sb, #home) .ae-field input.ae-num { -moz-appearance: textfield; appearance: textfield; }
 :is(#sb, #home) .ae-field input:focus,
 :is(#sb, #home) .ae-field textarea:focus {
   outline: none; border-color: var(--gray-dim);
@@ -79,6 +88,18 @@ pub const CSS: &str = r#"
   border: 0; border-radius: 5px;
 }
 :is(#sb, #home) .ae-color-hex { flex: 1; font-family: var(--mono, monospace); }
+
+/* the icon row: a live glyph the size of the colour swatch, then its name */
+:is(#sb, #home) .ae-icon { display: flex; gap: 8px; align-items: center; }
+:is(#sb, #home) .ae-icon .ae-icon-preview {
+  width: 38px; height: 30px; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--panel-2); border-radius: 8px;
+  /* Drawn in the agent's own colour, so the two fields preview together. */
+  color: var(--agent-accent, var(--accent));
+  font-size: 17px; line-height: 1;
+}
+:is(#sb, #home) .ae-icon input { flex: 1; font-family: var(--mono, monospace); }
 
 :is(#sb, #home) .ae-actions {
   display: flex; align-items: center; gap: 8px; padding-top: 2px;
@@ -148,7 +169,8 @@ pub fn agent_editor() -> Node {
         .show(&format!("{ST}.open"))
         .kids(vec![
             m("div").class("agent-editor-head").kids(vec![
-                Node::icon("robot").class("ph ph-robot"),
+                // The agent being edited, drawn as itself.
+                Node::icon_dyn(&format!("({ST}.draft.icon || 'robot')")),
                 m("span")
                     .class("agent-editor-title")
                     .text(&format!(
@@ -211,6 +233,45 @@ pub fn agent_editor() -> Node {
                 3,
             ),
 
+            // The glyph this agent is drawn with, above the colour it is
+            // drawn in: the two together are what you recognise it by in
+            // the rail, the roster and every byline.
+            m("div").class("ae-field").kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Icon")),
+                    m("span")
+                        .class("hint")
+                        .child(lit("a phosphor name; blank = robot")),
+                ]),
+                m("div")
+                    .class("ae-icon")
+                    // The preview wears the draft's colour, which is also
+                    // how the colour field gets a shape to show itself on.
+                    .bind(
+                        "style",
+                        &format!(
+                            "('--agent-accent: ' + ({ST}.draft.accentColor || '#a78bfa'))"
+                        ),
+                    )
+                    .kids(vec![
+                        // The preview *is* the validation: a name the set
+                        // does not have draws nothing, which is the only
+                        // way to tell a typo from a real icon without
+                        // shipping the whole catalogue in a dropdown.
+                        m("span")
+                            .class("ae-icon-preview")
+                            .child(Node::icon_dyn(&format!(
+                                "({ST}.draft.icon || 'robot')"
+                            ))),
+                        m("input")
+                            .attr("type", "text")
+                            .attr("spellcheck", "false")
+                            .attr("placeholder", "robot")
+                            .attr("title", "phosphoricons.com — the name under the glyph")
+                            .model(&format!("{ST}.draft.icon")),
+                    ]),
+            ]),
+
             // The colour this agent is drawn in, everywhere it appears.
             m("div").class("ae-field").kids(vec![
                 m("label").class("ae-label").kids(vec![
@@ -231,7 +292,33 @@ pub fn agent_editor() -> Node {
                 ]),
             ]),
 
-            field("Model", "blank = the server default", &format!("{ST}.draft.model"), "", 0),
+            m("div").class("ae-field").kids(vec![
+                m("label").class("ae-label").child(lit("Model")),
+                dropdown::agent_option("model", "cpu"),
+            ]),
+            m("div").class("ae-field").kids(vec![
+                m("label").class("ae-label").child(lit("Reasoning")),
+                dropdown::agent_option("reasoningEffort", "brain"),
+            ]),
+            m("div").class("ae-field").kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Max turns")),
+                    m("span")
+                        .class("hint")
+                        .child(lit("model round-trips per reply; blank = 5")),
+                ]),
+                m("input")
+                    .class("ae-num")
+                    .attr("type", "number")
+                    .attr("min", "1")
+                    .attr("max", "1000")
+                    .attr("step", "1")
+                    // Each tool call spends one. An agent that reads a few
+                    // files before answering needs more than a chat reply
+                    // does, which is why this is per-agent.
+                    .attr("placeholder", "5")
+                    .model(&format!("{ST}.draft.maxTurns")),
+            ]),
             field(
                 "MCP servers",
                 "one per line",

@@ -19,10 +19,103 @@
 use rustex1_kit::h::{lit, m, Node};
 
 use crate::components::dropdown;
-use crate::components::task_list;
+use crate::components::samples;
 use crate::css;
 
 pub const CSS: &str = r#"
+/* ---- the composer envelope, the draft box, the context pie and the send/stop pair ----
+   Out of `web/styles.css`, where these were the only rules dressing
+   this component — a look kept in a global sheet outlives the markup
+   it was written for. Copied unchanged, still scoped under
+   `.mjs-chat`, so neither specificity nor the cascade moved with
+   them. */
+.mjs-chat .composer {
+  border-top: 1px solid var(--mjs-line);
+  background: var(--mjs-panel);
+  padding: 12px 16px 16px;
+  flex-shrink: 0;
+}
+.mjs-chat.mode-sidebar .composer { padding: 8px; }
+.mjs-chat .composer-inner {
+  max-width: 900px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mjs-chat.mode-sidebar .composer-inner { max-width: none; }
+.mjs-chat .draft-ta {
+  width: 100%;
+  min-height: 72px;
+  max-height: 200px;
+  resize: vertical;
+  border-radius: 12px;
+  border: 1px solid var(--mjs-line);
+  background: var(--mjs-bg);
+  color: var(--mjs-ink);
+  padding: 12px 14px;
+  font: 14px/1.4 var(--mjs-sans);
+  outline: none;
+}
+.mjs-chat.mode-sidebar .draft-ta { min-height: 56px; font-size: 13px; padding: 8px 10px; border-radius: 8px; }
+.mjs-chat .draft-ta:focus { border-color: var(--mjs-accent); }
+.mjs-chat .composer-row {
+  display: flex;
+  justify-content: flex-start;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.mjs-chat .ctx-pie {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+.mjs-chat .ctx-pie-track { color: var(--mjs-panel-2); }
+.mjs-chat .ctx-pie-fill { color: var(--mjs-accent); }
+.mjs-chat .ctx-pie-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.85);
+}
+.mjs-chat .btn-primary,
+.mjs-chat .btn-stop {
+  appearance: none;
+  border-radius: 10px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mjs-chat .btn-primary { background: var(--mjs-accent); color: #fff; border: 0; margin-left: auto; }
+.mjs-chat .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.mjs-chat .btn-stop { background: #7f1d1d; color: #fecaca; border: 1px solid #991b1b; }
+.mjs-chat.mode-sidebar .btn-primary,
+.mjs-chat.mode-sidebar .btn-stop {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  background: var(--mjs-panel-2);
+}
+.mjs-chat.mode-sidebar .btn-primary { border: 1px solid var(--mjs-accent); color: var(--mjs-accent-2); }
+.mjs-chat.mode-sidebar .btn-stop { border: 1px solid var(--mjs-err); color: var(--mjs-err); }
+
 /* demo framing: the component floats alone (design rule 5 — no panel box
    around it), so the chat wrapper gives up its panel fill and side rule
    here. The Session Panel builds its own `.mjs-chat` and keeps the fill,
@@ -96,18 +189,6 @@ pub const CSS: &str = r#"
 }
 
 /* borderless until touched — chrome, not a boxed control */
-.mjs-chat .composer-box .allowlist-toggle {
-  width: 30px;
-  height: 30px;
-  background: transparent;
-  border-color: transparent;
-  color: var(--mjs-dim);
-  font-size: 15px;
-}
-.mjs-chat .composer-box .allowlist-toggle:hover {
-  color: var(--mjs-ink);
-  border-color: var(--mjs-line);
-}
 
 /* `margin-left:auto` on the first of the pair is what splits the row
    into two clusters: allowlist left, model + level + context + send right. */
@@ -201,113 +282,40 @@ pub const CSS: &str = r#"
   background: color-mix(in srgb, var(--mjs-err) 18%, transparent);
   border: 1px solid var(--mjs-err);
   color: var(--mjs-err);
+  /* It is a control, not a status light: it should say so on hover. */
+  cursor: pointer;
+}
+.mjs-chat .composer-box .btn-stop:hover {
+  background: color-mix(in srgb, var(--mjs-err) 30%, transparent);
+}
+/* Pressed, and waiting for the turn's last rows to land. */
+.mjs-chat .composer-box .btn-stop:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 "#;
 
-const DRAFT: &str = "$store.demo.composerDraft";
-const WAITING: &str = "$store.demo.composerWaiting";
-
-/// context window: static 38% pie (r=15.5 → C≈97.4, like the app).
-fn ctx_pie() -> Node {
-    m("div")
-        .class("ctx-pie")
-        .attr("title", "38000 / 100000 tokens")
-        .kids(vec![
-            m("svg")
-                .at(&[("viewBox", "0 0 36 36"), ("width", "28"), ("height", "28")])
-                .kids(vec![
-                    m("circle").at(&[
-                        ("cx", "18"), ("cy", "18"), ("r", "15.5"),
-                        ("fill", "none"), ("stroke", "currentColor"),
-                        ("class", "ctx-pie-track"), ("stroke-width", "4"),
-                    ]),
-                    m("circle").at(&[
-                        ("cx", "18"), ("cy", "18"), ("r", "15.5"),
-                        ("fill", "none"), ("stroke", "currentColor"),
-                        ("class", "ctx-pie-fill"), ("stroke-width", "4"),
-                        ("stroke-linecap", "round"),
-                        ("transform", "rotate(-90 18 18)"),
-                        ("stroke-dasharray", "37.0 97.4"),
-                    ]),
-                ]),
-            m("span").class("ctx-pie-label").child(lit("38k")),
-        ])
+/// the composer inside the chat shell.
+pub fn composer(st: &str) -> Node {
+    m("div").class("mjs-chat mode-sidebar").child(panel(st))
 }
 
-/// the control row: allowlist on the left, model + context + send right.
-fn composer_row() -> Node {
-    m("div").class("composer-row").kids(vec![
-        m("button")
-            .class("icon-btn allowlist-toggle")
-            .attr("type", "button")
-            .attr("title", "Allowlist")
-            .child(Node::icon("shield-check")),
-        dropdown::model("dd-model"),
-        dropdown::level(""),
-        ctx_pie(),
-        // waiting flag flips through the demo store: stop shows while
-        // waiting, send (disabled on an empty draft) otherwise.
-        m("button")
-            .class("btn-stop")
-            .attr("type", "button")
-            .show(WAITING)
-            .on("click", "$store.demo.composerStop()")
-            .attr("title", "Stop agent")
-            .child(Node::icon("stop")),
-        m("button")
-            .class("btn-primary")
-            .attr("type", "button")
-            .show(&format!("!{WAITING}"))
-            .bind("disabled", &format!("!{DRAFT}.trim()"))
-            .on("click", "$store.demo.composerSend()")
-            .attr("title", "Send")
-            .child(Node::icon("arrow-up")),
-    ])
-}
-
-/// the prompt bar alone — the part the panel reuses.
-pub fn panel() -> Node {
-    m("footer").class("composer composer-flat").child(
-        m("div").class("composer-inner").kids(vec![
-            task_list::task_list(task_list::SAMPLES),
-            m("div").class("composer-box").kids(vec![
-                m("textarea")
-                    .class("draft-ta")
-                    .model(DRAFT)
-                    .attr("placeholder", "Message… (Enter send, Shift+Enter newline)"),
-                composer_row(),
-            ]),
-        ]),
-    )
-}
-
-/// the composer, bound to the demo store.
-pub fn composer() -> Node {
-    m("div").class("mjs-chat mode-sidebar").child(panel())
-}
-
-/// standalone demo.
+/// standalone demo — the composer the app draws, over the sample store, so
+/// the dropdowns and the send button are the real ones and persist nothing.
 pub fn demo() -> Node {
-    m("div").class("composer-demo").child(composer())
+    m("div").class("composer-demo").child(composer(samples::EXPR))
 }
 
 pub fn register() {
     css::inject("composer", CSS);
 }
 
-// ===========================================================================
-// Live variant — bound to `$store.live` instead of the demo store.
-// ===========================================================================
-
-const LIVE_DRAFT: &str = "$store.live.draft";
-const LIVE_WAITING: &str = "$store.live.waiting";
-
 /// The composer wired to angela: the draft, the send/stop flip and the
 /// context pie all read the live store.
 ///
 /// Same markup as [`panel`] — the envelope, the dropdowns, the round send
 /// button — so the design guide and the running composer stay one thing.
-pub fn panel_live() -> Node {
+pub fn panel(st: &str) -> Node {
     m("footer").class("composer composer-flat").child(
         m("div").class("composer-inner").kids(vec![
             // Metrics for the last turn, above the composer and above where
@@ -315,37 +323,48 @@ pub fn panel_live() -> Node {
             // allowlist label below it, so the two stack on one margin.
             m("div")
                 .class("composer-metrics")
-                .show("$store.live.lastMetrics")
-                .inner_html("$store.live.lastMetrics"),
-            allowlist_panel(),
+                .show(&format!("{st}.lastMetrics"))
+                .inner_html(&format!("{st}.lastMetrics")),
+            allowlist_panel(st),
             m("div").class("composer-box").kids(vec![
                 m("textarea")
                     .class("draft-ta")
-                    .model(LIVE_DRAFT)
+                    .model(&format!("{st}.draft"))
                     .attr("placeholder", "Message… (Enter send, Shift+Enter newline)")
                     // Enter sends, Shift+Enter is a newline — the placeholder
                     // promises it, so the binding has to honour it.
-                    .on("keydown.enter", "$event.shiftKey || ($event.preventDefault(), $store.live.send())"),
+                    .on("keydown.enter", &format!("$event.shiftKey || ($event.preventDefault(), {st}.send())")),
                 m("div").class("composer-row").kids(vec![
                     // Tool policy. Was a bare shield toggle; a dropdown makes
                     // the two states nameable, and "Unrestricted" visible
                     // rather than implied by an absent panel.
-                    dropdown::policy("dd-policy"),
-                    dropdown::model("dd-model"),
-                    dropdown::level(""),
-                    ctx_pie_live(),
+                    dropdown::policy("dd-policy", st),
+                    dropdown::model("dd-model", st),
+                    dropdown::level("", st),
+                    ctx_pie(st),
+                    // Stop. It was an indicator with a title that said so;
+                    // a round button where Send had been, in a composer
+                    // that is waiting, is read as a control — so it is one.
                     m("button")
                         .class("btn-stop")
                         .attr("type", "button")
-                        .show(LIVE_WAITING)
-                        .attr("title", "Waiting for the model")
+                        .show(&format!("{st}.waiting"))
+                        .on("click", &format!("{st}.stop()"))
+                        // Disabled only once the stop is on its way, so the
+                        // second press cannot be mistaken for the first not
+                        // having worked.
+                        .bind("disabled", &format!("{st}.stopping"))
+                        .bind(
+                            "title",
+                            &format!("({st}.stopping ? 'Stopping…' : 'Stop')"),
+                        )
                         .child(Node::icon("stop")),
                     m("button")
                         .class("btn-primary")
                         .attr("type", "button")
-                        .show(&format!("!{LIVE_WAITING}"))
-                        .bind("disabled", &format!("!{LIVE_DRAFT}.trim()"))
-                        .on("click", "$store.live.send()")
+                        .show(&format!("!{st}.waiting"))
+                        .bind("disabled", &format!("!{st}.draft.trim()"))
+                        .on("click", &format!("{st}.send()"))
                         .attr("title", "Send")
                         .child(Node::icon("arrow-up")),
                 ]),
@@ -358,16 +377,20 @@ pub fn panel_live() -> Node {
 ///
 /// `stroke-dasharray` is bound rather than animated: usage lands once per
 /// turn, which is a low-frequency change the diff handles fine.
-fn ctx_pie_live() -> Node {
+fn ctx_pie(st: &str) -> Node {
     // r=15.5 → circumference ≈ 97.4, as in the app.
-    let frac = "Math.min(1, ($store.live.totalTokens || 0) / \
-                Math.max(1, ($store.live.session.contextWindow || 128000)))";
+    let frac = format!(
+        "Math.min(1, ({st}.totalTokens || 0) / \
+         Math.max(1, ({st}.session.contextWindow || 128000)))"
+    );
     m("div")
         .class("ctx-pie")
         .bind(
             "title",
-            "($store.live.promptTokens || 0) + ' prompt / ' + \
-             ($store.live.totalTokens || 0) + ' total tokens'",
+            &format!(
+                "({st}.promptTokens || 0) + ' prompt / ' + \
+                 ({st}.totalTokens || 0) + ' total tokens'"
+            ),
         )
         .kids(vec![
             m("svg")
@@ -392,13 +415,14 @@ fn ctx_pie_live() -> Node {
                         ),
                 ]),
             m("span").class("ctx-pie-label").text(
-                "($store.live.totalTokens || 0) >= 1000 ? \
-                 Math.round(($store.live.totalTokens || 0) / 1000) + 'k' : \
-                 ($store.live.totalTokens || 0)",
+                &format!(
+                    "({st}.totalTokens || 0) >= 1000 ? \
+                     Math.round(({st}.totalTokens || 0) / 1000) + 'k' : \
+                     ({st}.totalTokens || 0)"
+                ),
             ),
         ])
 }
-
 
 /// The allowlist editor, toggled by the shield button.
 ///
@@ -406,28 +430,28 @@ fn ctx_pie_live() -> Node {
 /// — persisting per keystroke would rewrite the session file on every
 /// character. The label says whether the agent default or a UI override is in
 /// force, because "why was that denied?" is otherwise invisible.
-fn allowlist_panel() -> Node {
+fn allowlist_panel(st: &str) -> Node {
     m("div")
         .class("allowlist-panel")
         // Hidden entirely while unrestricted: the rules have no effect then,
         // and an editable box whose contents are ignored invites the reader
         // to trust it. The rules are kept, not cleared — switching back to
         // Allowlist brings the panel and its text straight back.
-        .show("$store.live.allowlistOpen && !$store.live.unrestricted")
+        .show(&format!("{st}.allowlistOpen && !{st}.unrestricted"))
         .kids(vec![
             m("label").class("allowlist-label").kids(vec![
                 lit("session allowed commands (one rule per line)"),
                 m("span")
                     .class("allowlist-source")
-                    .text(
-                        "$store.live.allowlistOverridden ? '· session rules' : '· no session rules'",
-                    ),
+                    .text(&format!(
+                        "{st}.allowlistOverridden ? '· session rules' : '· no session rules'"
+                    )),
                 m("button")
                     .class("allowlist-revert")
                     .attr("type", "button")
                     .attr("title", "Clear session rules")
-                    .show("$store.live.allowlistOverridden")
-                    .on("click", "$store.live.revertAllowlist()")
+                    .show(&format!("{st}.allowlistOverridden"))
+                    .on("click", &format!("{st}.revertAllowlist()"))
                     .child(lit("clear")),
             ]),
             m("textarea")
@@ -437,7 +461,7 @@ fn allowlist_panel() -> Node {
                     "placeholder",
                     "file_io__read_file\nterm_local__bash:ls.*\n\n(empty = deny everything)",
                 )
-                .model("$store.live.allowlist")
-                .on("blur", "$store.live.saveAllowlist()"),
+                .model(&format!("{st}.allowlist"))
+                .on("blur", &format!("{st}.saveAllowlist()")),
         ])
 }

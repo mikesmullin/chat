@@ -9,11 +9,79 @@
 //! through reflection on `globalThis`, matching the kit's own approach. That
 //! keeps `web-sys` out of the dependency list for features we would use once.
 
+use std::cell::RefCell;
+
 use js_sys::{Array, Promise, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use rustex1_kit::js;
+
+thread_local! {
+    /// The open chat stream's `AbortController`, while there is one.
+    ///
+    /// Module-level because the thing that wants it — the composer's stop
+    /// button — is nowhere near the call that opened the stream, and
+    /// threading a handle back out through `chat_stream`'s callbacks would
+    /// put a lifetime on something the UI holds across turns. wasm is
+    /// single-threaded, so this is a global the borrow checker can still
+    /// see the edges of.
+    static STREAM: RefCell<Option<JsValue>> = const { RefCell::new(None) };
+}
+
+/// `POST /api/abort` — ask the server to stop this session's turn.
+///
+/// This is the half that actually cancels anything expensive. The turn is
+/// blocked inside an HTTP request to the model provider, and the server
+/// drops that request when this arrives; closing *our* end of the NDJSON
+/// stream would not, because a server waiting on a provider does not
+/// notice a closed socket until it next tries to write.
+pub fn abort<F: FnMut(JsValue) + 'static>(session_id: &str, then: F) {
+    let payload = js::obj();
+    js::set_str(&payload, "sessionId", session_id);
+    rustex1_kit::api::post_json("/api/abort", &payload.into(), then);
+}
+
+/// What this conversation is waiting on, if anything.
+///
+/// Polled while a turn is in flight. The question cannot ride the turn's own
+/// NDJSON stream: the server thread writing that stream is the one blocked
+/// on the answer (see angela's `approvals`), so it arrives over a second
+/// connection or not at all.
+pub fn pending<F: FnMut(JsValue) + 'static>(session_id: &str, then: F) {
+    let id = js::call(
+        &js::global(),
+        "encodeURIComponent",
+        &[JsValue::from_str(session_id)],
+    )
+    .as_string()
+    .unwrap_or_default();
+    rustex1_kit::api::get(&format!("/api/pending?sessionId={id}"), None, then);
+}
+
+/// Answer one. `allow` runs it once, `always` stops asking for this exact
+/// call in this conversation, `deny` refuses and tells the model so.
+pub fn approve<F: FnMut(JsValue) + 'static>(id: &str, decision: &str, then: F) {
+    let payload = js::obj();
+    js::set_str(&payload, "id", id);
+    js::set_str(&payload, "decision", decision);
+    rustex1_kit::api::post_json("/api/approve", &payload.into(), then);
+}
+
+/// Drop the browser's end of the open chat stream, if one is open.
+///
+/// Returns whether there was one. The fallback for a server that has stopped
+/// answering altogether: without it a wedged turn leaves the composer stuck
+/// in `waiting` with no way out but a reload.
+pub fn abort_chat_stream() -> bool {
+    STREAM.with(|c| match c.borrow_mut().take() {
+        Some(ctl) => {
+            js::call(&ctl, "abort", &[]);
+            true
+        }
+        None => false,
+    })
+}
 
 /// `GET /api/sessions` — the history rail and the tab bar.
 pub fn sessions<F: FnMut(JsValue) + 'static>(then: F) {
@@ -97,7 +165,13 @@ where
 {
     let payload = payload.clone();
     spawn_local(async move {
-        match read_stream(&payload, &mut on_row).await {
+        let out = read_stream(&payload, &mut on_row).await;
+        // Whatever happened, this stream is no longer the one to abort.
+        // Left behind, a stale controller would make the next stop press
+        // abort a request that has already finished — and, worse, report
+        // success for having done it.
+        STREAM.with(|c| *c.borrow_mut() = None);
+        match out {
             Ok(()) => on_end(None),
             Err(e) => {
                 let msg = js::get_str(&e, "message");
@@ -123,6 +197,14 @@ where
     let init = js::obj();
     js::set_str(&init, "method", "POST");
     js::set(&init, "headers", &headers);
+    // One controller per stream, published before the request is made so a
+    // stop pressed during the very first byte still has something to pull.
+    let ctl = js_sys::Reflect::construct(
+        &js::get(&global, "AbortController").into(),
+        &Array::new(),
+    )?;
+    js::set(&init, "signal", &js::get(&ctl, "signal"));
+    STREAM.with(|c| *c.borrow_mut() = Some(ctl.into()));
     let json = js::get(&global, "JSON");
     let text = js::call(&json, "stringify", &[payload.clone()]);
     js::set(&init, "body", &text);

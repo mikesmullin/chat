@@ -19,6 +19,21 @@ pub const STORE: &str = "agents";
 /// The app's accent, and what an agent without one is drawn in.
 pub const DEFAULT_ACCENT: &str = "#a78bfa";
 
+/// The Phosphor icon an agent without one of its own is drawn with.
+pub const DEFAULT_ICON: &str = "robot";
+
+fn pick_option(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let key = js::arg_str(&args, 0);
+    if key == "model" || key == "reasoningEffort" {
+        let s = mjs::store_ref(STORE);
+        js::set_str(&js::get(&s, "draft"), &key, &js::arg_str(&args, 1));
+        js::set_str(&s, "saved", "");
+        js::set_str(&mjs::store_ref("dropdown"), "open", "");
+        mjs::redraw();
+    }
+    JsValue::UNDEFINED
+}
+
 /// The fields the editor round-trips. Listed once so loading a definition
 /// into the draft and sending the draft back cannot drift apart.
 const TEXT_FIELDS: &[&str] = &[
@@ -29,9 +44,16 @@ const TEXT_FIELDS: &[&str] = &[
     "memory",
     "engagement",
     "model",
+    "reasoningEffort",
     "allowlist",
     "policyMode",
     "accentColor",
+    // A bare Phosphor name (`robot`, `dog`, `terminal`). Blank means the
+    // default, so clearing the box is how an agent goes back to it.
+    "icon",
+    // Sent as a string and parsed server-side: an empty box means "use the
+    // default", which is a different thing from the number 0.
+    "maxTurns",
 ];
 
 fn blank_draft() -> JsValue {
@@ -46,6 +68,10 @@ fn blank_draft() -> JsValue {
     // A colour picker with no value shows black, which reads as a choice
     // nobody made. Start on the app's accent instead.
     js::set_str(&d, "accentColor", DEFAULT_ACCENT);
+    // Shown rather than left blank, so a new agent's icon is something you
+    // can see and change instead of a box whose empty state you have to
+    // know the meaning of.
+    js::set_str(&d, "icon", DEFAULT_ICON);
     // Newline-separated in the form; the server accepts either shape.
     js::set_str(&d, "mcp", "");
     d.into()
@@ -68,6 +94,28 @@ fn load_agents(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+/// One draft field as text, whatever m-js chose to store there.
+///
+/// `x-model` on `input[type=number]` writes a **number** — or `null` when the
+/// box is empty — rather than a string (m-js `build.js`, `applyModel`). So
+/// `get_str` yields "" for a perfectly good value, and a save built from it
+/// clears the very field it was meant to set. Reading both shapes here keeps
+/// that off every caller.
+fn draft_text(draft: &JsValue, field: &str) -> String {
+    let v = js::get(draft, field);
+    if let Some(t) = v.as_string() {
+        return t;
+    }
+    match v.as_f64() {
+        // Whole numbers without the `.0` a float would print.
+        Some(n) if n.fract() == 0.0 => (n as i64).to_string(),
+        Some(n) => n.to_string(),
+        // `null` for an emptied number box: unset, which is what "" means
+        // to the server.
+        None => String::new(),
+    }
+}
+
 /// Fill the draft from a definition.
 fn to_draft(a: &JsValue) -> JsValue {
     let d = js::obj();
@@ -79,6 +127,23 @@ fn to_draft(a: &JsValue) -> JsValue {
     if js::get_str(a, "accentColor").is_empty() {
         js::set_str(&d, "accentColor", DEFAULT_ACCENT);
     }
+    // Likewise the icon: an agent that has never been given one edits from
+    // the default it is already being drawn with, not from an empty box.
+    if js::get_str(a, "icon").is_empty() {
+        js::set_str(&d, "icon", DEFAULT_ICON);
+    }
+    // `maxTurns` arrives as a JSON number, and `get_str` yields "" for
+    // anything that is not a string — so without this the box would read
+    // empty however it was configured. Unset stays "", which is what shows
+    // the placeholder.
+    js::set_str(
+        &d,
+        "maxTurns",
+        &js::get(a, "maxTurns")
+            .as_f64()
+            .map(|v| (v as i64).to_string())
+            .unwrap_or_default(),
+    );
     // Arrays render as one-per-line, which is what a textarea is good at.
     let mcp = js_sys::Array::from(&js::get(a, "mcp"));
     let lines: Vec<String> = mcp.iter().filter_map(|x| x.as_string()).collect();
@@ -158,7 +223,7 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
     }
     let payload = js::obj();
     for f in TEXT_FIELDS {
-        js::set_str(&payload, f, js::get_str(&draft, f).trim_end());
+        js::set_str(&payload, f, draft_text(&draft, f).trim_end());
     }
     js::set_str(&payload, "name", &name);
     // One preset per line in the form; the server splits either shape.
@@ -273,6 +338,7 @@ pub fn register() {
         .method("newAgent", new_agent)
         .method("close", close)
         .method("save", save)
+        .method("pickOption", pick_option)
         .method("remove", remove)
         .method("setEngagement", set_engagement)
         .method("engagementLabel", engagement_label);
