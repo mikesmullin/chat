@@ -23,6 +23,21 @@ use crate::css;
 pub const LIVE_STORE: &str = "$store.live";
 
 pub const CSS: &str = r#"
+/* ---- the panel's own column ---------------------------------------
+   The flat/threaded switch wraps `.messages` in a plain div. `.messages`
+   owns the overflow, so that wrapper has to be a transparent flex
+   pass-through: left to itself it is `flex: 0 1 auto; min-height: auto`,
+   which in a flex column means "never smaller than my content" — so it
+   grows past the panel and pushes the composer out through the bottom,
+   where `.main`'s `overflow: hidden` eats it.
+
+   This lived in the page (`#home`) until the design guide showed the same
+   panel with no composer at all. A rule the panel cannot stand up without
+   belongs to the panel. */
+.mjs-chat .main > div:has(> .messages) {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
+}
+
 /* ---- the transcript rows: message blocks, bubbles and tool cards ----
    Out of `web/styles.css`, where these were the only rules dressing
    this component — a look kept in a global sheet outlives the markup
