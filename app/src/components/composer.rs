@@ -416,19 +416,19 @@ fn allowlist_panel() -> Node {
         .show("$store.live.allowlistOpen && !$store.live.unrestricted")
         .kids(vec![
             m("label").class("allowlist-label").kids(vec![
-                lit("allowed commands (one rule per line)"),
+                lit("session allowed commands (one rule per line)"),
                 m("span")
                     .class("allowlist-source")
                     .text(
-                        "$store.live.allowlistOverridden ? '· ui override' : '· agent default'",
+                        "$store.live.allowlistOverridden ? '· session rules' : '· no session rules'",
                     ),
                 m("button")
                     .class("allowlist-revert")
                     .attr("type", "button")
-                    .attr("title", "Restore the agent default")
+                    .attr("title", "Clear session rules")
                     .show("$store.live.allowlistOverridden")
                     .on("click", "$store.live.revertAllowlist()")
-                    .child(lit("revert")),
+                    .child(lit("clear")),
             ]),
             m("textarea")
                 .class("allowlist-ta")
