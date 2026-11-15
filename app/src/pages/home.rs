@@ -119,12 +119,6 @@ pub const CSS: &str = r#"
    the rail and the tab strip already use */
 .home-main .composer-inner { padding: 0 10px 10px; }
 .home-main .messages { padding-left: 10px; padding-right: 10px; }
-/* The flat/threaded switch wraps `.messages` in a div. `.messages` owns the
-   overflow, so the wrapper has to be a transparent flex pass-through or it
-   clips the transcript instead of letting it scroll. */
-.home-main .main > div:has(> .messages) {
-  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
-}
 
 /* ---- right aside ------------------------------------------------- */
 .home-aside-head {
