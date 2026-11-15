@@ -3,6 +3,10 @@
 A fullscreen agentic chat app: multi-agent conversations with a branching
 history, written in Rust and compiled to wasm, served by **one process**.
 
+![The app: session history and agents on the left, a group conversation in
+the middle with each agent's turn drawn down its own coloured rail, and the
+inspector on the right](docs/screenshot.png)
+
 That one process is the point. The agent half used to be a separate Bun
 daemon the frontend proxied to on `:8763`; it is a Rust crate now
 ([angela](../../angela-rs)), so `chat-server` embeds it directly
