@@ -94,7 +94,9 @@ pub fn agents_menu_live() -> Node {
                     .bind("title", &format!("{st}.engagementLabel(a.engagement)"))
                     .bind("style", "('--agent-accent: ' + (a.accentColor || '#a78bfa'))")
                     .kids(vec![
-                        m("i").class("ph ph-robot"),
+                        // Each agent as its own glyph: in a rail of a dozen
+                        // identical robots the name is doing all the work.
+                        Node::icon_dyn("(a.icon || 'robot')"),
                         m("span").class("nm").text("a.name"),
                         // One glyph per mode: a word per row would crowd out
                         // the name, which is what you are actually scanning.

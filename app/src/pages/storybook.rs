@@ -32,6 +32,9 @@
 //!   /storybook/user-card -> User Card (user prompt bubble)
 //!   /storybook/assistant-card -> Assistant Card (response block)
 //!   /storybook/reasoning-card -> Reasoning Card (thinking block)
+//!   /storybook/fold-card -> Fold Card (the collapsible evidence primitive)
+//!   /storybook/prompt-card -> Prompt Card (system + user prompt as sent)
+//!   /storybook/decision-card -> Decision Card (why an agent spoke)
 //!   /storybook/tool-call-card -> Tool Call Card
 //!   /storybook/tool-response-card -> Tool Response Card
 //!   /storybook/error-card -> Error Card
@@ -50,8 +53,9 @@ use rustex1_kit::{js, lifecycle, Runtime};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use crate::components::{
-    agents_menu, approval_card, assistant_card, automation_form, composer, dropdown,
-    error_card,
+    agents_menu, approval_card, assistant_card, automation_form, composer, decision_card,
+    samples,
+    dropdown, error_card, fold_card, prompt_card,
     field, hint_text, item_group, label, nav_rail, radio_input, range_input,
     reasoning_card, relative_timestamp, sandboxes_menu, session, session_history,
     session_panel, system_card, tab, tag_input, task_list, text_area, text_input, thinking, toggle_button, tool_call_card, tool_response_card,
@@ -328,6 +332,17 @@ pub fn register(rt: &mut Runtime) {
         )
     });
 
+    // the evidence cards: the fold primitive, the two prompts, the verdict.
+    rt.route("/storybook/fold-card", "Fold Card", |_| {
+        route_def("route /storybook/fold-card", "Fold Card", fold_card::demo())
+    });
+    rt.route("/storybook/prompt-card", "Prompt Card", |_| {
+        route_def("route /storybook/prompt-card", "Prompt Card", prompt_card::demo())
+    });
+    rt.route("/storybook/decision-card", "Decision Card", |_| {
+        route_def("route /storybook/decision-card", "Decision Card", decision_card::demo())
+    });
+
     // the prompt bar: draft + dropdowns + ctx pie + send/stop.
     rt.route("/storybook/composer", "Composer", |_| {
         route_def("route /storybook/composer", "Composer", composer::demo())
@@ -412,7 +427,7 @@ pub fn register(rt: &mut Runtime) {
     });
     // the live tab bar: tabs close, the plus adds, click sets the active tab.
     rt.route("/storybook/tab-bar", "Tab Bar", |_| {
-        route_def("route /storybook/tab-bar", "Tab Bar", tab::tab_bar())
+        route_def("route /storybook/tab-bar", "Tab Bar", tab::tab_bar(samples::EXPR))
     });
 }
 

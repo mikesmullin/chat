@@ -83,8 +83,7 @@ pub const CSS: &str = r#"
 
 /// The bar above the transcript: how many messages the tree covers, whether
 /// it is threaded, and the compact action.
-pub fn memory_bar() -> Node {
-    let st = "$store.live";
+pub fn memory_bar(st: &str) -> Node {
     m("div")
         .class("memory-bar")
         .show(&format!("{st}.activeId"))
@@ -122,8 +121,7 @@ pub fn memory_bar() -> Node {
 ///
 /// Rendered for `!t.leaf`; a width-1 row is a real message and the
 /// transcript draws its card instead.
-pub fn row() -> Node {
-    let st = "$store.live";
+pub fn row(st: &str) -> Node {
     m("button")
         .bind("class", "('thread-card ' + (t.expanded ? 'is-open' : ''))")
         .on("click", &format!("{st}.toggleThread(t.id)"))

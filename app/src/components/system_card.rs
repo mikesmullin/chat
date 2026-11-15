@@ -1,53 +1,44 @@
-//! `system card` — the system-prompt card. The app renders no system
-//! kind today; this is the new member the guide asked for, drawn in the
-//! family's shape (header + body) with guide tokens: charcoal plate, dim
-//! ink, gear glyph. Token-only colors, no raw hexes.
+//! `system card` — the app talking, not a participant.
+//!
+//! A slash command's answer, the server saying nobody is here to reply, a
+//! turn that was stopped. Deliberately not a bubble: it is not something
+//! anyone said.
 
-use rustex1_kit::h::{lit, m, Node};
+use rustex1_kit::h::{m, Node};
 
+use crate::components::{samples, session};
 use crate::css;
 
 pub const CSS: &str = r#"
-.system-card {
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
+:is(#sb, #home) .bubble-system {
+  display: flex; gap: 7px; align-items: flex-start;
+  font-size: 12px; color: var(--gray-dim); line-height: 1.6;
+  padding: 2px 0; white-space: pre-wrap;
 }
-.system-card .system-header {
-  display: flex; align-items: center; gap: 6px;
-  margin-bottom: 6px;
-  font-size: 12px; font-weight: 600; letter-spacing: .02em;
-  text-transform: uppercase;
-}
+:is(#sb, #home) .bubble-system i { line-height: 19px; }
+
 .system-demo { width: min(560px, 100%); }
 .system-demo .mjs-chat.mode-sidebar { border-left: 0; }
 "#;
 
-pub const TEXT: &str = "You are a build engineer working in /workspace/psicom/chat. Keep answers short.";
-
-/// the card: gear header + prompt body.
-pub fn card(text: &str) -> Node {
-    m("div").class("system-card").kids(vec![
-        m("div").class("system-header").kids(vec![
-            Node::icon("gear"),
-            m("span").child(lit("System")),
-        ]),
-        m("div").child(lit(text)),
-    ])
+/// What this kind contributes to a message block.
+pub fn parts(_st: &str, v: &str) -> Vec<Node> {
+    vec![m("div")
+        .class("bubble-system")
+        .iff(&format!("{v}.kind === 'system'"))
+        .kids(vec![
+            Node::icon("info").class("ph ph-info"),
+            m("span").text(&format!("{v}.text")),
+        ])]
 }
 
-/// standalone demo.
+/// standalone demo — the card in the row the transcript draws it in.
 pub fn demo() -> Node {
+    let (st, v) = (samples::EXPR, samples::row("system"));
     m("div").class("system-demo").child(
         m("div")
             .class("mjs-chat mode-sidebar")
-            .child(card(TEXT)),
+            .child(session::row(st, &v, parts(st, &v))),
     )
 }
 

@@ -27,6 +27,7 @@ pub const STORE: &str = "live";
 
 /// Pull the session list; refresh the rail and the tab bar.
 fn load_sessions(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    load_models();
     api::sessions(|v| {
         let s = mjs::store_ref(STORE);
         js::set(&s, "sessions", &js::get(&v, "sessions"));
@@ -66,7 +67,9 @@ fn open_session_by_id(id: &str) {
         let meta = js::get(&v, "session");
         let model = js::get_str(&meta, "model");
         if !model.is_empty() {
-            js::set_str(&mjs::store_ref("chat"), "model", &model);
+            // The session's own model wins over the remembered pick: it is
+            // what the next turn will actually run on.
+            js::set_str(&s, "model", &model);
             js::set_str(&mjs::store_ref("dropdown"), "model", &model);
         }
         let config = js::get(&meta, "config");
@@ -117,6 +120,7 @@ fn clear_roster(s: &JsValue) {
     js::set(s, "others", &js_sys::Array::new().into());
     js::set(s, "handles", &js::obj().into());
     js::set(s, "accents", &js::obj().into());
+    js::set(s, "icons", &js::obj().into());
     js::set_num(s, "agentCount", 0.0);
     js::set_bool(s, "isGroup", false);
     js::set_str(s, "cursor", "");
@@ -184,6 +188,20 @@ fn new_session(_this: JsValue, _args: js_sys::Array) -> JsValue {
             open_session_by_id(&id);
         }
         mjs::redraw();
+        if !id.is_empty() {
+            let expected = id.clone();
+            let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+                if js::get_str(&mjs::store_ref(STORE), "activeId") != expected {
+                    return;
+                }
+                let document = js::get(&js_sys::global(), "document");
+                let input = js::call(&document, "querySelector", &[JsValue::from_str("#home .composer .draft-ta")]);
+                if !js::is_missing(&input) {
+                    js::call(&input, "focus", &[]);
+                }
+            });
+            js::call(&js_sys::global(), "requestAnimationFrame", &[callback]);
+        }
         load_sessions(JsValue::UNDEFINED, js_sys::Array::new());
     });
     JsValue::UNDEFINED
@@ -210,6 +228,11 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     push_message(&s, "user", &content, "");
     js::set_str(&s, "draft", "");
     js::set_bool(&s, "waiting", true);
+    js::set_bool(&s, "stopping", false);
+    js::set_bool(&s, "stopPending", false);
+    js::set(&s, "approvals", &js_sys::Array::new().into());
+    // Only while a turn is running: the poll stops itself when it ends.
+    rustex1_kit::lifecycle::after(ASK_POLL_MS, poll_pending);
     clear_stream(&s);
     // Sending is an explicit "show me the bottom", even if the reader had
     // scrolled up a moment ago.
@@ -220,7 +243,7 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_str(&payload, "tabId", "1");
     js::set_str(&payload, "content", &content);
     let active = js::get_str(&s, "activeId");
-    let model = js::get_str(&mjs::store_ref("chat"), "model");
+    let model = js::get_str(&s, "model");
     if !model.is_empty() {
         js::set_str(&payload, "model", &model);
     }
@@ -237,9 +260,19 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
         |row| on_row(&row),
         |err| {
             let s = mjs::store_ref(STORE);
+            // A stop we asked for ends the stream by aborting it, and the
+            // abort surfaces here as a failed request. It is not one: the
+            // turn did exactly what it was told, and an error row saying
+            // "The user aborted a request" would be the app reporting the
+            // user's own button press back to them as a fault.
+            let stopped = js::get_bool(&s, "stopping");
             js::set_bool(&s, "waiting", false);
+            js::set_bool(&s, "stopping", false);
+            js::set_bool(&s, "stopPending", false);
             if let Some(e) = err {
-                push_message(&s, "error", &e, "");
+                if !stopped {
+                    push_message(&s, "error", &e, "");
+                }
             }
             // Reconcile with the server's own record once the turn is done.
             let id = js::get_str(&s, "activeId");
@@ -250,6 +283,68 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
             mjs::redraw();
         },
     );
+    JsValue::UNDEFINED
+}
+
+/// `stop()` — the composer's stop button.
+///
+/// The expensive thing to cancel is not this browser's request, it is the
+/// request the **server** has open to the model provider: that is what is
+/// still being generated and still being billed. So the first thing this
+/// does is tell the server, which drops that request where it stands.
+///
+/// Our own stream is left to end on its own, which it does within
+/// milliseconds of the server letting go. That is worth waiting for: the
+/// server's last rows say what was actually kept — the partial answer, and
+/// a "Stopped." note on the record — and tearing the stream down first
+/// would trade all of that for a few milliseconds.
+///
+/// The grace period below is for the case where none of that happens.
+fn stop(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    // Nothing in flight, or already stopping: a second press is not a
+    // second stop.
+    if !js::get_bool(&s, "waiting") || js::get_bool(&s, "stopping") {
+        return JsValue::UNDEFINED;
+    }
+    js::set_bool(&s, "stopping", true);
+    let id = js::get_str(&s, "activeId");
+    if id.is_empty() {
+        // The server has not named the session yet, so there is nothing to
+        // address this to. `on_row` sends it the moment the `session` row
+        // arrives, which is the first thing the turn emits.
+        js::set_bool(&s, "stopPending", true);
+    } else {
+        crate::api::abort(&id, |_| {});
+    }
+    mjs::redraw();
+
+    // The server should have ended the stream long before this. If it has
+    // not — it died, or it is wedged somewhere that never checks — drop our
+    // end anyway, because a composer stuck in `waiting` forever is a worse
+    // answer than an incomplete transcript.
+    rustex1_kit::lifecycle::after(2500.0, || {
+        let s = mjs::store_ref(STORE);
+        if !js::get_bool(&s, "waiting") {
+            return;
+        }
+        crate::api::abort_chat_stream();
+        js::set_bool(&s, "waiting", false);
+        js::set_bool(&s, "stopping", false);
+        js::set_bool(&s, "stopPending", false);
+        push_message(
+            &s,
+            "system",
+            "Stopped. The server did not confirm, so the turn may still be running there.",
+            "",
+        );
+        // Whatever it did manage to save is the truth about this turn.
+        let id = js::get_str(&s, "activeId");
+        if !id.is_empty() {
+            open_session_by_id(&id);
+        }
+        mjs::redraw();
+    });
     JsValue::UNDEFINED
 }
 
@@ -264,6 +359,13 @@ fn on_row(row: &JsValue) {
             if !id.is_empty() {
                 add_open_id(&id);
                 js::set_str(&s, "activeId", &id);
+                // Stop was pressed before the server said which session it
+                // was making. This row is the first moment the request can
+                // be addressed, so it goes out now rather than being lost.
+                if js::get_bool(&s, "stopPending") {
+                    js::set_bool(&s, "stopPending", false);
+                    crate::api::abort(&id, |_| {});
+                }
             }
             mjs::redraw();
         }
@@ -344,7 +446,7 @@ fn on_row(row: &JsValue) {
                 // streaming turn and a reloaded one draw the same rail.
                 "tool_call" | "tool_result" | "system_prompt" | "agent_prompt"
                 | "decision" => push_card(&s, &card, &kind, None),
-                "error" => push_message(&s, "error", &text, ""),
+                "error" => push_card(&s, &card, "error", None),
                 // The server explaining itself — e.g. that the conversation
                 // has no agents in it yet.
                 "system" => push_message(&s, "system", &text, ""),
@@ -354,6 +456,8 @@ fn on_row(row: &JsValue) {
         }
         "done" => {
             js::set_bool(&s, "waiting", false);
+            js::set_bool(&s, "stopping", false);
+            js::set_bool(&s, "stopPending", false);
             // A new message changes the tree's leaf set, so a threaded view
             // on screen is now one message short.
             if js::get_bool(&s, "threadView") {
@@ -467,9 +571,169 @@ fn push_message_as(s: &JsValue, kind: &str, text: &str, name: &str, handle: &str
     js::set(s, "messages", &next.into());
 }
 
+// ── the model picker ───────────────────────────────────────────────────────
+//
+// It lived in the legacy `chat` store, beside the demo page that is now gone.
+// It belongs here: the model is a composer setting, and the composer's other
+// settings (reasoning level, tool policy) already persist through this store.
+
+const MODEL_KEY: &str = "mjs-chat.model";
+const DEFAULT_MODEL: &str = "llama-server:default";
+
+/// The last model chosen, from localStorage — a per-browser convenience, so
+/// the picker is never an empty box on first paint. The session's own model
+/// is the server's business and arrives with the session.
+fn saved_model() -> String {
+    let ls = js::get(&js::global(), "localStorage");
+    if !ls.is_undefined() && !ls.is_null() {
+        if let Some(v) = js::call(&ls, "getItem", &[JsValue::from_str(MODEL_KEY)]).as_string() {
+            if !v.trim().is_empty() {
+                return v;
+            }
+        }
+    }
+    DEFAULT_MODEL.to_string()
+}
+
+fn save_model(m: &str) {
+    if m.trim().is_empty() {
+        return;
+    }
+    let ls = js::get(&js::global(), "localStorage");
+    if ls.is_undefined() || ls.is_null() {
+        return;
+    }
+    js::call(&ls, "setItem", &[JsValue::from_str(MODEL_KEY), JsValue::from_str(m)]);
+}
+
+fn default_models() -> JsValue {
+    let a = js_sys::Array::new();
+    a.push(&JsValue::from_str(DEFAULT_MODEL));
+    a.into()
+}
+
+/// `setModel(id)` — pick one, remember it, tell the session.
+fn set_model(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let v = js::arg_str(&args, 0);
+    if v.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    js::set_str(&mjs::store_ref(STORE), "model", &v);
+    js::set_str(&mjs::store_ref("dropdown"), "model", &v);
+    save_model(&v);
+    persist_composer_settings(JsValue::UNDEFINED, js_sys::Array::new());
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+/// Fill the model list from agl's own config, and settle on one.
+/// The slow poll: re-read the session list, which changes on its own.
+pub fn refresh() {
+    load_sessions(JsValue::UNDEFINED, js_sys::Array::new());
+}
+
+pub fn load_models() {
+    crate::api::models(|v| {
+        let s = mjs::store_ref(STORE);
+        let models = js::get(&v, "models");
+        if models.is_undefined() || models.is_null() {
+            return;
+        }
+        js::set(&s, "models", &models);
+        // Keep the current pick only if the server still offers it; otherwise
+        // take the configured default, so the box never names a model that
+        // would be refused.
+        let current = js::get_str(&s, "model");
+        let arr = js_sys::Array::from(&models);
+        let valid = arr.iter().any(|x| x.as_string().as_deref() == Some(&current));
+        if current.is_empty() || !valid {
+            let configured = js::get_str(&v, "default_model");
+            let pick = if configured.is_empty() { DEFAULT_MODEL.to_string() } else { configured };
+            js::set_str(&s, "model", &pick);
+            js::set_str(&mjs::store_ref("dropdown"), "model", &pick);
+            save_model(&pick);
+        }
+        mjs::redraw();
+    });
+}
+
+// ── approvals ──────────────────────────────────────────────────────────────
+//
+// A tool the allowlist does not permit stops the turn on the server and asks.
+// The question cannot come down the turn's own stream — the thread writing
+// that stream is the one blocked on the answer — so while a turn is in
+// flight the browser asks a second connection what is pending.
+
+/// How often to ask. Fast enough that a gated turn does not look hung,
+/// slow enough to be free: one tiny request a second, only while waiting.
+const ASK_POLL_MS: f64 = 1000.0;
+
+/// Ask once, then keep asking for as long as the turn is still running.
+fn poll_pending() {
+    let s = mjs::store_ref(STORE);
+    if !js::get_bool(&s, "waiting") {
+        // The turn ended: anything still on screen was answered, and the
+        // transcript now carries it as a real row.
+        js::set(&s, "approvals", &js_sys::Array::new().into());
+        mjs::redraw();
+        return;
+    }
+    let id = js::get_str(&s, "activeId");
+    if id.is_empty() {
+        rustex1_kit::lifecycle::after(ASK_POLL_MS, poll_pending);
+        return;
+    }
+    crate::api::pending(&id, |v| {
+        let s = mjs::store_ref(STORE);
+        let rows = js::get(&v, "pending");
+        if !rows.is_undefined() && !rows.is_null() {
+            // Each question is drawn by the same card the transcript uses,
+            // so it needs the fields a row has. `expanded` starts open: it
+            // is a question, and a question folded shut is one nobody
+            // answers.
+            let arr = js_sys::Array::from(&rows);
+            for i in 0..arr.length() {
+                let r = arr.get(i);
+                js::set_bool(&r, "expanded", true);
+                js::set_bool(&r, "turn", true);
+                js::set_str(&r, "handle", &js::get_str(&s, "streamHandle"));
+            }
+            js::set(&s, "approvals", &arr.into());
+        }
+        mjs::redraw();
+    });
+    rustex1_kit::lifecycle::after(ASK_POLL_MS, poll_pending);
+}
+
+/// `decideApproval(id, verdict)` — answer, and take the card off the screen.
+///
+/// The row is dropped here rather than waiting for the server: the turn
+/// resumes the moment the answer lands, and the transcript will carry the
+/// answered question as a real row a moment later. Leaving the live card up
+/// until then would show it twice.
+fn decide_approval(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let id = js::arg_str(&args, 0);
+    let verdict = js::arg_str(&args, 1);
+    let s = mjs::store_ref(STORE);
+    let kept = js_sys::Array::new();
+    let rows = js_sys::Array::from(&js::get(&s, "approvals"));
+    for i in 0..rows.length() {
+        let r = rows.get(i);
+        if js::get_str(&r, "id") != id {
+            kept.push(&r);
+        }
+    }
+    js::set(&s, "approvals", &kept.into());
+    mjs::redraw();
+    crate::api::approve(&id, &verdict, |_| {});
+    JsValue::UNDEFINED
+}
+
 pub fn register() {
     let mut d = Def::new().named("store live");
     d.val("sessions", &js_sys::Array::new().into())
+        .str("model", &saved_model())
+        .val("models", &default_models())
         // `sessions` is every session on disk (the history rail).
         // `tabs` is the subset currently open (the tab strip). Closing a tab
         // must not destroy a session, so these are deliberately distinct.
@@ -496,6 +760,7 @@ pub fn register() {
         // True while the session runs with `*`. The rules survive it.
         .bool("unrestricted", false)
         .bool("waiting", false)
+        .val("approvals", &js_sys::Array::new().into())
         // Sticky scroll: true while the reader is at (or near) the bottom.
         .bool("stickBottom", true)
         .num("promptTokens", 0.0)
@@ -533,9 +798,19 @@ pub fn register() {
         .val("handles", &js::obj().into())
         // handle -> accent colour, for tinting a row to its author.
         .val("accents", &js::obj().into())
+        // handle -> phosphor icon name, for drawing a byline as its author.
+        .val("icons", &js::obj().into())
         .num("agentCount", 0.0)
         .bool("isGroup", false)
         .bool("rosterOpen", false)
+        // The stop press, between asking and the stream actually ending.
+        // Separate from `waiting` because the composer must not accept a new
+        // message yet — the old turn is still writing its last rows.
+        .bool("stopping", false)
+        // A stop pressed before the server has even named the session it
+        // made. There is nothing to address the stop to yet, so it is sent
+        // the moment the `session` row arrives.
+        .bool("stopPending", false)
         // --- branches -------------------------------------------------------
         .str("cursor", "")
         .val("branches", &js_sys::Array::new().into())
@@ -563,10 +838,15 @@ pub fn register() {
         .method("toggleThreadView", toggle_thread_view)
         .method("removeAgent", remove_agent)
         .method("forkAt", fork_at)
+        .method("forkPrompt", fork_prompt)
         .method("switchBranch", switch_branch)
         .method("handleOf", handle_of)
         .method("toggleCard", toggle_reasoning)
-        .method("accentOf", accent_of);
+        .method("accentOf", accent_of)
+        .method("iconOf", icon_of)
+        .method("stop", stop)
+        .method("decideApproval", decide_approval)
+        .method("setModel", set_model);
     mjs::store(STORE, &d.finish());
 }
 
@@ -583,11 +863,10 @@ fn persist_composer_settings(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let live = mjs::store_ref(STORE);
     let id = js::get_str(&live, "activeId");
     if id.is_empty() { return JsValue::UNDEFINED; }
-    let chat = mjs::store_ref("chat");
     let dd = mjs::store_ref("dropdown");
     let payload = js::obj();
     js::set_str(&payload, "sessionId", &id);
-    js::set_str(&payload, "model", &js::get_str(&chat, "model"));
+    js::set_str(&payload, "model", &js::get_str(&live, "model"));
     js::set_str(&payload, "reasoningEffort", &js::get_str(&dd, "level"));
     rustex1_kit::api::post_json("/api/composer-settings", &payload.into(), |_| {});
     JsValue::UNDEFINED
@@ -698,7 +977,7 @@ fn rel_time(_this: JsValue, args: js_sys::Array) -> JsValue {
 /// A byline is a sentence fragment ("fish, 24min ago"), not a column of
 /// figures, so it gets words rather than the rail's compact `24m`. Both read
 /// the same clock; only the rendering differs.
-fn rel_ago(_this: JsValue, args: js_sys::Array) -> JsValue {
+pub(crate) fn rel_ago(_this: JsValue, args: js_sys::Array) -> JsValue {
     let iso = js::arg_str(&args, 0);
     if iso.is_empty() {
         return JsValue::from_str("");
@@ -1307,6 +1586,9 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
     // on every redraw. Keyed by handle rather than by participant id because
     // a streamed card names its speaker by handle.
     let accents = js::obj();
+    // …and the same for the glyph, so a byline can be drawn as its author
+    // without the row carrying a copy of the definition.
+    let icons = js::obj();
     for p in list.iter() {
         let id = js::get(&p, "id").as_f64().unwrap_or(-1.0);
         let handle = js::get_str(&p, "handle");
@@ -1316,6 +1598,12 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
             &accents,
             &handle,
             if colour.is_empty() { crate::components::agents::DEFAULT_ACCENT } else { &colour },
+        );
+        let icon = js::get_str(&p, "icon");
+        js::set_str(
+            &icons,
+            &handle,
+            if icon.is_empty() { crate::components::agents::DEFAULT_ICON } else { &icon },
         );
         let kind = js::get_str(&p, "kind");
         if kind == "agent" {
@@ -1327,6 +1615,7 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
     }
     js::set(s, "others", &others.into());
     js::set(s, "accents", &accents);
+    js::set(s, "icons", &icons);
     js::set(s, "handles", &by_id);
     js::set_num(s, "agentCount", agents);
     // Two or more agents is what makes this a group conversation, which is
@@ -1370,6 +1659,36 @@ fn load_roster(id: &str) {
 // ===========================================================================
 // Branching: the cursor picks which version of the conversation you are in
 // ===========================================================================
+
+/// Move before the selected prompt and place its text back in the composer.
+fn fork_prompt(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let event_id = js::arg_str(&args, 0);
+    let prompt = js::arg_str(&args, 1);
+    let id = js::get_str(&mjs::store_ref(STORE), "activeId");
+    if id.is_empty() || event_id.is_empty() { return JsValue::UNDEFINED; }
+    let payload = js::obj();
+    js::set_str(&payload, "eventId", &event_id);
+    js::set_bool(&payload, "before", true);
+    let want = id.clone();
+    api::set_cursor(&id, &payload.into(), move |v| {
+        let s = mjs::store_ref(STORE);
+        if js::get_str(&s, "activeId") != want || !js::get_bool(&v, "ok") { return; }
+        js::set_str(&s, "cursor", &js::get_str(&v, "cursor"));
+        js::set_str(&s, "draft", &prompt);
+        open_session_by_id(&want);
+        load_branches(&want);
+        mjs::redraw();
+        let expected = want.clone();
+        let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+            if js::get_str(&mjs::store_ref(STORE), "activeId") != expected { return; }
+            let document = js::get(&js_sys::global(), "document");
+            let input = js::call(&document, "querySelector", &[JsValue::from_str("#home .composer .draft-ta")]);
+            if !js::is_missing(&input) { js::call(&input, "focus", &[]); }
+        });
+        js::call(&js_sys::global(), "requestAnimationFrame", &[callback]);
+    });
+    JsValue::UNDEFINED
+}
 
 /// `forkAt(eventId)` — point the cursor at an earlier message.
 ///
@@ -1741,6 +2060,23 @@ fn accent_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     let found = js::get_str(&js::get(&s, "accents"), &handle);
     JsValue::from_str(if found.is_empty() {
         crate::components::agents::DEFAULT_ACCENT
+    } else {
+        &found
+    })
+}
+
+/// `iconOf(handle)` — the glyph a byline is drawn with.
+///
+/// Always a concrete name, like [`accent_of`]: `'ph ph-' + ''` is the class
+/// `ph-`, which draws a blank where the author's icon belongs. A handle the
+/// roster does not know — the human seat, or an agent that has since been
+/// unseated — falls back to the default rather than to nothing.
+fn icon_of(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let handle = js::arg_str(&args, 0);
+    let s = mjs::store_ref(STORE);
+    let found = js::get_str(&js::get(&s, "icons"), &handle);
+    JsValue::from_str(if found.is_empty() {
+        crate::components::agents::DEFAULT_ICON
     } else {
         &found
     })

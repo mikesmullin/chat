@@ -31,9 +31,12 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::components::{
-    agent_editor, agents_menu, composer, roster, session, session_history, tab, thread,
+    agent_editor, agents_menu, session_history, session_panel, tab,
 };
 use crate::css;
+
+/// The store every live column on this page reads.
+const LIVE: &str = session_panel::LIVE_STORE;
 
 const STORE: &str = "home";
 
@@ -170,7 +173,7 @@ fn rail() -> Node {
         .class("home-rail")
         .attr("aria-label", "Sessions and agents")
         .kids(vec![
-            session_history::session_history_live(),
+            session_history::session_history(LIVE),
             m("div").class("home-agents").child(agents_menu::agents_menu_live()),
             // Pinned to the bottom of the rail: it is not part of the
             // conversation, and it is the one item whose position should
@@ -194,7 +197,7 @@ fn main_col() -> Node {
     // The tab strip sits OUTSIDE the card: tabs label the panel, so the
     // rounded surface begins beneath them, the way a tabbed window works.
     m("div").class("home-col").kids(vec![
-        m("div").class("home-tabs").child(tab::tab_bar_live()),
+        m("div").class("home-tabs").child(tab::tab_bar(LIVE)),
         // With no tabs open there is nothing for the card to hold, so the
         // column falls back to the bare page: a slate rectangle wrapping an
         // empty panel reads as something that failed to load. The `+` lives
@@ -202,33 +205,10 @@ fn main_col() -> Node {
         m("section")
             .class("home-main")
             .show("$store.live.tabs.length > 0")
-            .child(
-            m("div")
-                .class("mjs-chat mode-sidebar")
-                .attr("aria-label", "Session panel")
-                .child(
-                    m("section").class("main").kids(vec![
-                        // Who is here, and which branch you are on: both
-                        // change what the next turn does, so both belong
-                        // above the transcript rather than in a menu.
-                        roster::roster(),
-                        roster::branches(),
-                        thread::memory_bar(),
-                        // Flat or threaded. Two templates rather than one
-                        // with conditional children: the two lists are keyed
-                        // differently (message ids vs tree coordinates), and
-                        // sharing one `x-for` would make the diff re-key
-                        // every row on the switch.
-                        m("div")
-                            .show("!$store.live.threadView")
-                            .child(session::messages_live()),
-                        m("div")
-                            .show("$store.live.threadView")
-                            .child(session::messages_threaded()),
-                        composer::panel_live(),
-                    ]),
-                ),
-        ),
+            // The panel itself lives in `session_panel`, which the design
+            // guide mounts too — see that module for why the tree is not
+            // written out here.
+            .child(session_panel::session_panel()),
     ])
 }
 

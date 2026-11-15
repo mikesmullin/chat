@@ -1,9 +1,12 @@
-//! `tool call card` — a tool invocation: wrench header with the mono
-//! tool name, a plain-language explanation, and the code/args block.
-//! Verbatim app classes.
+//! `tool call card` — a tool the agent asked for, and the arguments it sent.
+//!
+//! A [`fold_card`](crate::components::fold_card): the name rides the
+//! collapsed line as the note, so a shut card still says *which* tool, and
+//! the arguments are the thing you open it for.
 
-use rustex1_kit::h::{lit, m, Node};
+use rustex1_kit::h::{m, Node};
 
+use crate::components::{fold_card, samples, session};
 use crate::css;
 
 pub const CSS: &str = r#"
@@ -11,30 +14,27 @@ pub const CSS: &str = r#"
 .tool-call-demo .mjs-chat.mode-sidebar { border-left: 0; }
 "#;
 
-pub const NAME: &str = "read";
-pub const EXPLANATION: &str = "Reading the current auth module to map its endpoints.";
-pub const CODE: &str = "src/auth.py";
-
-/// the card.
-pub fn card(name: &str, explanation: &str, code: &str) -> Node {
-    m("div").class("tool-card tool-call-card").kids(vec![
-        m("div").class("tool-call-header").kids(vec![
-            Node::icon("wrench"),
-            m("span").class("tool-call-name").child(lit(name)),
-        ]),
-        m("div")
-            .class("tool-call-explanation")
-            .child(lit(explanation)),
-        m("pre").class("tool-call-code").child(lit(code)),
-    ])
+/// What this kind contributes to a message block.
+pub fn parts(st: &str, v: &str) -> Vec<Node> {
+    vec![fold_card::fold(
+        st,
+        v,
+        "fold-tool-call",
+        "wrench",
+        "Tool call",
+        Some(&format!("{v}.name")),
+        fold_card::pre(&format!("{v}.args ? JSON.stringify({v}.args, null, 2) : ''")),
+    )
+    .iff(&format!("{v}.kind === 'tool_call'"))]
 }
 
-/// standalone demo.
+/// standalone demo — the card in the row the transcript draws it in.
 pub fn demo() -> Node {
+    let (st, v) = (samples::EXPR, samples::row("tool_call"));
     m("div").class("tool-call-demo").child(
         m("div")
             .class("mjs-chat mode-sidebar")
-            .child(card(NAME, EXPLANATION, CODE)),
+            .child(session::row(st, &v, parts(st, &v))),
     )
 }
 

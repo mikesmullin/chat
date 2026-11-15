@@ -165,11 +165,11 @@ fn item(key: &str, value: &str, after: Option<&str>) -> Node {
         ])
 }
 
-fn model_item() -> Node {
+fn model_item(st: &str) -> Node {
     m("button").class("dropdown-item")
         .attr("type", "button")
         .bind("class", "($store.dropdown.model === modelOption ? 'on' : '')")
-        .on("click", "$store.chat.setModel(modelOption); $store.live.persistComposerSettings()")
+        .on("click", &format!("{st}.setModel(modelOption)"))
         .kids(vec![m("span").class("dropdown-item-label").text("modelOption"),
                    m("i").class("ph ph-check dropdown-item-check").show("$store.dropdown.model === modelOption")])
 }
@@ -181,8 +181,8 @@ fn model_item() -> Node {
 /// - `tone`    — `green` / `accent`; the icon tints on hover/open only
 /// - `extra`   — extra class on the root, for host layout (e.g. `dd-model`)
 /// - `options` — the menu, in order
-pub fn dropdown(key: &str, icon: &str, tone: &str, extra: &str, options: &[&str]) -> Node {
-    dropdown_ex(key, icon, tone, extra, options, None)
+pub fn dropdown(key: &str, icon: &str, tone: &str, extra: &str, options: &[&str], st: &str) -> Node {
+    dropdown_ex(key, icon, tone, extra, options, None, st)
 }
 
 /// [`dropdown`] plus a side effect on pick. See [`item`] for `after`.
@@ -193,9 +193,12 @@ pub fn dropdown_ex(
     extra: &str,
     options: &[&str],
     after: Option<&str>,
+    // `st`: the store a pick is persisted to — the live session, or the
+    // design guide's samples, which persist nothing.
+    st: &str,
 ) -> Node {
     let is_open = format!("$store.{STORE}.open === '{key}'");
-    let value_expr = if key == "model" { "$store.chat.model".to_string() } else { format!("$store.{STORE}.{key}") };
+    let value_expr = if key == "model" { format!("{st}.model") } else { format!("$store.{STORE}.{key}") };
     m("div")
         .class(&format!("dropdown {extra}"))
         .bind("class", &format!("({is_open} ? 'open' : '')"))
@@ -223,7 +226,7 @@ pub fn dropdown_ex(
                 .class("dropdown-menu")
                 .show(&is_open)
                 .kids(if key == "model" {
-                    vec![model_item().for_each("modelOption in $store.chat.models")]
+                    vec![model_item(st).for_each(&format!("modelOption in {st}.models"))]
                 } else {
                     options.iter().map(|o| item(key, o, after)).collect()
                 }),
@@ -232,14 +235,53 @@ pub fn dropdown_ex(
 
 pub const LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
+/// Agent editor picker: an empty value inherits the session setting.
+pub fn agent_option(field: &str, icon: &str) -> Node {
+    let key = format!("agent-{field}");
+    let current = format!("$store.agents.draft.{field}");
+    let open = format!("$store.dropdown.open === '{key}'");
+    let row = |value: &str, label: &str| {
+        let selected = format!("{current} === '{value}'");
+        m("button").class("dropdown-item").attr("type", "button")
+            .bind("class", &format!("({selected} ? 'on' : '')"))
+            .on("click", &format!("$store.agents.pickOption('{field}', '{value}')"))
+            .kids(vec![m("span").class("dropdown-item-label").child(lit(label)),
+                       m("i").class("ph ph-check dropdown-item-check").show(&selected)])
+    };
+    let mut rows = vec![row("", "default")];
+    if field == "model" {
+        rows.push(m("button").class("dropdown-item").attr("type", "button")
+            .for_each("agentModel in $store.live.models")
+            .bind("class", "($store.agents.draft.model === agentModel ? 'on' : '')")
+            .on("click", "$store.agents.pickOption('model', agentModel)")
+            .kids(vec![m("span").class("dropdown-item-label").text("agentModel"),
+                m("i").class("ph ph-check dropdown-item-check").show("$store.agents.draft.model === agentModel")]));
+    } else {
+        rows.extend(LEVELS.iter().map(|v| row(v, v)));
+    }
+    m("div").class("dropdown")
+        .bind("class", &format!("({open} ? 'open' : '')"))
+        .on("click.outside", &format!("$store.dropdown.closeIf('{key}')"))
+        .kids(vec![m("button").class("dropdown-btn").attr("type", "button")
+            .on("click", &format!("$store.dropdown.toggle('{key}')"))
+            .kids(vec![m("i").class(&format!("ph ph-{icon} dropdown-icon")),
+                m("span").class("dropdown-value").text(&format!("{current} || 'default'")),
+                m("i").class("ph ph-caret-down dropdown-caret")]),
+            m("div").class("dropdown-menu").show(&open).kids(rows)])
+}
+
 /// the model dropdown — cpu glyph, pastel green.
-pub fn model(extra: &str) -> Node {
-    dropdown("model", "cpu", "green", extra, &[])
+pub fn model(extra: &str, st: &str) -> Node {
+    dropdown("model", "cpu", "green", extra, &[], st)
 }
 
 /// the reasoning-level dropdown — brain glyph, the accent indigo.
-pub fn level(extra: &str) -> Node {
-    dropdown_ex("level", "brain", "accent", extra, LEVELS, Some("$store.live.setReasoning('{}')"))
+pub fn level(extra: &str, st: &str) -> Node {
+    dropdown_ex(
+        "level", "brain", "accent", extra, LEVELS,
+        Some(&format!("{st}.setReasoning('{{}}')")),
+        st,
+    )
 }
 
 pub const POLICIES: &[&str] = &["Allowlist", "Unrestricted"];
@@ -249,14 +291,15 @@ pub const POLICIES: &[&str] = &["Allowlist", "Unrestricted"];
 /// `Allowlist` reveals the rules editor; `Unrestricted` runs with `*`. The
 /// shield turns pastel-red while unrestricted, because "every tool is
 /// permitted" should not look like the resting state.
-pub fn policy(extra: &str) -> Node {
+pub fn policy(extra: &str, st: &str) -> Node {
     dropdown_ex(
         "policy",
         "shield-check",
         "policy",
         extra,
         POLICIES,
-        Some("$store.live.setPolicy('{}')"),
+        Some(&format!("{st}.setPolicy('{{}}')")),
+        st,
     )
 }
 
@@ -264,7 +307,10 @@ pub fn policy(extra: &str) -> Node {
 pub fn demo() -> Node {
     m("div")
         .class("dropdown-demo")
-        .kids(vec![model(""), level("")])
+        .kids(vec![
+            model("", crate::components::samples::EXPR),
+            level("", crate::components::samples::EXPR),
+        ])
 }
 
 /// `toggle(key)`: open this one, or close it if it is already open.

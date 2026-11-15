@@ -12,6 +12,105 @@ use rustex1_kit::h::{lit, m, Node};
 use crate::css;
 
 pub const CSS: &str = r#"
+/* ---- the history rail ----
+   Out of `web/styles.css`, where these were the only rules dressing
+   this component — a look kept in a global sheet outlives the markup
+   it was written for. Copied unchanged, still scoped under
+   `.mjs-chat`, so neither specificity nor the cascade moved with
+   them. */
+.mjs-chat .history {
+  width: 260px;
+  flex-shrink: 0;
+  background: var(--mjs-panel);
+  border-right: 1px solid var(--mjs-line);
+  display: flex;
+  flex-direction: column;
+  transition: width 0.15s ease, opacity 0.15s ease;
+}
+.mjs-chat .history.collapsed {
+  width: 0;
+  opacity: 0;
+  overflow: hidden;
+  border: 0;
+}
+.mjs-chat .history-header {
+  padding: 12px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mjs-dim);
+  border-bottom: 1px solid var(--mjs-line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mjs-chat .history-header .trash-all {
+  opacity: 0;
+  width: 28px;
+  height: 28px;
+  font-size: 13px;
+  transition: opacity 0.12s ease;
+}
+.mjs-chat .history-header:hover .trash-all { opacity: 0.85; }
+.mjs-chat .history-header .trash-all:hover { opacity: 1; border-color: var(--mjs-err); color: var(--mjs-err); }
+.mjs-chat .history-list { flex: 1; overflow-y: auto; padding: 8px; }
+.mjs-chat .history-item-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.mjs-chat .history-item-row:hover { background: var(--mjs-panel-2); }
+.mjs-chat .history-item-row.active {
+  border-color: var(--mjs-accent);
+  background: color-mix(in srgb, var(--mjs-accent) 12%, transparent);
+}
+.mjs-chat .history-item {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--mjs-ink);
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.mjs-chat .history-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mjs-chat .history-meta {
+  font-size: 11px;
+  color: var(--mjs-dim);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mjs-chat .trash-one {
+  opacity: 0;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin: 4px 4px 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--mjs-dim);
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mjs-chat .history-item-row:hover .trash-one { opacity: 0.85; }
+.mjs-chat .trash-one:hover { opacity: 1 !important; color: var(--mjs-err); background: rgba(239, 68, 68, 0.12); }
+@media (max-width: 720px) {
+  .mjs-chat.mode-fullscreen .history { display: none; }
+}
+
 /* demo framing: fixed panel size; the sidebar divider is an edge against a
    neighbouring column, not a property of the panel, so it is dropped here */
 .session-history-demo { width: 260px; height: 420px; }
@@ -19,72 +118,11 @@ pub const CSS: &str = r#"
 .session-history-demo .mjs-chat { height: 100%; }
 "#;
 
-pub struct SessionRow {
-    pub title: &'static str,
-    pub agent: &'static str,
-    pub model: &'static str,
-    pub active: bool,
-}
-
-pub const SAMPLES: &[SessionRow] = &[
-    SessionRow { title: "Migrate auth service", agent: "cowork", model: "sonnet", active: true },
-    SessionRow { title: "Fix session timeout", agent: "cowork", model: "opus", active: false },
-    SessionRow { title: "Retry logic refactor", agent: "cowork", model: "haiku", active: false },
-];
-
-fn row(row: &SessionRow) -> Node {
-    m("div")
-        .class(if row.active {
-            "history-item-row active"
-        } else {
-            "history-item-row"
-        })
-        .kids(vec![
-            m("button")
-                .class("history-item")
-                .attr("type", "button")
-                .kids(vec![
-                    m("div").class("history-title").child(lit(row.title)),
-                    m("div").class("history-meta").kids(vec![
-                        m("span").child(lit(row.agent)),
-                        m("span").child(lit(format!(" · {}", row.model).as_str())),
-                    ]),
-                ]),
-            m("button")
-                .class("trash-one")
-                .attr("type", "button")
-                .attr("title", "Delete this session")
-                .child(Node::icon("trash")),
-        ])
-}
-
-/// the panel: header + rows. `rows` keeps the shape reusable.
-pub fn session_history(rows: &[SessionRow]) -> Node {
-    m("div")
-        .class("mjs-chat mode-sidebar")
-        .attr("aria-label", "Session history")
-        .child(
-            m("aside").class("history").kids(vec![
-                m("div").class("history-header").kids(vec![
-                    lit("History"),
-                    m("button")
-                        .class("icon-btn trash-all")
-                        .attr("type", "button")
-                        .attr("title", "Delete all sessions")
-                        .child(Node::icon("trash")),
-                ]),
-                m("div")
-                    .class("history-list")
-                    .kids(rows.iter().map(row).collect()),
-            ]),
-        )
-}
-
-/// standalone demo: three sessions, the first active.
+/// standalone demo — the rail the app draws, over the sample sessions.
 pub fn demo() -> Node {
     m("div")
         .class("session-history-demo")
-        .child(session_history(SAMPLES))
+        .child(session_history(crate::components::samples::EXPR))
 }
 
 pub fn register() {
@@ -92,18 +130,12 @@ pub fn register() {
     css::inject("session-history-live", LIVE_CSS);
 }
 
-// ===========================================================================
-// Live variant — the same classes, bound to `$store.live`.
-// ===========================================================================
-
-/// The history rail driven by the session list from angela.
+/// The history rail, over whichever store holds the session list.
 ///
-/// Same class names as the static demo above (the contract), so the design
-/// guide and the running app stay one thing. `@click` sits on the row and on
-/// its direct child button, never inside a sub-component — the lesson from
-/// the tab bar's close button.
-pub fn session_history_live() -> Node {
-    let st = "$store.live";
+/// One definition: `/` passes the live store, the design guide passes the
+/// samples. `@click` sits on the row and on its direct child button, never
+/// inside a sub-component — the lesson from the tab bar's close button.
+pub fn session_history(st: &str) -> Node {
     m("div")
         .class("mjs-chat mode-sidebar")
         .attr("aria-label", "Session history")

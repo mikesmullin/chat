@@ -19,7 +19,6 @@ use wasm_bindgen::prelude::*;
 mod api;
 mod helpers;
 mod pages;
-mod store;
 mod components;
 mod css;
 
@@ -30,10 +29,6 @@ const POLL_MS: f64 = 4000.0;
 struct Chat;
 
 impl App for Chat {
-    fn register_stores(&self, _rt: &mut Runtime) {
-        store::register();
-    }
-
     fn register_components(&self, _rt: &mut Runtime) {
         components::register();
     }
@@ -47,10 +42,11 @@ impl App for Chat {
     }
 
     fn started(&self, rt: &mut Runtime) {
-        store::refresh_all();
+        components::live::load_models();
         rt.every(POLL_MS, || {
-            // light poll: sessions only (agents rarely change; models ride them)
-            store::refresh_all();
+            // light poll: the session list changes on its own — another tab,
+            // a `/new`, a delete — so the poll is the reconciler.
+            components::live::refresh();
         });
     }
 }
