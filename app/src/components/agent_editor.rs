@@ -279,11 +279,65 @@ pub fn agent_editor() -> Node {
         ])
 }
 
+/// The app's own settings, in the same column.
+///
+/// Reuses the editor's field and button styles rather than growing a second
+/// set: an inspector panel is an inspector panel, and two that look
+/// different for no reason is the sort of thing nobody decides but everyone
+/// notices.
+pub fn settings_panel() -> Node {
+    let st = "$store.settings";
+    m("div")
+        // Shares the editor's styles, keeps its own name: two panels that
+        // are indistinguishable in the DOM are two panels nothing can
+        // target — a test, a stylesheet or a later feature.
+        .class("agent-editor settings-panel")
+        .show(&format!("{st}.open"))
+        .init(&format!("{st}.load()"))
+        .kids(vec![
+            m("div").class("agent-editor-head").kids(vec![
+                Node::icon("gear").class("ph ph-gear"),
+                m("span").class("agent-editor-title").child(lit("Settings")),
+                m("button")
+                    .class("ae-btn")
+                    .attr("type", "button")
+                    .attr("title", "Close")
+                    .on("click", &format!("{st}.close()"))
+                    .child(Node::icon("x").class("ph ph-x")),
+            ]),
+            m("div").class("ae-field").kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Full name")),
+                    m("span").class("hint").child(lit("how you are named")),
+                ]),
+                m("input")
+                    .attr("type", "text")
+                    .attr("placeholder", "Bob")
+                    .model(&format!("{st}.draft.user__full_name")),
+            ]),
+            m("p")
+                .class("ae-saved")
+                .show(&format!("{st}.saved"))
+                .text(&format!("{st}.saved")),
+            m("div").class("ae-actions").child(
+                m("button")
+                    .class("ae-btn primary")
+                    .attr("type", "button")
+                    .bind("disabled", &format!("{st}.saving"))
+                    .on("click", &format!("{st}.save()"))
+                    .kids(vec![
+                        Node::icon("check").class("ph ph-check"),
+                        m("span").text(&format!("({st}.saving ? 'Saving…' : 'Save')")),
+                    ]),
+            ),
+        ])
+}
+
 /// What the inspector shows with nothing selected.
 pub fn inspector_empty() -> Node {
     m("p")
         .class("inspector-empty")
-        .show(&format!("!{ST}.open"))
+        .show(&format!("!{ST}.open && !$store.settings.open"))
         .child(lit(
             "Nothing selected. Pick an agent from the rail to edit it, or use + to define one.",
         ))

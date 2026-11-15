@@ -51,6 +51,11 @@ fn blank_draft() -> JsValue {
     d.into()
 }
 
+/// Shut the settings panel, which shares the inspector column.
+fn close_settings() {
+    js::set_bool(&mjs::store_ref(crate::components::settings::STORE), "open", false);
+}
+
 /// `loadAgents()` — the rail.
 fn load_agents(_this: JsValue, _args: js_sys::Array) -> JsValue {
     rustex1_kit::api::get("/api/agents", None, |v| {
@@ -96,6 +101,9 @@ fn select(_this: JsValue, args: js_sys::Array) -> JsValue {
         return JsValue::UNDEFINED;
     };
     js::set_str(&s, "selected", &name);
+    // One panel at a time: the inspector shows what you last selected, and
+    // two unrelated panels stacked in it is the answer to neither click.
+    close_settings();
     // The name as it was when the form opened: a rename has to tell the
     // server which row it is renaming.
     js::set_str(&s, "editing", &name);
@@ -114,6 +122,7 @@ fn new_agent(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set(&s, "draft", &blank_draft());
     js::set_str(&s, "selected", "");
     js::set_str(&s, "editing", "");
+    close_settings();
     js::set_bool(&s, "open", true);
     js::set_bool(&s, "creating", true);
     js::set_str(&s, "error", "");

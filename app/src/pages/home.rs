@@ -26,7 +26,7 @@
 
 use wasm_bindgen::JsValue;
 
-use rustex1_kit::h::{m, Node};
+use rustex1_kit::h::{lit, m, Node};
 use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
@@ -147,6 +147,20 @@ pub const CSS: &str = r#"
 #home.aside-collapsed .aside-toggle .ph { transform: scaleX(-1); }
 
 .home-aside-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 12px 12px; }
+
+/* The rail is a column so Settings can be pinned under everything else. */
+.home-rail { display: flex; flex-direction: column; }
+.home-rail .home-agents { flex: 0 0 auto; }
+.home-settings { margin-top: auto; padding-top: 12px; }
+.rail-settings {
+  display: inline-flex; align-items: center; gap: 8px;
+  width: 100%; border: 0; border-radius: 8px;
+  background: transparent; color: var(--gray-dim);
+  padding: 7px 8px; cursor: pointer; font: inherit; font-size: 13px;
+  text-align: left;
+}
+.rail-settings:hover { background: var(--panel-2); color: var(--fg); }
+.rail-settings i { font-size: 15px; line-height: 18px; }
 #home.aside-collapsed .home-aside-body { display: none; }
 "#;
 
@@ -158,6 +172,20 @@ fn rail() -> Node {
         .kids(vec![
             session_history::session_history_live(),
             m("div").class("home-agents").child(agents_menu::agents_menu_live()),
+            // Pinned to the bottom of the rail: it is not part of the
+            // conversation, and it is the one item whose position should
+            // never move as the lists above it grow.
+            m("div").class("home-settings").child(
+                m("button")
+                    .class("rail-settings")
+                    .attr("type", "button")
+                    .attr("aria-label", "Settings")
+                    .on("click", "$store.settings.openPanel()")
+                    .kids(vec![
+                        Node::icon("gear").class("ph ph-gear"),
+                        m("span").child(lit("Settings")),
+                    ]),
+            ),
         ])
 }
 
@@ -226,6 +254,7 @@ fn aside() -> Node {
             // selected elsewhere. Today that is an agent definition.
             m("div").class("home-aside-body").kids(vec![
                 agent_editor::agent_editor(),
+                agent_editor::settings_panel(),
                 agent_editor::inspector_empty(),
             ]),
         ])
