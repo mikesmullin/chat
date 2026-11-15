@@ -11,10 +11,11 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Honour exported credentials first; read the project's Muse key without
+# Honour exported credentials first; read the chat Muse key without
 # sourcing arbitrary shell commands from the .env file.
 if [[ -z "${META_API_KEY:-}" && -z "${MUSE_API_KEY:-}" ]]; then
-  if [[ -r .env ]]; then
+  CHAT_ENV="${ANGELA_ROOT:-.}/.angela/.env"
+  if [[ -r "$CHAT_ENV" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
       line="${line#export }"
       if [[ "$line" =~ ^[[:space:]]*MUSE_API_KEY[[:space:]]*=(.*)$ ]]; then
@@ -25,7 +26,7 @@ if [[ -z "${META_API_KEY:-}" && -z "${MUSE_API_KEY:-}" ]]; then
         export MUSE_API_KEY="$value"
         break
       fi
-    done < .env
+    done < "$CHAT_ENV"
   fi
 fi
 

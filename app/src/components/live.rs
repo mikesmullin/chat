@@ -79,9 +79,7 @@ fn open_session_by_id(id: &str) {
         // reopening a session shows what it has cost so far rather than
         // starting from zero.
         store_metrics(&s, &session_metrics(&msgs));
-        // Seed the allowlist editor: the session's override if it has one,
-        // else the agent default. The baseline is what "overridden" is
-        // measured against.
+        // The editor holds only the session's additional rules.
         let text = js::get_str(&v, "allowlist");
         js::set_str(&s, "allowlist", &text);
         let overridden = js::get_bool(&v, "allowlistOverridden");
@@ -94,9 +92,7 @@ fn open_session_by_id(id: &str) {
             "policy",
             if unrestricted { "Unrestricted" } else { "Allowlist" },
         );
-        if !overridden {
-            js::set_str(&s, "allowlistBaseline", &text);
-        }
+        js::set_str(&s, "allowlistBaseline", "");
         clear_stream(&s);
         // The roster and the cursor come back on the same response, so the
         // attribution map is ready before the first row renders.
@@ -626,9 +622,7 @@ fn save_allowlist(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `revertAllowlist()` — drop the override and fall back to the agent
-/// default. Sends `overridden: false` rather than an empty string, which
-/// would mean "deny everything".
+/// `revertAllowlist()` — clear the session rules; agent rules still apply.
 fn revert_allowlist(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let id = js::get_str(&s, "activeId");
