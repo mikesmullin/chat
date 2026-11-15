@@ -6,3 +6,4 @@ web/pkg/
 
 # angela session store (durable chat sessions + inference logs)
 .angela/
+.env

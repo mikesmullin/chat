@@ -165,6 +165,15 @@ fn item(key: &str, value: &str, after: Option<&str>) -> Node {
         ])
 }
 
+fn model_item() -> Node {
+    m("button").class("dropdown-item")
+        .attr("type", "button")
+        .bind("class", "($store.dropdown.model === modelOption ? 'on' : '')")
+        .on("click", "$store.chat.setModel(modelOption); $store.live.persistComposerSettings()")
+        .kids(vec![m("span").class("dropdown-item-label").text("modelOption"),
+                   m("i").class("ph ph-check dropdown-item-check").show("$store.dropdown.model === modelOption")])
+}
+
 /// a themed dropdown bound to `$store.dropdown.<key>`.
 ///
 /// - `key`     — the store key it reads and writes; also its open-state id
@@ -186,6 +195,7 @@ pub fn dropdown_ex(
     after: Option<&str>,
 ) -> Node {
     let is_open = format!("$store.{STORE}.open === '{key}'");
+    let value_expr = if key == "model" { "$store.chat.model".to_string() } else { format!("$store.{STORE}.{key}") };
     m("div")
         .class(&format!("dropdown {extra}"))
         .bind("class", &format!("({is_open} ? 'open' : '')"))
@@ -206,31 +216,30 @@ pub fn dropdown_ex(
                         ),
                     m("span")
                         .class("dropdown-value")
-                        .text(&format!("$store.{STORE}.{key}")),
+                        .text(&value_expr),
                     m("i").class("ph ph-caret-down dropdown-caret"),
                 ]),
             m("div")
                 .class("dropdown-menu")
                 .show(&is_open)
-                .kids(options.iter().map(|o| item(key, o, after)).collect()),
+                .kids(if key == "model" {
+                    vec![model_item().for_each("modelOption in $store.chat.models")]
+                } else {
+                    options.iter().map(|o| item(key, o, after)).collect()
+                }),
         ])
 }
 
-pub const MODELS: &[&str] = &[
-    "claude-opus-5-5",
-    "claude-sonnet-5-5",
-    "claude-haiku-5-5",
-];
-pub const LEVELS: &[&str] = &["low", "medium", "high", "max"];
+pub const LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 /// the model dropdown — cpu glyph, pastel green.
 pub fn model(extra: &str) -> Node {
-    dropdown("model", "cpu", "green", extra, MODELS)
+    dropdown("model", "cpu", "green", extra, &[])
 }
 
 /// the reasoning-level dropdown — brain glyph, the accent indigo.
 pub fn level(extra: &str) -> Node {
-    dropdown("level", "brain", "accent", extra, LEVELS)
+    dropdown_ex("level", "brain", "accent", extra, LEVELS, Some("$store.live.setReasoning('{}')"))
 }
 
 pub const POLICIES: &[&str] = &["Allowlist", "Unrestricted"];
@@ -298,8 +307,8 @@ pub fn register() {
     css::inject("dropdown", CSS);
     let mut d = Def::new().named("store dropdown");
     d.str("open", "")
-        .str("model", "claude-opus-5-5")
-        .str("level", "high")
+        .str("model", "")
+        .str("level", "medium")
         .str("policy", "Allowlist")
         .method("toggle", toggle)
         .method("pick", pick)

@@ -315,6 +315,16 @@ pub fn settings_panel() -> Node {
                     .attr("placeholder", "Bob")
                     .model(&format!("{st}.draft.user__full_name")),
             ]),
+            m("div").class("ae-field").kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Location")),
+                    m("span").class("hint").child(lit("where you are")),
+                ]),
+                m("input")
+                    .attr("type", "text")
+                    .attr("placeholder", "City, State")
+                    .model(&format!("{st}.draft.location")),
+            ]),
             m("p")
                 .class("ae-saved")
                 .show(&format!("{st}.saved"))

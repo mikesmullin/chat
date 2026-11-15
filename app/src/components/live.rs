@@ -63,6 +63,18 @@ fn open_session_by_id(id: &str) {
         }
         js::set(&s, "messages", &msgs.clone().into());
         js::set(&s, "session", &js::get(&v, "session"));
+        let meta = js::get(&v, "session");
+        let model = js::get_str(&meta, "model");
+        if !model.is_empty() {
+            js::set_str(&mjs::store_ref("chat"), "model", &model);
+            js::set_str(&mjs::store_ref("dropdown"), "model", &model);
+        }
+        let config = js::get(&meta, "config");
+        let reasoning = js::get_str(&config, "reasoningEffort");
+        js::set_str(&mjs::store_ref("dropdown"), "level", if reasoning.is_empty() { "medium" } else { &reasoning });
+        // A newly created or older session has no saved picker values yet;
+        // seed its SQLite metadata from the controls now shown for it.
+        persist_composer_settings(JsValue::UNDEFINED, js_sys::Array::new());
         // Rebuild the session totals from the reloaded transcript, so
         // reopening a session shows what it has cost so far rather than
         // starting from zero.
@@ -212,6 +224,14 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_str(&payload, "tabId", "1");
     js::set_str(&payload, "content", &content);
     let active = js::get_str(&s, "activeId");
+    let model = js::get_str(&mjs::store_ref("chat"), "model");
+    if !model.is_empty() {
+        js::set_str(&payload, "model", &model);
+    }
+    let reasoning = js::get_str(&mjs::store_ref("dropdown"), "level");
+    if !reasoning.is_empty() {
+        js::set_str(&payload, "reasoningEffort", &reasoning);
+    }
     if !active.is_empty() {
         js::set_str(&payload, "sessionId", &active);
     }
@@ -539,6 +559,8 @@ pub fn register() {
         .method("saveAllowlist", save_allowlist)
         .method("revertAllowlist", revert_allowlist)
         .method("setPolicy", set_policy)
+        .method("setReasoning", set_reasoning)
+        .method("persistComposerSettings", persist_composer_settings)
         .method("loadView", load_view)
         .method("compact", compact)
         .method("toggleThread", toggle_thread)
@@ -557,6 +579,27 @@ fn toggle_allowlist(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let open = js::get_bool(&s, "allowlistOpen");
     js::set_bool(&s, "allowlistOpen", !open);
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+fn persist_composer_settings(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let live = mjs::store_ref(STORE);
+    let id = js::get_str(&live, "activeId");
+    if id.is_empty() { return JsValue::UNDEFINED; }
+    let chat = mjs::store_ref("chat");
+    let dd = mjs::store_ref("dropdown");
+    let payload = js::obj();
+    js::set_str(&payload, "sessionId", &id);
+    js::set_str(&payload, "model", &js::get_str(&chat, "model"));
+    js::set_str(&payload, "reasoningEffort", &js::get_str(&dd, "level"));
+    rustex1_kit::api::post_json("/api/composer-settings", &payload.into(), |_| {});
+    JsValue::UNDEFINED
+}
+
+fn set_reasoning(_this: JsValue, args: js_sys::Array) -> JsValue {
+    js::set_str(&mjs::store_ref("dropdown"), "level", &js::arg_str(&args, 0));
+    persist_composer_settings(JsValue::UNDEFINED, js_sys::Array::new());
     mjs::redraw();
     JsValue::UNDEFINED
 }
