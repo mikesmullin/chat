@@ -20,6 +20,11 @@ pub fn sessions<F: FnMut(JsValue) + 'static>(then: F) {
     rustex1_kit::api::get("/api/sessions", None, then);
 }
 
+/// `GET /api/models` — model choices from AGL's user config.
+pub fn models<F: FnMut(JsValue) + 'static>(then: F) {
+    rustex1_kit::api::get("/api/models", None, then);
+}
+
 /// `GET /api/sessions/:id` — `{ session, messages }` for the transcript.
 pub fn session<F: FnMut(JsValue) + 'static>(id: &str, then: F) {
     rustex1_kit::api::get(&format!("/api/sessions/{id}"), None, then);

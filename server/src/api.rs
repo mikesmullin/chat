@@ -89,6 +89,49 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
 
 /// The dev server's raw `/api/` handler.
 pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
+    if req.path == "/api/models" {
+        let cfg = agl::config::read_user_config();
+        let default = cfg.get("default_model").and_then(|v| v.to_scalar_string()).unwrap_or_default();
+        let mut models = Vec::<String>::new();
+        if let Some(providers) = cfg.get("context_windows").and_then(|v| v.as_map()) {
+            for (provider, entries) in providers {
+                if let Some(entries) = entries.as_map() {
+                    for name in entries.keys() {
+                        let id = format!("{provider}:{name}");
+                        if !models.contains(&id) { models.push(id); }
+                    }
+                }
+            }
+        }
+        if !default.is_empty() && !models.contains(&default) { models.push(default.clone()); }
+        let body = serde_json::json!({"default_model": default, "models": models});
+        let _ = out.json(200, &body);
+        return;
+    }
+    if req.path == "/api/composer-settings" && req.method == "POST" {
+        let payload: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = payload.get("sessionId").and_then(Value::as_str).unwrap_or("");
+        let root = project_root();
+        let result = angela::conv_store::ConvStore::new(root).ok().and_then(|store| {
+            let old = store.load(id)?;
+            let mut patch = serde_json::Map::new();
+            for key in ["model", "allowlist", "allowlistMode", "allowlistSource"] {
+                if let Some(value) = payload.get(key) { patch.insert(key.into(), value.clone()); }
+            }
+            if let Some(reasoning) = payload.get("reasoningEffort") {
+                let mut config = old.get("config").and_then(Value::as_object).cloned().unwrap_or_default();
+                config.insert("reasoningEffort".into(), reasoning.clone());
+                patch.insert("config".into(), Value::Object(config));
+            }
+            store.update_meta(id, patch)
+        });
+        let (status, body) = match result {
+            Some(session) => (200, serde_json::json!({"ok": true, "session": session})),
+            None => (404, serde_json::json!({"ok": false, "error": "session not found"})),
+        };
+        let _ = out.json(status, &body);
+        return;
+    }
     let areq = ARequest {
         method: req.method.clone(),
         path: req.path.clone(),

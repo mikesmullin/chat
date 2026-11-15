@@ -19,6 +19,7 @@
 //! the store for m-js to read. A serde round trip would buy nothing.
 
 use js_sys::Array;
+use crate::api as chat_api;
 use rustex1_kit::{api, js, mjs, mjs::Def};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -296,7 +297,19 @@ fn methods(d: &mut Def) {
         JsValue::UNDEFINED
     })
     .method("onDraftFocus", |_this, _args| JsValue::UNDEFINED)
-    .method("onModelChange", |_this, args| {
+        .method("setModel", |_this, args| {
+            let v = js::arg_str(&args, 0);
+            if !v.is_empty() {
+                let s = store_ref();
+                js::set_str(&s, "model", &v);
+                save_model(&v);
+                let dd = mjs::store_ref("dropdown");
+                js::set_str(&dd, "model", &v);
+                mjs::redraw();
+            }
+            JsValue::UNDEFINED
+        })
+        .method("onModelChange", |_this, args| {
         let ev = js::arg(&args, 0);
         let target = js::get(&ev, "target");
         let v = js::get_str(&target, "value");
@@ -1044,6 +1057,23 @@ fn append_delta(kind: &str, ev: &JsValue) {
 
 /// Agents + sessions + health, once at boot and on a slow poll.
 pub fn refresh_all() {
+    chat_api::models(|v| {
+        let s = store_ref();
+        let models = js::get(&v, "models");
+        if models.is_undefined() || models.is_null() { return; }
+        js::set(&s, "models", &models);
+        let configured = js::get_str(&v, "default_model");
+        let current = js::get_str(&s, "model");
+        let arr = Array::from(&models);
+        let valid = arr.iter().any(|x| x.as_string().as_deref() == Some(&current));
+        if current.is_empty() || !valid {
+            let selected = if !configured.is_empty() { configured } else { DEFAULT_MODEL.to_string() };
+            js::set_str(&s, "model", &selected);
+            js::set_str(&mjs::store_ref("dropdown"), "model", &selected);
+            save_model(&selected);
+        }
+        mjs::redraw();
+    });
     refresh_agents();
     refresh_sessions();
     api::get("/api/health", None, |v| {
