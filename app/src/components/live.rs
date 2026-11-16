@@ -72,6 +72,14 @@ fn open_session_by_id(id: &str) {
             js::set_str(&s, "model", &model);
             js::set_str(&mjs::store_ref("dropdown"), "model", &model);
         }
+        // Where this conversation works. Restored from the session rather
+        // than left as whatever the last tab happened to show — these are
+        // per-conversation settings, and the turn loop reads `sandboxId` to
+        // decide whose filesystem the file and shell tools mean.
+        for field in ["project", "sandboxId", "worktreeId", "branchId"] {
+            let store_field = if field == "project" { "projectId" } else { field };
+            js::set_str(&s, store_field, &js::get_str(&meta, field));
+        }
         let config = js::get(&meta, "config");
         let reasoning = js::get_str(&config, "reasoningEffort");
         js::set_str(&mjs::store_ref("dropdown"), "level", if reasoning.is_empty() { "medium" } else { &reasoning });
@@ -741,6 +749,25 @@ pub fn register() {
         .val("messages", &js_sys::Array::new().into())
         .val("session", &js::obj().into())
         .str("activeId", "")
+        // ── the composer's target row ─────────────────────────────────
+        // Where this session works: which sandbox, which folder it is filed
+        // under, which checkout gets mounted. Empty lists until the pickers
+        // are wired to their services — the row renders, every menu shows
+        // its null answer and its create action, and nothing claims an
+        // instance exists that does not.
+        .val("sandboxes", &js_sys::Array::new().into())
+        .val("projects", &js_sys::Array::new().into())
+        .val("worktrees", &js_sys::Array::new().into())
+        .val("repoBranches", &js_sys::Array::new().into())
+        .val("repos", &js_sys::Array::new().into())
+        // Whether the sandbox service answered at all. An empty list and a
+        // dead service look identical in a menu; this is what tells them
+        // apart.
+        .bool("sboxUp", false)
+        .str("sandboxId", "")
+        .str("projectId", "")
+        .str("worktreeId", "")
+        .str("branchId", "")
         .str("draft", "")
         .str("streamText", "")
         .str("streamHtml", "")
@@ -832,6 +859,18 @@ pub fn register() {
         .method("setPolicy", set_policy)
         .method("setReasoning", set_reasoning)
         .method("persistComposerSettings", persist_composer_settings)
+        // The target row. `pickTarget` records the choice locally; the
+        // create/edit forms that these open are the next piece of work, so
+        // they are named-but-idle rather than missing — an unresolved
+        // method is a silent template failure, not a visible one.
+        .method("loadProjects", load_projects)
+        .method("loadTargets", load_targets)
+        .method("saveTarget", save_target)
+        .method("dropSession", drop_session)
+        .method("saveProject", save_project)
+        .method("pickTarget", pick_target)
+        .method("editTarget", edit_target)
+        .method("createTarget", create_target)
         .method("loadView", load_view)
         .method("compact", compact)
         .method("toggleThread", toggle_thread)
@@ -1210,6 +1249,266 @@ fn pin_to_bottom() {
     js::set_bool(&s, "stickBottom", true);
 }
 
+
+/// `loadProjects()` — refresh the folder list.
+///
+/// Called from the shell's init beside `loadSessions`, and again after every
+/// write, because the server returns the new listing with each one.
+pub(crate) fn load_projects(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    api::projects(|v| {
+        apply_projects(&js::get(&v, "projects"));
+    });
+    JsValue::UNDEFINED
+}
+
+/// Take a `projects` array from any response that carries one.
+fn apply_projects(list: &JsValue) {
+    if list.is_undefined() || list.is_null() {
+        return;
+    }
+    js::set(&mjs::store_ref(STORE), "projects", list);
+    mjs::redraw();
+}
+
+/// `loadTargets()` — the sandbox, repo, branch and worktree lists.
+///
+/// Separate from `loadProjects` because they come from different places:
+/// projects live in the conversation database, these live on the host (and,
+/// for sandboxes, in another service entirely).
+pub(crate) fn load_targets(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    api::targets(|v| apply_targets(&v));
+    JsValue::UNDEFINED
+}
+
+/// Adopt whatever target lists a response carries.
+///
+/// Every write answers with the fresh listing, so this runs after each one
+/// too and there is never a second request to find out what just happened.
+fn apply_targets(v: &JsValue) {
+    let s = mjs::store_ref(STORE);
+    for key in ["sandboxes", "repos", "repoBranches", "worktrees"] {
+        let list = js::get(v, key);
+        if !list.is_undefined() && !list.is_null() {
+            js::set(&s, key, &list);
+        }
+    }
+    let up = js::get(v, "sboxUp");
+    if !up.is_undefined() {
+        js::set_bool(&s, "sboxUp", up.as_bool().unwrap_or(false));
+    }
+    mjs::redraw();
+}
+
+/// `saveTarget(action, payload)` — every write behind the three remaining
+/// pickers' Create and Edit actions.
+///
+/// The payload arrives as an object built by the form, because the five
+/// actions take five different shapes and a positional signature covering
+/// all of them would be unreadable.
+fn save_target(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let action = js::arg_str(&args, 0);
+    let payload = args.get(1);
+    let form = mjs::store_ref("tform");
+    js::set_bool(&form, "busy", true);
+    mjs::redraw();
+    api::target_action(&action, &payload, |v| {
+        let form = mjs::store_ref("tform");
+        js::set_bool(&form, "busy", false);
+        if js::get(&v, "ok").as_bool().unwrap_or(false) {
+            // Only close on success: a form that vanishes on a failed
+            // create takes the error with it, and the user is left with a
+            // menu that did not change and no idea why.
+            js::set_bool(&form, "open", false);
+            apply_targets(&v);
+        } else {
+            let msg = js::get_str(&v, "error");
+            js::set_str(
+                &form,
+                "error",
+                if msg.is_empty() { "that did not work" } else { &msg },
+            );
+            mjs::redraw();
+        }
+    });
+    JsValue::UNDEFINED
+}
+
+/// `dropSession(id, project)` — the sidebar's drag-and-drop.
+///
+/// Refiles optimistically so the row lands where it was dropped rather than
+/// snapping back for a round-trip, then reconciles with whatever the server
+/// says. A drop onto the folder a conversation is already in is a no-op,
+/// not a write — dragging something one pixel should not touch the file.
+fn drop_session(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let id = js::arg_str(&args, 0);
+    let project = js::arg_str(&args, 1);
+    if id.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let s = mjs::store_ref(STORE);
+    let sessions = js_sys::Array::from(&js::get(&s, "sessions"));
+    let mut moved = false;
+    for row in sessions.iter() {
+        if js::get_str(&row, "id") == id {
+            if js::get_str(&row, "project") == project {
+                return JsValue::UNDEFINED;
+            }
+            js::set_str(&row, "project", &project);
+            moved = true;
+        }
+    }
+    if !moved {
+        return JsValue::UNDEFINED;
+    }
+    // The open session's own copy of the metadata, so the composer's
+    // project picker agrees with the tree it was just dragged in.
+    if js::get_str(&s, "activeId") == id {
+        js::set_str(&s, "projectId", &project);
+        js::set_str(&js::get(&s, "session"), "project", &project);
+    }
+    mjs::redraw();
+
+    let payload = js::obj();
+    js::set_str(&payload, "sessionId", &id);
+    js::set_str(&payload, "project", &project);
+    api::project_action("assign", &payload.into(), |v| {
+        apply_projects(&js::get(&v, "projects"));
+    });
+    JsValue::UNDEFINED
+}
+
+/// `saveProject(action, a, b)` — create, rename or delete a folder.
+///
+/// One method for the three writes because they differ only in which two
+/// strings they send, and the response handling — adopt the new listing — is
+/// identical.
+fn save_project(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let action = js::arg_str(&args, 0);
+    let payload = js::obj();
+    match action.as_str() {
+        "create" => js::set_str(&payload, "name", &js::arg_str(&args, 1)),
+        "rename" => {
+            js::set_str(&payload, "from", &js::arg_str(&args, 1));
+            js::set_str(&payload, "to", &js::arg_str(&args, 2));
+        }
+        "delete" => js::set_str(&payload, "name", &js::arg_str(&args, 1)),
+        _ => return JsValue::UNDEFINED,
+    }
+    api::project_action(&action, &payload.into(), |v| {
+        apply_projects(&js::get(&v, "projects"));
+        // Creating a folder files this conversation in it: the picker is
+        // under the composer, so "new project" there means "and put this
+        // one in it".
+        let created = js::get_str(&v, "select");
+        if !created.is_empty() {
+            let s = mjs::store_ref(STORE);
+            js::set_str(&s, "projectId", &created);
+            let id = js::get_str(&s, "activeId");
+            if !id.is_empty() {
+                js::set_str(&js::get(&s, "session"), "project", &created);
+                let p2 = js::obj();
+                js::set_str(&p2, "sessionId", &id);
+                js::set_str(&p2, "project", &created);
+                api::project_action("assign", &p2.into(), |av| {
+                    apply_projects(&js::get(&av, "projects"));
+                });
+            }
+        }
+        // A rename or a delete rewrites labels on conversations this client
+        // is holding, so the session list is no longer trustworthy.
+        api::sessions(|sv| {
+            let s = mjs::store_ref(STORE);
+            js::set(&s, "sessions", &js::get(&sv, "sessions"));
+            mjs::redraw();
+        });
+    });
+    JsValue::UNDEFINED
+}
+
+/// `pickTarget(kind, id)` — the composer's sandbox / project / worktree /
+/// branch row.
+///
+/// Records the choice and closes the menu. It does **not** yet persist: the
+/// session-meta fields these map to land with the services behind them, and
+/// writing a `projectId` that no `/api/projects` can resolve would put a
+/// dangling id in the session file.
+fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let field = match js::arg_str(&args, 0).as_str() {
+        "sandbox" => "sandboxId",
+        "project" => "projectId",
+        "worktree" => "worktreeId",
+        "branch" => "branchId",
+        _ => return JsValue::UNDEFINED,
+    };
+    let value = js::arg_str(&args, 1);
+    let s = mjs::store_ref(STORE);
+    js::set_str(&s, field, &value);
+    js::call(&mjs::store_ref("picker"), "close", &[]);
+    mjs::redraw();
+    // The sandbox, worktree and branch ride the composer-settings path, the
+    // same one the model and allowlist pickers use. The sandbox especially
+    // has to be durable: the turn loop reads it to decide whether the file
+    // and shell tools mean this machine or a container, so a selection that
+    // lived only in the tab would silently stop applying on reload.
+    if field != "projectId" {
+        let id = js::get_str(&s, "activeId");
+        if !id.is_empty() {
+            js::set_str(&js::get(&s, "session"), field, &value);
+            let payload = js::obj();
+            js::set_str(&payload, "sessionId", &id);
+            js::set_str(&payload, field, &value);
+            rustex1_kit::api::post_json("/api/composer-settings", &payload.into(), |_| {});
+        }
+    }
+    if field == "projectId" {
+        let id = js::get_str(&s, "activeId");
+        if !id.is_empty() {
+            js::set_str(&js::get(&s, "session"), "project", &value);
+            let payload = js::obj();
+            js::set_str(&payload, "sessionId", &id);
+            js::set_str(&payload, "project", &value);
+            api::project_action("assign", &payload.into(), |v| {
+                apply_projects(&js::get(&v, "projects"));
+                api::sessions(|sv| {
+                    let st = mjs::store_ref(STORE);
+                    js::set(&st, "sessions", &js::get(&sv, "sessions"));
+                    mjs::redraw();
+                });
+            });
+        }
+    }
+    JsValue::UNDEFINED
+}
+
+/// `createTarget(kind)` / `editTarget(kind, id)` — open the inspector form.
+///
+/// The store's own name goes with the call, so the form writes back here
+/// rather than to whichever store happened to register last. The design
+/// guide passes its own, and gets a form that persists nothing.
+fn create_target(_this: JsValue, args: js_sys::Array) -> JsValue {
+    js::call(
+        &mjs::store_ref("tform"),
+        "openCreate",
+        &[
+            JsValue::from_str(&js::arg_str(&args, 0)),
+            JsValue::from_str(STORE),
+        ],
+    );
+    JsValue::UNDEFINED
+}
+
+fn edit_target(_this: JsValue, args: js_sys::Array) -> JsValue {
+    js::call(
+        &mjs::store_ref("tform"),
+        "openEdit",
+        &[
+            JsValue::from_str(&js::arg_str(&args, 0)),
+            JsValue::from_str(&js::arg_str(&args, 1)),
+            JsValue::from_str(STORE),
+        ],
+    );
+    JsValue::UNDEFINED
+}
 
 /// `setPolicy(mode)` — the composer's policy dropdown.
 ///

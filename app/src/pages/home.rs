@@ -31,7 +31,8 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::components::{
-    agent_editor, agents_menu, session_history, session_panel, tab,
+    agent_editor, agents_menu, project_tree, session_history, session_panel, tab,
+    target_form,
 };
 use crate::css;
 
@@ -145,6 +146,10 @@ pub const CSS: &str = r#"
 
 .home-aside-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 12px 12px; }
 
+/* The projects section sits between the flat history and the agents, with
+   the same gutters as its neighbours so the three read as one column. */
+.home-projects { padding: 14px 10px 4px; }
+
 /* The rail is a column so Settings can be pinned under everything else. */
 .home-rail { display: flex; flex-direction: column; }
 .home-rail .home-agents { flex: 0 0 auto; }
@@ -168,6 +173,15 @@ fn rail() -> Node {
         .attr("aria-label", "Sessions and agents")
         .kids(vec![
             session_history::session_history(LIVE),
+            // The same conversations, by where they are filed rather than by
+            // when they were touched. Below the flat history on purpose:
+            // "what was I just doing" is the more common question, and it
+            // should not need scrolling past the filing cabinet.
+            m("div").class("home-projects").child(project_tree::tree(
+                LIVE,
+                &format!("{LIVE}.openSession({{}})"),
+                &format!("{LIVE}.createTarget('project')"),
+            )),
             m("div").class("home-agents").child(agents_menu::agents_menu_live()),
             // Pinned to the bottom of the rail: it is not part of the
             // conversation, and it is the one item whose position should
@@ -229,6 +243,7 @@ fn aside() -> Node {
             m("div").class("home-aside-body").kids(vec![
                 agent_editor::agent_editor(),
                 agent_editor::settings_panel(),
+                target_form::panel(),
                 agent_editor::inspector_empty(),
             ]),
         ])
@@ -241,7 +256,7 @@ pub fn shell() -> Node {
         .class("home")
         // Pull the session list once the shell exists. `x-init` runs from the
         // deferred lifecycle queue, so the store is safe to write here.
-        .init("$store.live.loadSessions()")
+        .init("$store.live.loadSessions(); $store.live.loadProjects(); $store.live.loadTargets()")
         .bind(
             "class",
             &format!("($store.{STORE}.asideOpen ? '' : 'aside-collapsed')"),

@@ -18,7 +18,7 @@ use serde_json::Value;
 
 /// Where sessions live. `ANGELA_ROOT` overrides; otherwise the directory the
 /// server was started from, which is the chat project itself.
-fn project_root() -> std::path::PathBuf {
+pub fn project_root() -> std::path::PathBuf {
     match std::env::var("ANGELA_ROOT") {
         Ok(v) if !v.trim().is_empty() => std::path::PathBuf::from(v.trim()),
         _ => std::env::current_dir().unwrap_or_else(|_| ".".into()),
@@ -108,6 +108,152 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         let _ = out.json(200, &body);
         return;
     }
+    // ── sandboxes, repos and worktrees ─────────────────────────────────
+    // The other three pickers. `/api/targets` is one GET for all of them:
+    // they are read together on every redraw, and three round-trips would
+    // let the menus disagree about which checkout exists.
+    if req.path == "/api/targets" && req.method == "GET" {
+        let root = project_root();
+        let mut body = crate::hostgit::everything(&root);
+        let (sandboxes, up) = match crate::sbox::list() {
+            Ok(v) => (v, true),
+            // An empty list and a dead service look identical in a menu, so
+            // the flag travels with it and the picker can say which.
+            Err(_) => (serde_json::json!([]), false),
+        };
+        if let Value::Object(m) = &mut body {
+            m.insert("sandboxes".into(), sandboxes);
+            m.insert("sboxUp".into(), serde_json::json!(up));
+        }
+        let _ = out.json(200, &body);
+        return;
+    }
+    if req.path.starts_with("/api/targets/") && req.method == "POST" {
+        let root = project_root();
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let f = |k: &str| {
+            body.get(k)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let flag = |k: &str, dflt: bool| body.get(k).and_then(Value::as_bool).unwrap_or(dflt);
+        let action = req.path.trim_start_matches("/api/targets/").trim_matches('/');
+        let result: Result<Value, String> = match action {
+            "repo-add" => crate::hostgit::add_repo(&root, &f("path")),
+            "repo-remove" => crate::hostgit::remove_repo(&root, &f("id")),
+            "branch-add" => {
+                crate::hostgit::add_branch(&root, &f("repoId"), &f("name"), &f("from"))
+            }
+            "worktree-add" => {
+                crate::hostgit::add_worktree(&root, &f("repoId"), &f("branch"), flag("create", false))
+            }
+            "worktree-remove" => crate::hostgit::remove_worktree(&root, &f("id")),
+            "sandbox-add" => crate::sbox::create(
+                &root,
+                &f("kind"),
+                &f("worktreeId"),
+                &f("branchId"),
+                flag("network", true),
+            ),
+            "sandbox-remove" => crate::sbox::destroy(&root, &f("id")),
+            other => Err(format!("unknown target action: {other}")),
+        };
+        match result {
+            // Same contract as `/api/projects`: every write answers with the
+            // fresh listing, so the caller never has to ask twice.
+            Ok(mut v) => {
+                if let Value::Object(map) = &mut v {
+                    map.insert("ok".into(), serde_json::json!(true));
+                    if let Value::Object(all) = crate::hostgit::everything(&root) {
+                        for (k, val) in all {
+                            map.insert(k, val);
+                        }
+                    }
+                    if let Ok(list) = crate::sbox::list() {
+                        map.insert("sandboxes".into(), list);
+                    }
+                }
+                let _ = out.json(200, &v);
+            }
+            Err(e) => {
+                let _ = out.json(400, &serde_json::json!({"ok": false, "error": e}));
+            }
+        }
+        return;
+    }
+
+    // ── projects ───────────────────────────────────────────────────────
+    // The folders conversations are filed under. Served here rather than
+    // from angela's router because they are a chat-app concept: angela
+    // stores the label and owns the operations, this decides what the UI
+    // may ask for.
+    if req.path.starts_with("/api/projects") {
+        let root = project_root();
+        let Ok(store) = angela::conv_store::ConvStore::new(root) else {
+            let _ = out.json(500, &serde_json::json!({"error": "no conversation store"}));
+            return;
+        };
+        if req.method == "GET" {
+            let _ = out.json(200, &store.projects_detail());
+            return;
+        }
+        if req.method != "POST" {
+            let _ = out.json(405, &serde_json::json!({"error": "use GET or POST"}));
+            return;
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let field = |k: &str| {
+            body.get(k)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        // The sub-path is the verb. `assign` is the one the sidebar's
+        // drag-and-drop uses; the other three come from the inspector form.
+        let action = req
+            .path
+            .trim_start_matches("/api/projects")
+            .trim_matches('/')
+            .to_string();
+        let result: Result<Value, String> = match action.as_str() {
+            "" | "create" => store.create_project(&field("name")).map(|n| {
+                // Same contract as the target actions: the response names
+                // the row the picker should land on.
+                serde_json::json!({"name": n, "select": n, "selectKind": "project"})
+            }),
+            "rename" => store
+                .rename_project(&field("from"), &field("to"))
+                .map(|n| serde_json::json!({"name": n})),
+            "delete" => store
+                .delete_project(&field("name"))
+                .map(|n| serde_json::json!({"unfiled": n})),
+            "assign" => store
+                .assign_project(&field("sessionId"), &field("project"))
+                .map(|n| serde_json::json!({"project": n})),
+            other => Err(format!("unknown project action: {other}")),
+        };
+        match result {
+            // Every write answers with the new listing as well as the
+            // result: the sidebar and the picker both redraw from it, and a
+            // second round-trip to find out what just happened is a window
+            // in which they disagree.
+            Ok(mut v) => {
+                if let Value::Object(map) = &mut v {
+                    map.insert("ok".into(), serde_json::json!(true));
+                    if let Some(Value::Array(list)) = store.projects_detail().get("projects") {
+                        map.insert("projects".into(), Value::Array(list.clone()));
+                    }
+                }
+                let _ = out.json(200, &v);
+            }
+            Err(e) => {
+                let _ = out.json(400, &serde_json::json!({"ok": false, "error": e}));
+            }
+        }
+        return;
+    }
+
     if req.path == "/api/composer-settings" && req.method == "POST" {
         let payload: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
         let id = payload.get("sessionId").and_then(Value::as_str).unwrap_or("");
@@ -115,7 +261,19 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         let result = angela::conv_store::ConvStore::new(root).ok().and_then(|store| {
             let old = store.load(id)?;
             let mut patch = serde_json::Map::new();
-            for key in ["model", "allowlist", "allowlistMode", "allowlistSource"] {
+            for key in [
+                "model",
+                "allowlist",
+                "allowlistMode",
+                "allowlistSource",
+                "project",
+                // Where this conversation's work happens. `sandboxId` is the
+                // one the turn loop reads to decide whose filesystem the
+                // file and shell tools mean.
+                "sandboxId",
+                "worktreeId",
+                "branchId",
+            ] {
                 if let Some(value) = payload.get(key) { patch.insert(key.into(), value.clone()); }
             }
             if let Some(reasoning) = payload.get("reasoningEffort") {

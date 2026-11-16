@@ -7,6 +7,8 @@
 //! Sessions live under `<cwd>/.angela/sessions`, or `ANGELA_ROOT` if set.
 
 mod api;
+mod hostgit;
+mod sbox;
 
 use rustex1_devserver::{args_to_config, Config, Server};
 
@@ -14,6 +16,12 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = std::env::current_dir().expect("current dir");
     let (config, rebuild) = args_to_config(&args, Config::discover(&root));
+
+    // Drop worktree registrations whose directory is gone. A crash between
+    // `git worktree add` and the registry write, or a checkout removed by
+    // hand, otherwise leaves a row the picker offers and every mount of
+    // which fails.
+    hostgit::sweep(&api::project_root());
 
     // /api/ is answered in-process by the embedded angela. The NDJSON chat
     // stream is written frame by frame, so a turn reaches the browser as the

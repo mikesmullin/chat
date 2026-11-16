@@ -238,10 +238,15 @@ fn messages() -> JsValue {
 ///
 /// `(ordinal, id, title, status)` — the same fields the live list carries,
 /// because the rail and the strip are the live ones.
-const SESSIONS: &[(f64, &str, &str, &str)] = &[
-    (1.0, "samples", "Which model does the config point at?", "ready"),
-    (2.0, "s-2", "Migrate the auth service", "running"),
-    (3.0, "s-3", "Retry logic refactor", "ready"),
+/// The last field is the folder it is filed under — `""` for unfiled, which
+/// the tree draws in its own group at the bottom. One of each, so the guide
+/// exercises a nested folder, a sibling, and the unfiled case rather than
+/// just the happy one.
+const SESSIONS: &[(f64, &str, &str, &str, &str)] = &[
+    (1.0, "samples", "Which model does the config point at?", "ready", "psicom/chat"),
+    (2.0, "s-2", "Migrate the auth service", "running", "psicom/chat"),
+    (3.0, "s-3", "Retry logic refactor", "ready", "psicom/sbox"),
+    (4.0, "s-4", "Scratch: regex for the log parser", "ready", ""),
 ];
 
 /// The models the guide's picker offers.
@@ -256,18 +261,138 @@ fn models() -> JsValue {
 fn sessions() -> JsValue {
     let out = js_sys::Array::new();
     let now = js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default();
-    for (ordinal, id, title, status) in SESSIONS {
+    for (ordinal, id, title, status, project) in SESSIONS {
         let o = js::obj();
         js::set_num(&o, "ordinal", *ordinal);
         js::set_str(&o, "id", id);
         js::set_str(&o, "title", title);
         js::set_str(&o, "status", status);
+        js::set_str(&o, "project", project);
         js::set_str(&o, "agent", "fish");
         js::set_str(&o, "model", "muse:opus");
         js::set_str(&o, "updatedAt", &now);
         out.push(&o);
     }
     out.into()
+}
+
+/// The guide's instances for the four composer pickers: `{ id, name, icon,
+/// hint }`, which is the shape [`crate::components::picker`] reads.
+///
+/// Enough of each to exercise the menu rather than illustrate it — more rows
+/// than fit without scrolling in one case, a hint on every branch, and a
+/// selection already made in three of the four so the check has somewhere to
+/// land.
+fn targets(rows: &[(&str, &str, &str, &str)]) -> JsValue {
+    let out = js_sys::Array::new();
+    for (id, name, icon, hint) in rows {
+        let o = js::obj();
+        js::set_str(&o, "id", id);
+        js::set_str(&o, "name", name);
+        js::set_str(&o, "icon", icon);
+        js::set_str(&o, "hint", hint);
+        out.push(&o);
+    }
+    out.into()
+}
+
+const SANDBOXES: &[(&str, &str, &str, &str)] = &[
+    ("sb-kiets", "Kiets-Spaceship", "desktop", "ready"),
+    ("sb-atlas", "atlas-ci", "desktop", "ready"),
+    ("sb-borealis", "borealis-replay", "desktop", "booting"),
+];
+
+/// The id **is** the name, as `/api/projects` returns it: a project has no
+/// identity apart from its label, and the hierarchy is the `/` in it.
+const PROJECTS: &[(&str, &str, &str, &str)] = &[
+    ("psicom/chat", "psicom/chat", "brackets-angle", ""),
+    ("psicom/sbox", "psicom/sbox", "brackets-angle", ""),
+    ("scratch", "scratch", "brackets-angle", ""),
+];
+
+const REPOS: &[(&str, &str, &str, &str)] = &[
+    ("r-chat", "chat", "folder-open", "main"),
+    ("r-angela", "angela-rs", "folder-open", "rust"),
+];
+
+const WORKTREES: &[(&str, &str, &str, &str)] = &[
+    ("wt-onboarding", "onboarding-flow", "tree-structure", "psicom/chat"),
+    ("wt-billing", "billing-replay", "tree-structure", "psicom/chat"),
+];
+
+/// The hint carries the repo, because the name is only a branch — two repos
+/// both having `main` is the normal case, not the edge one.
+const BRANCHES: &[(&str, &str, &str, &str)] = &[
+    ("br-chat-main", "main", "git-branch", "psicom/chat"),
+    ("br-chat-sbox", "sbox-a", "git-branch", "psicom/chat"),
+    ("br-angela-main", "main", "git-branch", "angela-rs"),
+    ("br-angela-rust", "rust", "git-branch", "angela-rs"),
+    ("br-agl-rust", "rust", "git-branch", "agl-rs"),
+];
+
+/// The guide's pickers open the same inspector form the app's do, pointed
+/// back at this store — so the form saves nothing, because `saveProject`
+/// here is inert.
+fn create_target(_this: JsValue, args: js_sys::Array) -> JsValue {
+    js::call(
+        &mjs::store_ref("tform"),
+        "openCreate",
+        &[
+            JsValue::from_str(&js::arg_str(&args, 0)),
+            JsValue::from_str(STORE),
+        ],
+    );
+    JsValue::UNDEFINED
+}
+
+fn edit_target(_this: JsValue, args: js_sys::Array) -> JsValue {
+    js::call(
+        &mjs::store_ref("tform"),
+        "openEdit",
+        &[
+            JsValue::from_str(&js::arg_str(&args, 0)),
+            JsValue::from_str(&js::arg_str(&args, 1)),
+            JsValue::from_str(STORE),
+        ],
+    );
+    JsValue::UNDEFINED
+}
+
+/// `dropSession(id, project)` — the guide's drag-and-drop really moves the
+/// row. Inert here would be worse than absent: a drag that visibly snaps
+/// back reads as a broken component rather than as a disabled one.
+fn drop_session(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let id = js::arg_str(&args, 0);
+    let project = js::arg_str(&args, 1);
+    if id.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let sessions = js_sys::Array::from(&js::get(&mjs::store_ref(STORE), "sessions"));
+    for row in sessions.iter() {
+        if js::get_str(&row, "id") == id {
+            js::set_str(&row, "project", &project);
+        }
+    }
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+/// `pickTarget(kind, id)` — the guide's pickers really do select, because a
+/// menu whose check never moves teaches nothing about the check.
+fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let field = match js::arg_str(&args, 0).as_str() {
+        "sandbox" => "sandboxId",
+        "project" => "projectId",
+        "worktree" => "worktreeId",
+        "branch" => "branchId",
+        _ => return JsValue::UNDEFINED,
+    };
+    let s = mjs::store_ref(STORE);
+    js::set_str(&s, field, &js::arg_str(&args, 1));
+    // Picking is also a dismissal: the menu has done its job.
+    js::call(&mjs::store_ref("picker"), "close", &[]);
+    mjs::redraw();
+    JsValue::UNDEFINED
 }
 
 /// `openSession(id)` — the guide's rail and strip really do switch tabs.
@@ -396,6 +521,18 @@ pub fn register() {
         .val("session", &session.into())
         .val("accents", &accents.into())
         .val("icons", &icons.into())
+        // ── the composer's target row ─────────────────────────────
+        .val("sandboxes", &targets(SANDBOXES))
+        .val("projects", &targets(PROJECTS))
+        .val("worktrees", &targets(WORKTREES))
+        .val("repos", &targets(REPOS))
+        .bool("sboxUp", true)
+        .val("repoBranches", &targets(BRANCHES))
+        .str("sandboxId", "sb-kiets")
+        .str("projectId", "psicom/chat")
+        // Nothing chosen, so the guide shows the null row checked too.
+        .str("worktreeId", "")
+        .str("branchId", "br-chat-main")
         .str("activeId", "samples")
         .str("model", "muse:opus")
         .val("models", &models())
@@ -455,6 +592,15 @@ pub fn register() {
         .method("setModel", inert)
         .method("setPolicy", inert)
         .method("setReasoning", inert)
+        .method("dropSession", drop_session)
+        .method("loadProjects", inert)
+        .method("loadTargets", inert)
+        // The guide's form opens and validates; it persists nothing.
+        .method("saveTarget", inert)
+        .method("saveProject", inert)
+        .method("pickTarget", pick_target)
+        .method("editTarget", edit_target)
+        .method("createTarget", create_target)
         .method("persistComposerSettings", inert);
     mjs::store(STORE, &d.finish());
 }
