@@ -88,6 +88,37 @@ pub fn sessions<F: FnMut(JsValue) + 'static>(then: F) {
     rustex1_kit::api::get("/api/sessions", None, then);
 }
 
+/// `GET /api/projects` — the folders conversations are filed under, each
+/// with how many are filed directly in it.
+pub fn projects<F: FnMut(JsValue) + 'static>(then: F) {
+    rustex1_kit::api::get("/api/projects", None, then);
+}
+
+/// `POST /api/projects/<action>` — `create`, `rename`, `delete`, `assign`.
+///
+/// Every one of them answers with the new listing as well as its own
+/// result, so the sidebar and the composer's picker redraw from the same
+/// response rather than racing a second request.
+pub fn project_action<F: FnMut(JsValue) + 'static>(action: &str, payload: &JsValue, then: F) {
+    rustex1_kit::api::post_json(&format!("/api/projects/{action}"), payload, then);
+}
+
+/// `GET /api/targets` — sandboxes, repos, branches and worktrees in one
+/// response.
+///
+/// One call rather than four: the pickers are read together on every
+/// redraw, and four round-trips would let the menus disagree about which
+/// checkout exists.
+pub fn targets<F: FnMut(JsValue) + 'static>(then: F) {
+    rustex1_kit::api::get("/api/targets", None, then);
+}
+
+/// `POST /api/targets/<action>` — `repo-add`, `repo-remove`, `branch-add`,
+/// `worktree-add`, `worktree-remove`, `sandbox-add`, `sandbox-remove`.
+pub fn target_action<F: FnMut(JsValue) + 'static>(action: &str, payload: &JsValue, then: F) {
+    rustex1_kit::api::post_json(&format!("/api/targets/{action}"), payload, then);
+}
+
 /// `GET /api/models` — model choices from AGL's user config.
 pub fn models<F: FnMut(JsValue) + 'static>(then: F) {
     rustex1_kit::api::get("/api/models", None, then);

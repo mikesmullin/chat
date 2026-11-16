@@ -20,7 +20,19 @@ pub const CSS: &str = r#"
    them. */
 .mjs-chat .history {
   width: 260px;
-  flex-shrink: 0;
+  /* `min-width`, not `flex-shrink: 0`. The guard is about WIDTH — this sits
+     beside the transcript and must not be squeezed — but `flex-shrink`
+     applies to whichever axis the parent runs in, and in the app's left rail
+     the parent is a column. There it read as "never be shorter than my
+     content", so the list spilled out of its box and drew over whatever came
+     after it in the rail. `min-width` says the same thing about the axis it
+     actually means. */
+  min-width: 260px;
+  /* The flip side: let it be shorter than its content, so `.history-list`
+     below can be the thing that scrolls. Without this the default
+     `min-height: auto` keeps it at full content height whatever the parent
+     offers. */
+  min-height: 0;
   background: var(--mjs-panel);
   border-right: 1px solid var(--mjs-line);
   display: flex;
@@ -29,6 +41,8 @@ pub const CSS: &str = r#"
 }
 .mjs-chat .history.collapsed {
   width: 0;
+  /* The width guard above would otherwise hold the collapsed rail open. */
+  min-width: 0;
   opacity: 0;
   overflow: hidden;
   border: 0;

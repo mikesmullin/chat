@@ -28,6 +28,9 @@
 //!   /storybook/session-panel -> Session Panel (transcript + composer)
 //!   /storybook/composer  -> Composer (draft + row: dropdowns, ctx pie, send)
 //!   /storybook/dropdown  -> Dropdown (themed select: icon + value + caret)
+//!   /storybook/picker    -> Picker (instance menu: search, null row, create)
+//!   /storybook/project-tree -> Project Tree (folders + sessions, drag-drop)
+//!   /storybook/target-form  -> Target Form (create/edit in the inspector)
 //!   /storybook/system-card -> System Card (system prompt)
 //!   /storybook/user-card -> User Card (user prompt bubble)
 //!   /storybook/assistant-card -> Assistant Card (response block)
@@ -55,7 +58,8 @@ use wasm_bindgen::{JsCast, JsValue};
 use crate::components::{
     agents_menu, approval_card, assistant_card, automation_form, composer, decision_card,
     samples,
-    dropdown, error_card, fold_card, prompt_card,
+    dropdown, error_card, fold_card, picker, project_tree, prompt_card,
+    target_form,
     field, hint_text, item_group, label, nav_rail, radio_input, range_input,
     reasoning_card, relative_timestamp, sandboxes_menu, session, session_history,
     session_panel, system_card, tab, tag_input, task_list, text_area, text_input, thinking, toggle_button, tool_call_card, tool_response_card,
@@ -351,6 +355,22 @@ pub fn register(rt: &mut Runtime) {
     // the themed select: icon + mono value + caret, dark menu.
     rt.route("/storybook/dropdown", "Dropdown", |_| {
         route_def("route /storybook/dropdown", "Dropdown", dropdown::demo())
+    });
+
+    // the instance menu: search, a null answer, rows that can be edited,
+    // and the actions that make more of them.
+    rt.route("/storybook/picker", "Picker", |_| {
+        route_def("route /storybook/picker", "Picker", picker::demo())
+    });
+
+    // the rail's folders, with their conversations nested and draggable.
+    rt.route("/storybook/project-tree", "Project Tree", |_| {
+        route_def("route /storybook/project-tree", "Project Tree", project_tree::demo())
+    });
+
+    // the inspector form behind the pickers' Create and Edit actions.
+    rt.route("/storybook/target-form", "Target Form", |_| {
+        route_def("route /storybook/target-form", "Target Form", target_form::demo())
     });
 
     // one route per message card, each alone on screen.
