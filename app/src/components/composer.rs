@@ -17,6 +17,8 @@
 //! Depth 2: the task list, the dropdown.
 
 use rustex1_kit::h::{lit, m, Node};
+use rustex1_kit::{js, mjs};
+use wasm_bindgen::JsValue;
 
 use crate::components::dropdown;
 use crate::components::picker;
@@ -337,6 +339,44 @@ pub fn register() {
     css::inject("composer", CSS);
 }
 
+/// Return to the current draft after sending or changing sessions.
+pub fn reset_history(st: &JsValue) {
+    js::set_num(st, "historyPosition", -1.0);
+    js::set_str(st, "historyDraft", "");
+}
+
+/// Navigate the user messages already loaded for the active session.
+pub fn history_move(st: &JsValue, args: js_sys::Array) -> JsValue {
+    if js::get_str(st, "activeId").is_empty() { return JsValue::UNDEFINED; }
+    let items: Vec<String> = js_sys::Array::from(&js::get(st, "messages"))
+        .iter()
+        .filter(|row| js::get_str(row, "kind") == "user")
+        .map(|row| js::get_str(&row, "text"))
+        .filter(|text| !text.trim().is_empty())
+        .collect();
+    let count = items.len() as i64;
+    if count == 0 { return JsValue::UNDEFINED; }
+    let stored = js::get(st, "historyPosition").as_f64().unwrap_or(-1.0) as i64;
+    let position = if stored < 0 { count } else { stored.min(count) };
+    let direction = js::arg(&args, 0).as_f64().unwrap_or(0.0) as i64;
+    if stored < 0 && direction > 0 { return JsValue::UNDEFINED; }
+    let next = (position + direction).clamp(0, count);
+    if position == count && next < count {
+        js::set_str(st, "historyDraft", &js::get_str(st, "draft"));
+    }
+    let text = if next == count { js::get_str(st, "historyDraft") }
+        else { items[next as usize].clone() };
+    js::set_num(st, "historyPosition", if next == count { -1.0 } else { next as f64 });
+    js::set_str(st, "draft", &text);
+    let event = js::arg(&args, 1);
+    js::call(&event, "preventDefault", &[]);
+    mjs::redraw();
+    let target = js::get(&event, "target");
+    let end = js_sys::JsString::from(text).length() as f64;
+    js::call(&target, "setSelectionRange", &[JsValue::from_f64(end), JsValue::from_f64(end)]);
+    JsValue::UNDEFINED
+}
+
 /// The composer wired to angela: the draft, the send/stop flip and the
 /// context pie all read the live store.
 ///
@@ -358,9 +398,14 @@ pub fn panel(st: &str) -> Node {
                     .class("draft-ta")
                     .model(&format!("{st}.draft"))
                     .attr("placeholder", "Message… (Enter send, Shift+Enter newline)")
+                    .on("keydown", &format!("$event.key !== 'Escape' && {st}.treeResetEscape()"))
                     // Enter sends, Shift+Enter is a newline — the placeholder
                     // promises it, so the binding has to honour it.
-                    .on("keydown.enter", &format!("$event.shiftKey || ($event.preventDefault(), {st}.send())")),
+                    .on("keydown.enter", &format!("{st}.treeOpen ? ($event.preventDefault(), {st}.treeChooseSelected()) : ($event.shiftKey || ($event.preventDefault(), {st}.send()))"))
+                    .on("keydown.escape", &format!("{st}.treeEscape($event)"))
+                    // Preserve normal cursor movement within multiline drafts.
+                    .on("keydown.up", &format!("{st}.treeOpen ? ($event.preventDefault(), {st}.treeMove(-1)) : (!$event.shiftKey && !$event.ctrlKey && !$event.altKey && !$event.metaKey && $el.selectionStart === $el.selectionEnd && !$el.value.slice(0, $el.selectionStart).includes('\\n') && {st}.historyMove(-1, $event))"))
+                    .on("keydown.down", &format!("{st}.treeOpen ? ($event.preventDefault(), {st}.treeMove(1)) : (!$event.shiftKey && !$event.ctrlKey && !$event.altKey && !$event.metaKey && $el.selectionStart === $el.selectionEnd && !$el.value.slice($el.selectionEnd).includes('\\n') && {st}.historyMove(1, $event))")),
                 m("div").class("composer-row").kids(vec![
                     // Tool policy. Was a bare shield toggle; a dropdown makes
                     // the two states nameable, and "Unrestricted" visible
@@ -390,7 +435,7 @@ pub fn panel(st: &str) -> Node {
                         .class("btn-primary")
                         .attr("type", "button")
                         .show(&format!("!{st}.waiting"))
-                        .bind("disabled", &format!("!{st}.draft.trim()"))
+                        .bind("disabled", &format!("{st}.treeOpen || !{st}.draft.trim()"))
                         .on("click", &format!("{st}.send()"))
                         .attr("title", "Send")
                         .child(Node::icon("arrow-up")),

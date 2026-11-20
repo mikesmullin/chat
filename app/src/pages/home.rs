@@ -20,9 +20,12 @@
 //! literally the same markup (STORYBOOKING.md §6). The palette
 //! comes from the shared `:is(#sb, #home)` token ramp in `web/storybook.css`.
 //!
-//! The right aside collapses through the `home` store rather than an
+//! Either side column collapses through the `home` store rather than an
 //! imperative class toggle, because the grid track has to shrink with it —
-//! `x-show` alone would leave the column's width behind.
+//! `x-show` alone would leave the column's width behind. Both toggles sit in
+//! the tab strip flanking the tabs, so they stay visible when their column
+//! is gone; a collapsed column is `display: none`, not a narrow strip, so
+//! the transcript can take the whole width.
 
 use wasm_bindgen::JsValue;
 
@@ -49,13 +52,25 @@ pub const CSS: &str = r#"
   display: grid;
   grid-template-columns: 300px 1fr 320px;
   height: 100vh;
+  height: 100dvh;
   min-height: 0;
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans, ui-sans-serif, system-ui, sans-serif);
   transition: grid-template-columns .3s ease-in-out;
 }
-#home.aside-collapsed { grid-template-columns: 300px 1fr 48px; }
+/* A collapsed column is gone, not narrow: `display: none` takes it out of
+   flow (with explicit `grid-column` below, the rest stay in their tracks),
+   and its track collapses to zero so no space is reserved. */
+#home.aside-collapsed { grid-template-columns: 300px 1fr 0px; }
+#home.aside-collapsed .home-aside { display: none; }
+#home.rail-collapsed { grid-template-columns: 0px 1fr 320px; }
+#home.rail-collapsed .home-rail { display: none; }
+#home.rail-collapsed .home-col { margin-left: 10px; }
+#home.rail-collapsed.aside-collapsed { grid-template-columns: 0px 1fr 0px; }
+.home-rail { grid-column: 1; }
+.home-col { grid-column: 2; }
+.home-aside { grid-column: 3; }
 
 /* ---- left rail: part of the black page -------------------------- */
 .home-rail {
@@ -82,13 +97,36 @@ pub const CSS: &str = r#"
   margin-right: 10px;
 }
 
-/* the tab strip: on the black page, ABOVE the card it labels */
+/* the tab strip: on the black page, ABOVE the card it labels. A row now:
+   a toggle for each side column flanking the tabs, so both stay reachable
+   when their column is gone. The strip itself scrolls, never the buttons. */
 .home-tabs {
   flex: 0 0 auto;
+  display: flex; align-items: center; gap: 6px;
   padding: 10px 2px 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
 }
+.home-tabs .tab-bar {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; overflow-x: auto; overflow-y: hidden;
+}
+/* One shared shape for both toggles; position says which column each owns.
+   Flipped means "click to bring it back". */
+.tabs-toggle {
+  flex: 0 0 auto;
+  width: 30px; height: 30px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  transition: color .13s, border-color .13s, background-color .13s;
+}
+.tabs-toggle:hover { color: var(--text); background: var(--panel-2); border-color: var(--border); }
+.tabs-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#home.aside-collapsed .tabs-toggle.for-aside .ph { transform: scaleX(-1); }
+#home.rail-collapsed .tabs-toggle.for-rail .ph { transform: scaleX(-1); }
 
 .home-main,
 .home-aside {
@@ -113,29 +151,7 @@ pub const CSS: &str = r#"
 .home-main .messages { padding-left: 10px; padding-right: 10px; }
 
 /* ---- right aside ------------------------------------------------- */
-.home-aside-head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 8px;
-}
-.aside-toggle {
-  width: 30px; height: 30px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 16px;
-  cursor: pointer;
-  transition: color .13s, border-color .13s, background-color .13s;
-}
-.aside-toggle:hover { color: var(--text); background: var(--panel-2); border-color: var(--border); }
-.aside-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-#home.aside-collapsed .aside-toggle .ph { transform: scaleX(-1); }
-
-.home-aside-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 12px 12px; }
+.home-aside-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 12px 12px; }
 
 /* The projects section opens the rail, with the same gutters as the
    sections below it so they read as one column. */
@@ -159,6 +175,44 @@ pub const CSS: &str = r#"
 .rail-settings:hover { background: var(--panel-2); color: var(--fg); }
 .rail-settings i { font-size: 15px; line-height: 18px; }
 #home.aside-collapsed .home-aside-body { display: none; }
+
+/* ---- responsive: the shell gives way in stages; content never scrolls
+   sideways. Breakpoints are tuned for tablet widths (a Kindle Fire HD
+   reports roughly 960-1280 CSS px in landscape, 600-800 in portrait).
+   These rules only narrow tracks and, at the last step, lift the aside out
+   of flow — no component's look is redefined here, so each component keeps
+   owning its own rules (its narrow mode lives in its own file). */
+@media (max-width: 1180px) {
+  #home { grid-template-columns: 248px minmax(0, 1fr) 288px; }
+  #home.aside-collapsed { grid-template-columns: 248px minmax(0, 1fr) 48px; }
+}
+@media (max-width: 1020px) {
+  #home { grid-template-columns: 216px minmax(0, 1fr) 256px; }
+  #home.aside-collapsed { grid-template-columns: 216px minmax(0, 1fr) 48px; }
+}
+/* Narrow: the rail becomes a 60px icon strip and the aside becomes an overlay
+   driven by the same store flag as ever — anything that opens it (agent
+   select, settings, a target form, the roster pencil) still opens it, and its
+   own toggle still closes it. Collapsed at this width means gone, since a
+   48px strip floating over the transcript would be neither affordance nor
+   content. */
+@media (max-width: 900px) {
+  #home { grid-template-columns: 60px minmax(0, 1fr); }
+  #home.rail-collapsed,
+  #home.rail-collapsed.aside-collapsed { grid-template-columns: 0px minmax(0, 1fr); }
+  .home-rail { padding: 10px 0; margin-right: 8px; gap: 12px; }
+  .home-projects { padding: 10px 6px 4px; }
+  .home-agents { padding: 0 6px 10px; }
+  .home-col { margin-right: 8px; }
+  .home-aside {
+    position: fixed; top: 10px; right: 10px; bottom: 10px;
+    width: min(340px, calc(100vw - 100px));
+    margin: 0; z-index: 60;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, .55);
+  }
+  .rail-settings { justify-content: center; padding-left: 0; padding-right: 0; }
+  .rail-settings span { display: none; }
+}
 "#;
 
 /// left column: projects over the agents menu, on the black page.
@@ -198,7 +252,25 @@ fn main_col() -> Node {
     // The tab strip sits OUTSIDE the card: tabs label the panel, so the
     // rounded surface begins beneath them, the way a tabbed window works.
     m("div").class("home-col").kids(vec![
-        m("div").class("home-tabs").child(tab::tab_bar(LIVE)),
+        m("div").class("home-tabs").kids(vec![
+                m("button")
+                    .class("tabs-toggle for-rail")
+                    .attr("type", "button")
+                    .attr("title", "Toggle left sidebar")
+                    .attr("aria-label", "Toggle left sidebar")
+                    .bind("aria-expanded", "($store.home.railOpen ? 'true' : 'false')")
+                    .on("click", "$store.home.toggleRail()")
+                    .child(Node::icon("sidebar-simple")),
+                tab::tab_bar(LIVE),
+                m("button")
+                    .class("tabs-toggle for-aside")
+                    .attr("type", "button")
+                    .attr("title", "Toggle inspector")
+                    .attr("aria-label", "Toggle inspector")
+                    .bind("aria-expanded", "($store.home.asideOpen ? 'true' : 'false')")
+                    .on("click", "$store.home.toggleAside()")
+                    .child(Node::icon("sidebar-simple")),
+            ]),
         // With no tabs open there is nothing for the card to hold, so the
         // column falls back to the bare page: a slate rectangle wrapping an
         // empty panel reads as something that failed to load. The `+` lives
@@ -219,18 +291,6 @@ fn aside() -> Node {
         .class("home-aside")
         .attr("aria-label", "Details")
         .kids(vec![
-            m("div").class("home-aside-head").child(
-                m("button")
-                    .class("aside-toggle")
-                    .attr("type", "button")
-                    .attr("aria-label", "Toggle right sidebar")
-                    .bind(
-                        "aria-expanded",
-                        &format!("($store.{STORE}.asideOpen ? 'true' : 'false')"),
-                    )
-                    .on("click", &format!("$store.{STORE}.toggleAside()"))
-                    .child(Node::icon("sidebar-simple")),
-            ),
             // The inspector: contextual, so its contents are whatever is
             // selected elsewhere. Today that is an agent definition.
             m("div").class("home-aside-body").kids(vec![
@@ -254,7 +314,9 @@ pub fn shell() -> Node {
         .init("$store.live.loadProjects(); $store.live.loadSessions(); $store.live.loadTargets()")
         .bind(
             "class",
-            &format!("($store.{STORE}.asideOpen ? '' : 'aside-collapsed')"),
+            &format!(
+                "(($store.{STORE}.asideOpen ? '' : 'aside-collapsed') + ($store.{STORE}.railOpen ? '' : ' rail-collapsed'))"
+            ),
         )
         .kids(vec![rail(), main_col(), aside()])
 }
@@ -268,9 +330,22 @@ fn toggle_aside(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+/* `toggleRail`: flip the left column open/closed. Same shape as its
+   right-hand twin, so the two buttons stay one idea. */
+fn toggle_rail(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let open = js::get_bool(&s, "railOpen");
+    js::set_bool(&s, "railOpen", !open);
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
 pub fn register() {
     css::inject("home", CSS);
     let mut d = Def::new().named("store home");
-    d.bool("asideOpen", true).method("toggleAside", toggle_aside);
+    d.bool("asideOpen", true)
+        .bool("railOpen", true)
+        .method("toggleAside", toggle_aside)
+        .method("toggleRail", toggle_rail);
     mjs::store(STORE, &d.finish());
 }

@@ -21,12 +21,12 @@
 //! does not care how deep anything is.
 //!
 //! ```text
-//!   ▾ psicom              2        <- implied: nothing is filed here directly
-//!     ▾ chat              3
+//!   ▾ psicom                       <- implied: nothing is filed here directly
+//!     ▾ chat
 //!         iran war status     ◐ 3m   <- a conversation, draggable
 //!         set lights blue      ● 1d
-//!     ▸ sbox              1        <- collapsed: its children are skipped
-//!   ▾ Unfiled             4        <- not a project; the drop target for "none"
+//!     ▸ sbox                       <- collapsed: its children are skipped
+//!   ▾ (ungrouped)                  <- not a project; the drop target for "none"
 //! ```
 //!
 //! Each conversation carries the shared `uiSessionState` symbol — `◐` working
@@ -35,16 +35,14 @@
 //!
 //! ## Drag and drop
 //!
-//! A conversation is dragged onto a folder to refile it. `Unfiled` is a real
+//! A conversation is dragged onto a folder to refile it. `(ungrouped)` is a real
 //! drop target rather than a label, because taking something *out* of a
 //! folder has to be as easy as putting it in — otherwise the only way back
 //! is the composer's picker, on a session you may not have open.
 //!
-//! Folders themselves are not draggable here. Moving a folder is a rename
-//! (`psicom/chat` → `work/chat`), it takes every descendant with it, and it
-//! is destructive enough to want a form and a confirmation rather than a
-//! gesture that can be made by accident on the way to a scrollbar. The
-//! inspector's project form does it.
+//! Folders themselves are not draggable here. Double-clicking a folder edits
+//! its last path segment in place; moving it between parents remains in the
+//! inspector. Double-clicking a conversation edits its title in the same row.
 //!
 //! m-js has no `.prevent` event modifier, so the handlers call
 //! `$event.preventDefault()` themselves — without it on `dragover` the drop
@@ -101,11 +99,15 @@ pub const CSS: &str = r#"
   flex: 1 1 auto; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ptree-count {
-  flex: 0 0 auto;
-  font-size: 11px;
-  color: var(--gray-dim);
-  font-variant-numeric: tabular-nums;
+:is(#sb, #home) input.ptree-edit {
+  flex: 1 1 auto; min-width: 0; width: 0;
+  box-sizing: border-box; min-height: 0; height: 18px;
+  padding: 0; border: 0; border-radius: 0;
+  font: inherit; line-height: inherit; color: inherit;
+  background: transparent; user-select: text;
+}
+:is(#sb, #home) input.ptree-edit:focus {
+  outline: none; box-shadow: inset 0 -1px var(--gray-dim);
 }
 /* The conversation's age: pinned to the row's right edge. The name keeps
    `flex: 1 1 auto` plus ellipsis, so it takes exactly the space between
@@ -115,6 +117,15 @@ pub const CSS: &str = r#"
   font-size: 11px;
   color: var(--gray-dim);
   font-variant-numeric: tabular-nums;
+}
+/* Narrow shell (see home.rs breakpoints): the row is a centred glyph. Rows
+   still toggle on click; the caret is just not given room. The row `title`
+   still names the folder or session on hover. */
+@media (max-width: 900px) {
+  .ptree-row { justify-content: center; padding: 4px 0; }
+  .ptree-row .ptree-caret,
+  .ptree-row .ptree-name,
+  .ptree-row .ptree-time { display: none; }
 }
 
 /* A conversation reads lighter than the folder holding it: the folders are
@@ -196,10 +207,10 @@ fn row(st: &str, on_open: &str) -> Node {
             ),
         )
         .bind("title", "r.name")
-        // Only conversations move. A folder is moved by renaming it, which
-        // is a form, not a gesture.
+        // Only conversations move; folders can be moved in the inspector.
         .bind("draggable", "(r.kind === 'session' ? 'true' : 'false')")
         .on("click", &click)
+        .on("dblclick", &format!("r.kind !== 'unfiled' && $store.{STORE}.edit(r.key, r.label)"))
         .on("dragstart", &format!("$store.{STORE}.dragStart(r.id)"))
         .on("dragend", &format!("$store.{STORE}.dragEnd()"))
         // Without `preventDefault` on dragover the browser never fires
@@ -222,7 +233,21 @@ fn row(st: &str, on_open: &str) -> Node {
         .kids(vec![
             m("i").class("ph ph-caret-right ptree-caret"),
             Node::icon_dyn("r.icon").class("ph ptree-icon"),
-            m("span").class("ptree-name").text("r.label"),
+            m("span").class("ptree-name")
+                .show(&format!("$store.{STORE}.editing !== r.key"))
+                .text("r.label"),
+            m("input")
+                .class("ptree-edit")
+                .attr("type", "text")
+                .attr("aria-label", "Edit name")
+                .iff(&format!("$store.{STORE}.editing === r.key"))
+                .model(&format!("$store.{STORE}.editDraft"))
+                .init("$el.focus(); $el.select()")
+                .on("click.stop", "")
+                .on("dblclick.stop", "")
+                .on("keydown.enter", &format!("$event.preventDefault(); $store.{STORE}.editing === r.key && ({st}.renameTreeRow(r.kind, r.name, r.id, $el.value), $store.{STORE}.finish())"))
+                .on("keydown.escape", &format!("$store.{STORE}.finish()"))
+                .on("focusout", &format!("$store.{STORE}.editing === r.key && ({st}.renameTreeRow(r.kind, r.name, r.id, $el.value), $store.{STORE}.finish())")),
             // The conversation's state, immediately left of its age: the
             // shared `uiSessionState` unit, so a tree row wears the same
             // symbol the tab strip and the agents rail wear. Folders have no
@@ -237,10 +262,6 @@ fn row(st: &str, on_open: &str) -> Node {
                 .class("ptree-time relative-timestamp")
                 .show("r.created")
                 .text(&format!("{st}.relTime(r.created)")),
-            m("span")
-                .class("ptree-count")
-                .show("r.count")
-                .text("r.count"),
         ])
 }
 
@@ -280,7 +301,7 @@ fn row_obj(kind: &str, key: &str, depth: usize) -> JsValue {
 /// `rows(projects, sessions)` — the tree, flattened, honouring collapse.
 ///
 /// Folders first in path order, each followed by the conversations filed
-/// directly in it, then `Unfiled` last. A collapsed folder suppresses its
+/// directly in it, then `(ungrouped)` last. A collapsed folder suppresses its
 /// whole subtree, which is why this is one pass with a prefix check rather
 /// than a per-folder recursion.
 fn rows(_this: JsValue, args: js_sys::Array) -> JsValue {
@@ -316,8 +337,7 @@ fn rows(_this: JsValue, args: js_sys::Array) -> JsValue {
         let depth = name.matches('/').count();
         let shut = is_collapsed(&name);
         let label = name.rsplit('/').next().unwrap_or(&name).to_string();
-        // Direct members only: the children are drawn beneath, and counting
-        // them here would show every conversation twice on the way up.
+        // Direct members determine whether this folder is a leaf.
         let mut n = 0usize;
         for s in sessions.iter() {
             if session_project(&s) == name {
@@ -335,7 +355,6 @@ fn rows(_this: JsValue, args: js_sys::Array) -> JsValue {
         js::set_str(&r, "drop", &name);
         js::set_str(&r, "id", "");
         js::set_str(&r, "icon", if shut { "folder" } else { "folder-open" });
-        js::set_num(&r, "count", n as f64);
         js::set_bool(&r, "open", !shut);
         js::set_bool(&r, "leaf", n == 0 && !has_child_folder);
         out.push(&r);
@@ -351,7 +370,7 @@ fn rows(_this: JsValue, args: js_sys::Array) -> JsValue {
         }
     }
 
-    // Unfiled: a drop target, not a project. Its `drop` is the empty string,
+    // Ungrouped: a drop target, not a project. Its `drop` is the empty string,
     // which is what the server reads as "unfile this".
     let loose: Vec<JsValue> = sessions
         .iter()
@@ -360,12 +379,11 @@ fn rows(_this: JsValue, args: js_sys::Array) -> JsValue {
     if !loose.is_empty() {
         let shut = is_collapsed("");
         let r = row_obj("unfiled", "p:__unfiled", 0);
-        js::set_str(&r, "name", "Unfiled");
-        js::set_str(&r, "label", "Unfiled");
+        js::set_str(&r, "name", "(ungrouped)");
+        js::set_str(&r, "label", "(ungrouped)");
         js::set_str(&r, "drop", "");
         js::set_str(&r, "id", "");
         js::set_str(&r, "icon", "tray");
-        js::set_num(&r, "count", loose.len() as f64);
         js::set_bool(&r, "open", !shut);
         js::set_bool(&r, "leaf", false);
         out.push(&r);
@@ -406,7 +424,6 @@ fn session_row(s: &JsValue, depth: usize) -> JsValue {
     if !turns.is_undefined() && !turns.is_null() {
         js::set_num(&r, "turns", turns.as_f64().unwrap_or(0.0));
     }
-    js::set_num(&r, "count", 0.0);
     js::set_bool(&r, "open", false);
     js::set_bool(&r, "leaf", true);
     r
@@ -433,6 +450,20 @@ fn toggle(_this: JsValue, args: js_sys::Array) -> JsValue {
         next.push(&JsValue::from_str(&name));
     }
     js::set(&st, "collapsed", &next.into());
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+fn edit(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let st = mjs::store_ref(STORE);
+    js::set_str(&st, "editDraft", &js::arg_str(&args, 1));
+    js::set_str(&st, "editing", &js::arg_str(&args, 0));
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+fn finish(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    js::set_str(&mjs::store_ref(STORE), "editing", "");
     mjs::redraw();
     JsValue::UNDEFINED
 }
@@ -498,7 +529,7 @@ pub fn demo() -> Node {
     let st = crate::components::samples::EXPR;
     m("div").class("ptree-demo").child(tree(
         st,
-        &format!("{st}.openSession({{}})"),
+        &format!("{st}.previewSession({{}})"),
         &format!("{st}.createTarget('project')"),
     ))
 }
@@ -507,12 +538,16 @@ pub fn register() {
     css::inject("project-tree", CSS);
     let mut d = Def::new().named("store ptree");
     d.val("collapsed", &js_sys::Array::new().into())
+        .str("editing", "")
+        .str("editDraft", "")
         .str("dragId", "")
-        // Not `""`: the empty string is a real drop target (Unfiled), so
+        // Not `""`: the empty string is a real drop target ((ungrouped)), so
         // "nothing is lit" needs a value no folder can have.
         .str("dropName", "\u{0}")
         .method("rows", rows)
         .method("toggle", toggle)
+        .method("edit", edit)
+        .method("finish", finish)
         .method("dragStart", drag_start)
         .method("dragEnd", drag_end)
         .method("over", over)

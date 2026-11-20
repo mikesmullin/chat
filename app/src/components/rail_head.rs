@@ -36,6 +36,14 @@ pub const CSS: &str = r#"
 .rail-add:hover { color: var(--accent); background: var(--panel-2); }
 
 .rail-head-demo { display: flex; flex-direction: column; gap: 18px; width: 264px; }
+
+/* Narrow shell (see home.rs breakpoints): the rail is a 60px icon strip, so
+   the section title goes and the add button centres. */
+@media (max-width: 900px) {
+  .rail-title { display: none; }
+  .rail-head { justify-content: center; }
+  .rail-head .rail-add { margin-left: 0; }
+}
 "#;
 
 /// The add button on its own.

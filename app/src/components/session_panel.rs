@@ -16,7 +16,7 @@
 
 use rustex1_kit::h::{m, Node};
 
-use crate::components::{composer, roster, session, thread};
+use crate::components::{composer, history_tree, roster, session, thread};
 use crate::css;
 
 /// The live app's store — what `/` mounts the panel against.
@@ -114,18 +114,17 @@ pub fn panel(st: &str) -> Node {
                 // the next turn does, so both belong above the transcript
                 // rather than in a menu.
                 roster::roster(st),
-                roster::branches(st),
-                thread::memory_bar(st),
-                // Flat or threaded. Two templates rather than one with
-                // conditional children: the two lists are keyed differently
-                // (message ids vs tree coordinates), and sharing one `x-for`
-                // would make the diff re-key every row on the switch.
+                m("div").show(&format!("!{st}.treeOpen")).child(thread::memory_bar(st)),
+                // Without summaries, the transcript retains the evidence and
+                // streaming rows that are not part of the memory tree. Once
+                // compacted, the tree presents the summaries and their leaves.
                 m("div")
-                    .show(&format!("!{st}.threadView"))
+                    .show(&format!("!{st}.treeOpen && !{st}.compacted"))
                     .child(session::messages(st)),
                 m("div")
-                    .show(&format!("{st}.threadView"))
+                    .show(&format!("!{st}.treeOpen && {st}.compacted"))
                     .child(session::messages_threaded(st)),
+                m("div").show(&format!("{st}.treeOpen")).class("history-tree-wrap").child(history_tree::tree(st)),
                 composer::panel(st),
             ]),
         )

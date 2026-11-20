@@ -109,6 +109,13 @@ fn open_session_by_id(id: &str) {
         // attribution map is ready before the first row renders.
         store_roster(&s, &js_sys::Array::from(&js::get(&v, "participants")));
         js::set_str(&s, "cursor", &js::get_str(&v, "cursor"));
+        // A user's selection now lands: seed and open the Edit Session form
+        // — only now, since `session` and `others` are the ones that match
+        // the session being looked at.
+        if js::get_bool(&s, "openEditorOnSelect") {
+            js::set_bool(&s, "openEditorOnSelect", false);
+            open_session_editor(JsValue::UNDEFINED, js_sys::Array::new());
+        }
         mjs::redraw();
         // The tree and the memory view are separate reads: neither is needed
         // to draw the transcript, and asking for both up front would make
@@ -170,6 +177,9 @@ fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     clear_stream(&s);
     pin_to_bottom();
     mjs::redraw();
+    // This is a user's own selection: when the meta lands, the inspector
+    // follows it with the Edit Session form.
+    js::set_bool(&s, "openEditorOnSelect", true);
     open_session_by_id(&id);
     JsValue::UNDEFINED
 }
@@ -221,6 +231,9 @@ fn new_session(_this: JsValue, _args: js_sys::Array) -> JsValue {
             clear_roster(&s);
             // …and then read the real one back, so the new session's state
             // comes from the server rather than from what we assumed.
+            // A newly created conversation deserves its form: the plus is
+            // what just opened it, so the inspector does too.
+            js::set_bool(&s, "openEditorOnSelect", true);
             open_session_by_id(&id);
         }
         mjs::redraw();
@@ -784,6 +797,13 @@ pub fn register() {
         .val("messages", &js_sys::Array::new().into())
         .val("session", &js::obj().into())
         .str("activeId", "")
+        // Set when a *user* just picked a session (tree row, tab, the new-
+        // session plus, or the next tab after one closes), and consumed by
+        // `open_session_by_id` so the inspector follows the selection only
+        // after that session's meta has arrived. Reconcile reloads (a turn
+        // finishing, an allowlist save) take the same fetch path but never
+        // set it, and must not re-open the editor mid-reading.
+        .bool("openEditorOnSelect", false)
         // ── the composer's target row ─────────────────────────────────
         // Where this session works: which sandbox, which folder it is filed
         // under, which checkout gets mounted. Empty lists until the pickers
@@ -1284,6 +1304,9 @@ fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
             js::set_str(&s, "activeId", &next);
             js::set_bool(&s, "compacted", false);
             js::set(&s, "threads", &js_sys::Array::new().into());
+            // Falling back to the next tab is still a selection: the
+            // inspector follows it the way a tree click would.
+            js::set_bool(&s, "openEditorOnSelect", true);
             open_session_by_id(&next);
         } else {
             js::set_str(&s, "activeId", "");
@@ -2073,14 +2096,30 @@ fn open_session_editor(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let live = mjs::store_ref(STORE);
     let draft = mjs::store_ref("sessionDraft");
     let meta = js::get(&live, "session");
-    for (draft_key, meta_key) in [
-        ("title", "title"),
-        ("purpose", "purpose"),
-        ("notes", "notes"),
-        ("routing", "routing"),
-    ] {
+    // `title` is seeded on its own: sessions made without a name carry no
+    // stored one, and the tree/tab bar then show the server's display
+    // fallback (`title || agent || id`). The form should match the name the
+    // user sees on the row, not an empty box — and typing a real name in
+    // `save()` persists it, which is exactly what renaming is.
+    let mut title = js::get_str(&meta, "title");
+    if title.is_empty() {
+        // The list row carries the server's display name for a title-less
+        // session; on a fresh `+` the list may not have refetched yet, so
+        // the id is the last resort — the server's own fallback chain is
+        // `title || agent || id`, so this never misleads.
+        let row_id = js::get_str(&meta, "id");
+        for r in js_sys::Array::from(&js::get(&live, "sessions")).iter() {
+            if js::get_str(&r, "id") == row_id {
+                title = js::get_str(&r, "title");
+                break;
+            }
+        }
+        if title.is_empty() { title = row_id; }
+    }
+    for (draft_key, meta_key) in [("purpose", "purpose"), ("notes", "notes"), ("routing", "routing")] {
         js::set_str(&draft, draft_key, &js::get_str(&meta, meta_key));
     }
+    js::set_str(&draft, "title", &title);
     // A missing routing never leaves the switch without a side.
     if js::get_str(&draft, "routing").is_empty() {
         js::set_str(&draft, "routing", "everyone");

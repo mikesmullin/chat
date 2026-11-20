@@ -118,10 +118,6 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .ae-error { color: var(--danger, #d9534f); font-size: 11px; line-height: 1.5; }
 :is(#sb, #home) .ae-saved { color: var(--ok, #4f9d69); font-size: 11px; line-height: 1.5; }
 
-/* what the inspector says when nothing is selected */
-:is(#sb, #home) .inspector-empty {
-  font-size: 12px; color: var(--gray-dim); line-height: 1.6; padding: 4px 2px;
-}
 "#;
 
 const ST: &str = "$store.agents";
@@ -428,16 +424,6 @@ pub fn settings_panel() -> Node {
                     ]),
             ),
         ])
-}
-
-/// What the inspector shows with nothing selected.
-pub fn inspector_empty() -> Node {
-    m("p")
-        .class("inspector-empty")
-        .show(&format!("!{ST}.open && !$store.settings.open"))
-        .child(lit(
-            "Nothing selected. Pick an agent from the rail to edit it, or use + to define one.",
-        ))
 }
 
 pub fn register() {

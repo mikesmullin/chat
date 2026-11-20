@@ -64,9 +64,9 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .thread-text.unbuilt { color: var(--gray-dim); font-style: italic; }
 :is(#sb, #home) .thread-spinner { font-size: 11px; color: var(--gray-dim); }
 
-/* the view switch and the compact action */
+/* the compact action */
 :is(#sb, #home) .memory-bar {
-  display: flex; gap: 8px; align-items: center;
+  display: flex; justify-content: flex-end; align-items: center;
   padding: 6px 10px; margin-bottom: 8px;
   font-size: 11px; color: var(--gray-dim);
 }
@@ -77,31 +77,14 @@ pub const CSS: &str = r#"
   font: inherit; cursor: pointer; line-height: 18px;
 }
 :is(#sb, #home) .memory-bar button:hover { color: var(--fg); }
-:is(#sb, #home) .memory-bar button.on { color: var(--accent); }
-:is(#sb, #home) .memory-bar .spacer { flex: 1; }
 "#;
 
-/// The bar above the transcript: how many messages the tree covers, whether
-/// it is threaded, and the compact action.
+/// The compact action above the transcript.
 pub fn memory_bar(st: &str) -> Node {
     m("div")
         .class("memory-bar")
         .show(&format!("{st}.activeId"))
         .kids(vec![
-            m("button")
-                .bind("class", &format!("({st}.threadView ? 'on' : '')"))
-                .on("click", &format!("{st}.toggleThreadView()"))
-                .attr("title", "Flat transcript or threaded history")
-                .kids(vec![
-                    Node::icon("tree-structure").class("ph ph-tree-structure"),
-                    m("span").text(&format!(
-                        "({st}.threadView ? 'Threaded' : 'Flat')"
-                    )),
-                ]),
-            m("span")
-                .show(&format!("{st}.memCount"))
-                .text(&format!("{st}.memCount + ' messages'")),
-            m("span").class("spacer"),
             // Compaction spends model calls and re-shapes what the reader is
             // looking at, so it is asked for, never done underneath them.
             m("button")

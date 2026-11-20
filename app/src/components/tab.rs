@@ -126,6 +126,7 @@ const CSS: &str = r#"
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.tab.is-preview .ui-tab-title { font-style: italic; }
 /* the close button: bare glyph, inherits the tab's ink, indigo hover */
 .tab-x {
   flex: 0 0 auto;
@@ -259,8 +260,9 @@ pub fn tab_bar(st: &str) -> Node {
             .for_each(&format!("s in {st}.tabs"))
             .key("s.id")
             .attr("class", "tab")
-            .bind("class", &format!("{{ active: s.id === {st}.activeId }}"))
+            .bind("class", &format!("{{ active: s.id === {st}.activeId, 'is-preview': s.id === {st}.previewId }}"))
             .on("click", &format!("{st}.openSession(s.id)"))
+            .on("dblclick", &format!("{st}.pinTab(s.id)"))
             .bind("title", "s.title || s.id")
             .kids(vec![
                 Node::host_bound(

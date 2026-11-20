@@ -1,6 +1,7 @@
 {
   "name": "chat",
   "port": 3020,
+  "host": "0.0.0.0",
   "app": {
     "package": "chat-app",
     "lib": "chat_app",
