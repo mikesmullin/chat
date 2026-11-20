@@ -7,7 +7,7 @@
 
 use rustex1_kit::h::{m, Node};
 
-use crate::components::presence;
+use crate::components::{notification_toggle, presence};
 use crate::css;
 
 pub const CSS: &str = r#"
@@ -24,7 +24,7 @@ pub const CSS: &str = r#"
    position is what makes this seven and not six. */
 :is(#sb, #home) .roster .presence-seat:nth-child(n+7) { display: none; }
 /* The cluster sits at the row right edge, where the mode word used to be. */
-:is(#sb, #home) .roster .presence { margin-left: auto; }
+:is(#sb, #home) .roster .notify-toggle { margin-left: auto; }
 "#;
 
 /// The cluster, right-aligned where the mode word used to be.
@@ -37,6 +37,7 @@ pub fn roster(st: &str) -> Node {
     m("div")
         .class("roster")
         .show(&format!("{st}.activeId"))
+        .child(notification_toggle::button(st))
         .child(
             presence::row(
                 presence::seats(vec![

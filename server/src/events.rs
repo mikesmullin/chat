@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Default)]
 struct Snapshot {
@@ -19,6 +19,7 @@ struct Turn {
     prompt: String,
     rows: Vec<Value>,
     completed: Option<Instant>,
+    completed_at_ms: Option<u64>,
 }
 
 struct Feed {
@@ -47,12 +48,12 @@ fn publish(index: usize, value: Value) {
 
 /// The journal belongs to the server, not to the originating HTTP socket.
 pub fn begin_turn(session_id: &str, baseline: Vec<Value>, prompt: String) -> u64 {
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    static NEXT: OnceLock<AtomicU64> = OnceLock::new();
+    let id = NEXT.get_or_init(|| AtomicU64::new(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64)).fetch_add(1, Ordering::Relaxed);
     let f = feed();
     let mut s = f.snapshot.lock().unwrap();
     s.turns.retain(|_, t| t.completed.is_none_or(|at| at.elapsed() < Duration::from_secs(120)));
-    s.turns.insert(id, Turn { session_id: session_id.to_string(), baseline, prompt, rows: Vec::new(), completed: None });
+    s.turns.insert(id, Turn { session_id: session_id.to_string(), baseline, prompt, rows: Vec::new(), completed: None, completed_at_ms: None });
     s.turn_version += 1;
     f.changed.notify_all();
     id
@@ -63,7 +64,10 @@ pub fn turn_row(id: u64, row: &Value) {
     let mut s = f.snapshot.lock().unwrap();
     if let Some(turn) = s.turns.get_mut(&id) {
         turn.rows.push(row.clone());
-        if row.get("type").and_then(Value::as_str) == Some("done") { turn.completed = Some(Instant::now()); }
+        if row.get("type").and_then(Value::as_str) == Some("done") {
+            turn.completed = Some(Instant::now());
+            turn.completed_at_ms = Some(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64);
+        }
         s.turn_version += 1;
         f.changed.notify_all();
     }
@@ -76,6 +80,7 @@ pub fn end_turn(id: u64) {
         if turn.completed.is_none() {
             turn.rows.push(json!({"type":"done", "ok":false, "error":"Turn ended unexpectedly", "sessionId":turn.session_id}));
             turn.completed = Some(Instant::now());
+            turn.completed_at_ms = Some(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64);
             s.turn_version += 1;
             f.changed.notify_all();
         }
@@ -244,6 +249,12 @@ pub fn stream(out: &mut Stream<'_>) {
                         "baseline":turn.baseline, "prompt":turn.prompt, "rows":turn.rows});
                     frames.push(format!("event: turn-snapshot\ndata: {data}\n\n"));
                 }
+                if initial {
+                    if let Some(at) = turn.completed_at_ms {
+                        let data = json!({"turnId":id.to_string(), "sessionId":turn.session_id, "completedAt":at});
+                        frames.push(format!("event: turn-finished\ndata: {data}\n\n"));
+                    }
+                }
                 // Completed turns that predate this connection come from the
                 // persisted transcript, including after later feed wakes.
                 turns_seen.insert(*id, turn.rows.len());
@@ -305,6 +316,10 @@ mod tests {
         turn_row(id, &json!({"type":"done"}));
         let done = read_until(&mut reconnected, "event: turn-event");
         assert!(done.contains("done"));
+        let mut later = connect();
+        let finished = read_until(&mut later, "event: turn-finished");
+        assert!(finished.contains("test-reconnect-session"));
+        assert!(finished.contains("completedAt"));
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub mod markdown;
 pub mod label;
 pub mod name_tag;
 pub mod nav_rail;
+pub mod notification_toggle;
 pub mod perf_badge;
 pub mod picker;
 pub mod pie_ring_graph;
@@ -75,6 +76,7 @@ pub fn register() {
     demo::register();
     fold_card::register();
     name_tag::register();
+    notification_toggle::register();
     project_tree::register();
     prompt_card::register();
     counter::register();

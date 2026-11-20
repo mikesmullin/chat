@@ -88,6 +88,7 @@ pub fn start() {
         "approvals-delta",
         "turn-snapshot",
         "turn-event",
+        "turn-finished",
     ] {
         let token = lifecycle::token();
         let callback = Closure::wrap(Box::new(move |event: JsValue| {
@@ -110,6 +111,8 @@ pub fn start() {
                     "approvals-delta" => approval_delta(&value),
                     "turn-snapshot" => crate::components::live::receive_turn_snapshot(value),
                     "turn-event" => crate::components::live::receive_turn_event(value),
+                    "turn-finished" => crate::components::notification_toggle::completed(
+                        &js::get_str(&value, "sessionId"), &js::get_str(&value, "turnId"), js::get(&value, "completedAt").as_f64()),
                     _ => {}
                 }
             }

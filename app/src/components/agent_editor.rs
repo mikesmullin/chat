@@ -172,12 +172,6 @@ pub fn agent_editor() -> Node {
                     .text(&format!(
                         "({ST}.creating ? 'New agent' : ({ST}.draft.name || 'Agent'))"
                     )),
-                m("button")
-                    .class("ae-btn")
-                    .attr("type", "button")
-                    .attr("title", "Close")
-                    .on("click", &format!("{ST}.close()"))
-                    .child(Node::icon("x").class("ph ph-x")),
             ]),
 
             field("Name", "the @handle", &format!("{ST}.draft.name"), "scout", 0),
@@ -381,12 +375,6 @@ pub fn settings_panel() -> Node {
             m("div").class("agent-editor-head").kids(vec![
                 Node::icon("gear").class("ph ph-gear"),
                 m("span").class("agent-editor-title").child(lit("Settings")),
-                m("button")
-                    .class("ae-btn")
-                    .attr("type", "button")
-                    .attr("title", "Close")
-                    .on("click", &format!("{st}.close()"))
-                    .child(Node::icon("x").class("ph ph-x")),
             ]),
             m("div").class("ae-field").kids(vec![
                 m("label").class("ae-label").kids(vec![

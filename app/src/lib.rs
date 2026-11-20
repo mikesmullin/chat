@@ -41,6 +41,8 @@ impl App for Chat {
     fn kit_dev_telemetry(&self) -> bool { false }
 
     fn started(&self, _rt: &mut Runtime) {
+        components::tab::start();
+        components::notification_toggle::start();
         components::live::load_models();
         events::start();
     }

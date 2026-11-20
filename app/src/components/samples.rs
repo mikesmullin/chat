@@ -663,6 +663,23 @@ fn icon_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     })
 }
 
+/// The bell flips, because being clickable is the point of showing it — but
+/// it writes to the guide's own store, so nothing is persisted and no real
+/// notification is armed.
+fn toggle_notifications(this: JsValue, _args: js_sys::Array) -> JsValue {
+    js::set_bool(&this, "notifyEnabled", !js::get_bool(&this, "notifyEnabled"));
+    JsValue::UNDEFINED
+}
+
+fn mark_session_read(this: JsValue, args: js_sys::Array) -> JsValue {
+    let id = js::arg_str(&args, 0);
+    let old = js_sys::Array::from(&js::get(&this, "unreadSessions"));
+    let next = js_sys::Array::new();
+    for row in old.iter() { if row.as_string().as_deref() != Some(&id) { next.push(&row); } }
+    if old.length() != next.length() { js::set(&this, "unreadSessions", &next.into()); }
+    JsValue::UNDEFINED
+}
+
 /// Everything the guide has no business doing: no turn to send, no request to
 /// stop, nothing to persist. A no-op rather than an omission, because a
 /// missing method is a template error, not a quiet nothing — and a guide that
@@ -737,6 +754,8 @@ pub fn register() {
         .str("worktreeId", "")
         .str("branchId", "br-chat-main")
         .str("activeId", "samples")
+        .bool("notifyEnabled", false)
+        .val("unreadSessions", &js_sys::Array::new().into())
         .str("model", "muse:opus")
         .val("models", &models())
         .val("sessions", &sample_sessions)
@@ -779,6 +798,8 @@ pub fn register() {
         .method("row", row_of)
         .method("decideApproval", decide_approval)
         .method("openSession", open_session)
+        .method("toggleNotifications", toggle_notifications)
+        .method("markSessionRead", mark_session_read)
         .method("previewSession", preview_session)
         .method("pinTab", pin_tab)
         .method("deleteSession", inert)

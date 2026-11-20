@@ -87,12 +87,6 @@ pub fn panel() -> Node {
                 m("span")
                     .class("agent-editor-title")
                     .text(&format!("{ST}.heading")),
-                m("button")
-                    .class("ae-btn")
-                    .attr("type", "button")
-                    .attr("title", "Close")
-                    .on("click", &format!("{ST}.close()"))
-                    .child(Node::icon("x").class("ph ph-x")),
             ]),
             // ---- the project form ------------------------------------
             m("div")

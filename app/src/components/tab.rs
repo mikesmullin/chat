@@ -20,6 +20,8 @@
 use rustex1_kit::h::{m, Node};
 use rustex1_kit::mjs;
 use rustex1_kit::mjs::Def;
+use rustex1_kit::{js, lifecycle};
+use wasm_bindgen::prelude::*;
 
 use crate::components::session_state;
 use crate::css;
@@ -218,6 +220,27 @@ pub fn register() {
     mjs::component(NAME, &def().finish());
 }
 
+/// Focus events are delegated because m-js does not bind them on these rows.
+pub fn start() {
+    let global = js::global();
+    let doc = js::get(&global, "document");
+    let old = js::get(&global, "__chatTabFocusListener");
+    if !js::is_missing(&old) { js::call(&doc, "removeEventListener", &[JsValue::from_str("focusin"), old]); }
+    let token = lifecycle::token();
+    let callback = Closure::wrap(Box::new(move |event: JsValue| {
+        if !lifecycle::am_current_token(&token) { return; }
+        let target = js::get(&event, "target");
+        if !js::call(&target, "matches", &[JsValue::from_str(".tab[data-session-id]")]).as_bool().unwrap_or(false) { return; }
+        let id = js::call_string(&target, "getAttribute", &[JsValue::from_str("data-session-id")]);
+        let expr = js::call_string(&target, "getAttribute", &[JsValue::from_str("data-tab-store")]);
+        if let Some(name) = expr.strip_prefix("$store.") {
+            js::call(&mjs::store_ref(name), "markSessionRead", &[JsValue::from_str(&id)]);
+        }
+    }) as Box<dyn FnMut(JsValue)>).into_js_value();
+    js::call(&doc, "addEventListener", &[JsValue::from_str("focusin"), callback.clone()]);
+    js::set(&global, "__chatTabFocusListener", &callback);
+}
+
 /// Props (host-provided, with defaults):
 /// - `icon`  — phosphor glyph name; empty string means the robot icon (default "")
 /// - `title` — tab title; a number or text (default "")
@@ -260,8 +283,13 @@ pub fn tab_bar(st: &str) -> Node {
             .for_each(&format!("s in {st}.tabs"))
             .key("s.id")
             .attr("class", "tab")
+            .attr("tabindex", "0")
+            .attr("role", "button")
             .bind("class", &format!("{{ active: s.id === {st}.activeId, 'is-preview': s.id === {st}.previewId }}"))
-            .on("click", &format!("{st}.openSession(s.id)"))
+            .attr("data-tab-store", st)
+            .bind("data-session-id", "s.id")
+            .on("click", &format!("{st}.markSessionRead(s.id); {st}.openSession(s.id)"))
+            .on("keydown.enter", &format!("{st}.markSessionRead(s.id); {st}.openSession(s.id)"))
             .on("dblclick", &format!("{st}.pinTab(s.id)"))
             .bind("title", "s.title || s.id")
             .kids(vec![
