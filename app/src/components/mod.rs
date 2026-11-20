@@ -25,6 +25,7 @@ pub mod picker;
 pub mod pie_ring_graph;
 pub mod project_tree;
 pub mod prompt_card;
+pub mod rail_head;
 pub mod radio_input;
 pub mod range_input;
 pub mod reasoning_card;
@@ -86,6 +87,7 @@ pub fn register() {
     radio_input::register();
     range_input::register();
     reasoning_card::register();
+    rail_head::register();
     settings_menu_item::register();
     reltime::register();
     session::register();

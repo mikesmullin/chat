@@ -49,6 +49,22 @@ pub fn symbol(state: &str) -> Node {
     }
 }
 
+/// The one mapping from a conversation row to a state symbol.
+///
+/// `running` is **working**: a turn is in flight, watch it. A conversation
+/// with no turns yet is **idle** — there is nothing on screen to review, and
+/// a done dot would claim the opposite. Anything else has an answer waiting,
+/// which is what **done** means here: ready to look at, including a turn that
+/// ended in an error.
+///
+/// It takes the row's expression so every caller — the tab strip, the project
+/// tree — reads one rule instead of re-typing it and drifting.
+pub fn tone_of(row: &str) -> String {
+    format!(
+        "({row}.status === 'running' ? 'working' : {row}.turns === 0 ? 'idle' : 'done')"
+    )
+}
+
 /// register the widget + its CSS.
 pub fn register() {
     css::inject(NAME, CSS);

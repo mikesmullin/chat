@@ -987,7 +987,7 @@ fn add_html(msg: &JsValue) {
 ///
 /// Coarse on purpose: the project tree wants a glanceable age, and a value
 /// that changes every second would redraw the list for no reason.
-fn rel_time(_this: JsValue, args: js_sys::Array) -> JsValue {
+pub(crate) fn rel_time(_this: JsValue, args: js_sys::Array) -> JsValue {
     let iso = js::arg_str(&args, 0);
     if iso.is_empty() {
         return JsValue::from_str("");

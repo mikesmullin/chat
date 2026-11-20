@@ -21,6 +21,7 @@ use rustex1_kit::h::{m, Node};
 use rustex1_kit::mjs;
 use rustex1_kit::mjs::Def;
 
+use crate::components::session_state;
 use crate::css;
 
 pub const NAME: &str = "uiTab";
@@ -271,8 +272,9 @@ pub fn tab_bar(st: &str) -> Node {
                         // not the prompt: a title is far too long for a tab,
                         // and the number is what the user counts by.
                         ("title", "(s.ordinal || '?') + ''"),
-                        // running → amber working ring, else a done dot.
-                        ("tone", "(s.status === 'running' ? 'working' : 'done')"),
+                        // The conversation's state, by the one rule the
+                        // project tree uses too.
+                        ("tone", &session_state::tone_of("s")),
                     ],
                 ),
                 m("button")

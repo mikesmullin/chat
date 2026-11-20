@@ -13,30 +13,12 @@
 use rustex1_kit::h::{lit, m, Node};
 
 use crate::components::item_group::item_group;
+use crate::components::rail_head;
 use crate::css;
 
 pub const CSS: &str = r#"
-/* the "agents" menu title: normal weight, dim gray (near #666) */
-.agents-header {
-  font-size: 13px;
-  font-weight: 400;
-  color: var(--gray-dim);
-  margin-bottom: 14px;
-}
-/* …and the live variant, which has a button across from it */
-:is(#sb, #home) .agents-head {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 10px;
-}
-:is(#sb, #home) .agents-head .agents-header { margin-bottom: 0; }
-:is(#sb, #home) .agents-add {
-  width: 22px; height: 22px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 0; border-radius: 6px;
-  background: transparent; color: var(--gray-dim);
-  cursor: pointer; font: inherit; line-height: 1;
-}
-:is(#sb, #home) .agents-add:hover { color: var(--accent); background: var(--panel-2); }
+/* The title row is `rail_head`, shared with the Projects section: one
+   definition of "a section of the left rail", not one per section. */
 
 :is(#sb, #home) .agent-list { display: flex; flex-direction: column; gap: 2px; }
 :is(#sb, #home) .agent-row {
@@ -70,16 +52,10 @@ pub fn agents_menu_live() -> Node {
         // Pull the list once the rail exists.
         .init(&format!("{st}.loadAgents()"))
         .kids(vec![
-            m("div").class("agents-head").kids(vec![
-                m("p").class("agents-header").child(lit("Agents")),
-                m("button")
-                    .class("agents-add")
-                    .attr("type", "button")
-                    .attr("title", "Define a new agent")
-                    .attr("aria-label", "Define a new agent")
-                    .on("click", &format!("{st}.newAgent()"))
-                    .child(Node::icon("plus").class("ph ph-plus")),
-            ]),
+            rail_head::head(
+                "Agents",
+                Some(("Define a new agent", &format!("{st}.newAgent()"))),
+            ),
             m("div").class("agent-list").kids(vec![
                 m("button")
                     .for_each(&format!("a in {st}.agents"))
@@ -119,7 +95,7 @@ pub fn agents_menu() -> Node {
     m("div")
         .class("agents-menu")
         .kids(vec![
-            m("p").class("agents-header").child(lit("Agents")),
+            rail_head::head("Agents", None),
             item_group(
                 "done",
                 "Done",
