@@ -383,6 +383,10 @@ pub fn register(rt: &mut Runtime) {
         route_def("route /storybook/target-form", "Target Form", target_form::demo())
     });
 
+    rt.route("/storybook/sandbox-form", "Sandbox Form", |_| {
+        route_def("route /storybook/sandbox-form", "Sandbox Form", target_form::demo_sandbox())
+    });
+
     // one route per message card, each alone on screen.
     rt.route("/storybook/system-card", "System Card", |_| {
         route_def("route /storybook/system-card", "System Card", system_card::demo())

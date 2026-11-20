@@ -8,8 +8,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Default)]
 struct Snapshot {
-    values: [Option<Value>; 3],
-    versions: [u64; 3],
+    values: [Option<Value>; 4],
+    versions: [u64; 4],
     turns: HashMap<u64, Turn>,
     turn_version: u64,
 }
@@ -87,7 +87,30 @@ pub fn end_turn(id: u64) {
     }
 }
 
+fn sandbox_delta(previous: &Value, current: &Value) -> Value {
+    let mut patch = delta(previous, current, "sandboxes");
+    if let Some(map) = patch.as_object_mut() {
+        map.remove("projectRoot");
+        map.insert("sboxUp".into(), current.get("sboxUp").cloned().unwrap_or(Value::Bool(false)));
+    }
+    patch
+}
+
 pub fn start(state: Arc<State>) {
+    // The sandbox service can be slow or offline; its poll must not block
+    // session updates, approvals, or the event feed.
+    std::thread::spawn(|| {
+        let root = crate::api::project_root();
+        let mut last = json!([]);
+        loop {
+            let up = match crate::sbox::list(&root) {
+                Ok(rows) => { last = rows; true }
+                Err(_) => false,
+            };
+            publish(3, json!({"sandboxes": last, "sboxUp": up}));
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    });
     std::thread::spawn(move || {
         let server = crate::api::angela(state.config.port);
         let mut sessions = Value::Null;
@@ -204,8 +227,8 @@ pub fn stream(out: &mut Stream<'_>) {
         return;
     }
     let f = feed();
-    let mut seen = [0; 3];
-    let mut previous: [Option<Value>; 3] = [None, None, None];
+    let mut seen = [0; 4];
+    let mut previous: [Option<Value>; 4] = [None, None, None, None];
     let mut turns_seen: HashMap<u64, usize> = HashMap::new();
     let mut turn_version = 0;
     let mut initial = true;
@@ -219,7 +242,7 @@ pub fn stream(out: &mut Stream<'_>) {
             guard = g;
         }
         let mut frames = Vec::new();
-        for (i, name) in ["sessions", "models", "approvals"].iter().enumerate() {
+        for (i, name) in ["sessions", "models", "approvals", "sandboxes"].iter().enumerate() {
             if guard.versions[i] != seen[i] {
                 seen[i] = guard.versions[i];
                 if let Some(value) = &guard.values[i] {
@@ -228,6 +251,7 @@ pub fn stream(out: &mut Stream<'_>) {
                             ("sessions-delta", delta(old, value, "sessions"))
                         }
                         (Some(old), "approvals") => ("approvals-delta", approval_delta(old, value)),
+                        (Some(old), "sandboxes") => ("sandboxes-delta", sandbox_delta(old, value)),
                         _ => (*name, value.clone()),
                     };
                     frames.push(format!("event: {event}\ndata: {data}\n\n"));
@@ -333,6 +357,17 @@ mod tests {
         );
         assert_eq!(patch["removed"], json!(["c"]));
         assert_eq!(patch["order"], json!(["b", "a", "d"]));
+    }
+
+    #[test]
+    fn sandbox_delta_only_sends_changed_rows_and_service_health() {
+        let before = json!({"sboxUp":true,"sandboxes":[{"id":"a","state":"starting"},{"id":"b","state":"ready"}]});
+        let after = json!({"sboxUp":false,"sandboxes":[{"id":"a","state":"ready"},{"id":"b","state":"ready"}]});
+        let patch = sandbox_delta(&before, &after);
+        assert_eq!(patch["changed"], json!([{"id":"a","state":"ready"}]));
+        assert_eq!(patch["order"], json!(["a", "b"]));
+        assert_eq!(patch["removed"], json!([]));
+        assert_eq!(patch["sboxUp"], false);
     }
 
     #[test]

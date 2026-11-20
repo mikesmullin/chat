@@ -1509,17 +1509,22 @@ pub(crate) fn load_targets(_this: JsValue, _args: js_sys::Array) -> JsValue {
 fn apply_targets(v: &JsValue) {
     let s = mjs::store_ref(STORE);
     for key in ["sandboxes", "repos", "repoBranches", "worktrees"] {
+        // An unavailable service does not mean the existing sandboxes vanished.
         let list = js::get(v, key);
-        if !list.is_undefined() && !list.is_null() {
+        if key == "sandboxes" && js::get(v, "sboxUp").as_bool() == Some(false)
+            && (js::is_missing(&list) || js_sys::Array::from(&list).length() == 0) { continue; }
+        if !list.is_undefined() && !list.is_null() && !same_json(&js::get(&s, key), &list) {
             js::set(&s, key, &list);
         }
     }
     let up = js::get(v, "sboxUp");
-    if !up.is_undefined() {
-        js::set_bool(&s, "sboxUp", up.as_bool().unwrap_or(false));
+    if let Some(up) = up.as_bool() {
+        if js::get_bool(&s, "sboxUp") != up { js::set_bool(&s, "sboxUp", up); }
     }
-    mjs::redraw();
+    crate::components::target_form::sync_sandbox_status(&s);
 }
+
+pub(crate) fn apply_sandboxes(value: &JsValue) { apply_targets(value); }
 
 /// `saveTarget(action, payload)` — every write behind the three remaining
 /// pickers' Create and Edit actions.
@@ -1530,26 +1535,38 @@ fn apply_targets(v: &JsValue) {
 fn save_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     let action = js::arg_str(&args, 0);
     let payload = args.get(1);
+    let name = js::get_str(&payload, "name");
     let form = mjs::store_ref("tform");
+    let request_id = js::get_num(&form, "requestId");
     js::set_bool(&form, "busy", true);
-    mjs::redraw();
-    api::target_action(&action, &payload, |v| {
+    let callback_action = action.clone();
+    api::target_action(&action, &payload, move |v| {
+        let action = &callback_action;
         let form = mjs::store_ref("tform");
-        js::set_bool(&form, "busy", false);
+        let same_form = js::get_bool(&form, "open") && js::get_num(&form, "requestId") == request_id;
         if js::get(&v, "ok").as_bool().unwrap_or(false) {
-            // Only close on success: a form that vanishes on a failed
-            // create takes the error with it, and the user is left with a
-            // menu that did not change and no idea why.
-            js::set_bool(&form, "open", false);
             apply_targets(&v);
-        } else {
+            if same_form {
+                js::set_bool(&form, "busy", false);
+                if action == "sandbox-add" {
+                    let id = js::get_str(&v, "id");
+                    if id.is_empty() {
+                        js::set_str(&form, "error", "The sandbox service did not return an ID.");
+                    } else {
+                        let state = js::get_str(&v, "state");
+                        crate::components::target_form::sandbox_created(&id, &state, &name, "live");
+                    }
+                } else if action == "sandbox-rename" {
+                    // Keep the editor visible while status continues to update.
+                    js::set_str(&form, "error", "");
+                } else {
+                    js::set_bool(&form, "open", false);
+                }
+            }
+        } else if same_form {
+            js::set_bool(&form, "busy", false);
             let msg = js::get_str(&v, "error");
-            js::set_str(
-                &form,
-                "error",
-                if msg.is_empty() { "that did not work" } else { &msg },
-            );
-            mjs::redraw();
+            js::set_str(&form, "error", if msg.is_empty() { "that did not work" } else { &msg });
         }
     });
     JsValue::UNDEFINED

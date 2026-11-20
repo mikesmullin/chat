@@ -57,7 +57,7 @@ fn request(method: &str, path: &str, body: Option<&Value>) -> Result<Value, Stri
             TcpStream::connect_timeout(&a, CONNECT_TIMEOUT)
                 .map_err(|e| format!("sbox is not reachable at {addr}: {e}"))
         })?;
-    sock.set_read_timeout(Some(READ_TIMEOUT)).ok();
+    sock.set_read_timeout(Some(if method == "GET" { CONNECT_TIMEOUT } else { READ_TIMEOUT })).ok();
     sock.set_write_timeout(Some(CONNECT_TIMEOUT)).ok();
     let mut sock = sock;
 

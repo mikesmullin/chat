@@ -417,6 +417,41 @@ fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+/// The sandbox form behaves like the app without reaching the real service.
+fn save_target_sample(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let action = js::arg_str(&args, 0);
+    let payload = args.get(1);
+    let host = mjs::store_ref(STORE);
+    if action == "sandbox-add" {
+        let name = js::get_str(&payload, "name");
+        let id = "sample-created-sandbox";
+        let row = js::obj();
+        js::set_str(&row, "id", id);
+        js::set_str(&row, "name", &name);
+        js::set_str(&row, "state", "starting");
+        js::set_str(&row, "hint", "starting");
+        js::set_str(&row, "icon", "desktop");
+        let rows = js_sys::Array::from(&js::get(&host, "sandboxes"));
+        rows.push(&row.into());
+        js::set(&host, "sandboxes", &rows.into());
+        crate::components::target_form::sandbox_created(id, "starting", &name, STORE);
+    } else if action == "sandbox-rename" {
+        let id = js::get_str(&payload, "id");
+        for row in js_sys::Array::from(&js::get(&host, "sandboxes")).iter() {
+            if js::get_str(&row, "id") == id { js::set_str(&row, "name", &js::get_str(&payload, "name")); }
+        }
+    } else if action == "sandbox-remove" {
+        let id = js::get_str(&payload, "id");
+        let rows = js_sys::Array::new();
+        for row in js_sys::Array::from(&js::get(&host, "sandboxes")).iter() {
+            if js::get_str(&row, "id") != id { rows.push(&row); }
+        }
+        js::set(&host, "sandboxes", &rows.into());
+        js::set_bool(&mjs::store_ref("tform"), "open", false);
+    }
+    JsValue::UNDEFINED
+}
+
 /// `openSession(id)` — the guide's rail and strip really do switch tabs.
 /// Interactive where the app is interactive, inert where the app would reach
 /// the network: a guide that cannot be clicked teaches half the component.
@@ -842,7 +877,7 @@ pub fn register() {
         .method("loadProjects", inert)
         .method("loadTargets", inert)
         // The guide's form opens and validates; it persists nothing.
-        .method("saveTarget", inert)
+        .method("saveTarget", save_target_sample)
         .method("saveProject", inert)
         .method("renameTreeRow", rename_tree_row)
         .method("pickTarget", pick_target)
