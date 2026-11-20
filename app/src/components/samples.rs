@@ -242,11 +242,25 @@ fn messages() -> JsValue {
 /// the tree draws in its own group at the bottom. One of each, so the guide
 /// exercises a nested folder, a sibling, and the unfiled case rather than
 /// just the happy one.
-const SESSIONS: &[(f64, &str, &str, &str, &str)] = &[
-    (1.0, "samples", "Which model does the config point at?", "ready", "psicom/chat"),
-    (2.0, "s-2", "Migrate the auth service", "running", "psicom/chat"),
-    (3.0, "s-3", "Retry logic refactor", "ready", "psicom/sbox"),
-    (4.0, "s-4", "Scratch: regex for the log parser", "ready", ""),
+/// The guide's conversations.
+///
+/// `turns` and the age are here because the project tree renders both: a
+/// sample missing a field the tree reads is a guide that shows less than the
+/// app does, which is how the two versions of one component drift.
+const SESSIONS: &[(f64, &str, &str, &str, &str, f64, f64)] = &[
+    // ordinal, id, title, status, project, turns, minutes since it started
+    (
+        1.0,
+        "samples",
+        "Which model does the config point at?",
+        "ready",
+        "psicom/chat",
+        6.0,
+        12.0,
+    ),
+    (2.0, "s-2", "Migrate the auth service", "running", "psicom/chat", 3.0, 4.0),
+    (3.0, "s-3", "Retry logic refactor", "ready", "psicom/sbox", 9.0, 45.0),
+    (4.0, "s-4", "Scratch: regex for the log parser", "ready", "", 0.0, 130.0),
 ];
 
 /// The models the guide's picker offers.
@@ -260,8 +274,9 @@ fn models() -> JsValue {
 
 fn sessions() -> JsValue {
     let out = js_sys::Array::new();
-    let now = js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default();
-    for (ordinal, id, title, status, project) in SESSIONS {
+    let now = js_sys::Date::new_0();
+    let iso = |d: &js_sys::Date| d.to_iso_string().as_string().unwrap_or_default();
+    for (ordinal, id, title, status, project, turns, minutes) in SESSIONS {
         let o = js::obj();
         js::set_num(&o, "ordinal", *ordinal);
         js::set_str(&o, "id", id);
@@ -270,7 +285,13 @@ fn sessions() -> JsValue {
         js::set_str(&o, "project", project);
         js::set_str(&o, "agent", "fish");
         js::set_str(&o, "model", "muse:opus");
-        js::set_str(&o, "updatedAt", &now);
+        js::set_num(&o, "turns", *turns);
+        // Started `minutes` ago, so the tree's age reads the way a real one
+        // does rather than every row saying "just now".
+        let created = js_sys::Date::new_0();
+        created.set_time(now.get_time() - minutes * 60_000.0);
+        js::set_str(&o, "createdAt", &iso(&created));
+        js::set_str(&o, "updatedAt", &iso(&now));
         out.push(&o);
     }
     out.into()
@@ -572,7 +593,10 @@ pub fn register() {
         .method("deleteSession", inert)
         .method("closeTab", inert)
         .method("newSession", inert)
-        .method("relTime", crate::components::live::rel_ago)
+        // The same clock *and* the same rendering the app uses: the guide's
+        // project tree is the same component, so its ages must read `12m`,
+        // not `12min ago`. `relAgo` is the prose form, for bylines.
+        .method("relTime", crate::components::live::rel_time)
         .method("toggleCard", toggle_card)
         .method("accentOf", accent_of)
         .method("iconOf", icon_of)
@@ -601,6 +625,8 @@ pub fn register() {
         .method("pickTarget", pick_target)
         .method("editTarget", edit_target)
         .method("createTarget", create_target)
-        .method("persistComposerSettings", inert);
+        .method("persistComposerSettings", inert)
+        // The guide's rail heads have buttons; the guide creates nothing.
+        .method("noop", inert);
     mjs::store(STORE, &d.finish());
 }

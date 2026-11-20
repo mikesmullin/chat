@@ -23,11 +23,15 @@
 //! ```text
 //!   ▾ psicom              2        <- implied: nothing is filed here directly
 //!     ▾ chat              3
-//!         iran war status            <- a conversation, draggable
-//!         set lights blue
+//!         iran war status     ◐ 3m   <- a conversation, draggable
+//!         set lights blue      ● 1d
 //!     ▸ sbox              1        <- collapsed: its children are skipped
 //!   ▾ Unfiled             4        <- not a project; the drop target for "none"
 //! ```
+//!
+//! Each conversation carries the shared `uiSessionState` symbol — `◐` working
+//! (a turn is in flight), `●` done (an answer to review), `○` idle (nothing
+//! said yet) — the same symbol the tab strip wears, then its age.
 //!
 //! ## Drag and drop
 //!
@@ -52,28 +56,14 @@ use rustex1_kit::h::{lit, m, Node};
 use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
+use crate::components::rail_head;
+use crate::components::session_state;
 use crate::css;
 
 const STORE: &str = "ptree";
 
 pub const CSS: &str = r#"
 .project-tree { display: flex; flex-direction: column; }
-.ptree-head {
-  display: flex; align-items: center; gap: 6px;
-  padding: 0 4px 8px;
-  font-size: 11px; font-weight: 600;
-  letter-spacing: .08em; text-transform: uppercase;
-  color: var(--gray-dim);
-}
-.ptree-head .ptree-new {
-  margin-left: auto;
-  width: 22px; height: 22px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 0; border-radius: 6px;
-  background: transparent; color: var(--gray-dim);
-  cursor: pointer;
-}
-.ptree-head .ptree-new:hover { background: var(--panel-2); color: var(--fg); }
 
 .ptree-list { display: flex; flex-direction: column; gap: 1px; }
 
@@ -167,15 +157,7 @@ pub const CSS: &str = r#"
 pub fn tree(st: &str, on_open: &str, on_new: &str) -> Node {
     let rows = format!("$store.{STORE}.rows({st}.projects, {st}.sessions)");
     m("div").class("project-tree").kids(vec![
-        m("div").class("ptree-head").kids(vec![
-            m("span").child(lit("Projects")),
-            m("button")
-                .class("ptree-new")
-                .attr("type", "button")
-                .attr("title", "New project")
-                .on("click", on_new)
-                .child(Node::icon("folder-plus")),
-        ]),
+        rail_head::head("Projects", Some(("New project", on_new))),
         m("div").class("ptree-list").kids(vec![
             row(st, on_open),
             m("p")
@@ -241,6 +223,13 @@ fn row(st: &str, on_open: &str) -> Node {
             m("i").class("ph ph-caret-right ptree-caret"),
             Node::icon_dyn("r.icon").class("ph ptree-icon"),
             m("span").class("ptree-name").text("r.label"),
+            // The conversation's state, immediately left of its age: the
+            // shared `uiSessionState` unit, so a tree row wears the same
+            // symbol the tab strip and the agents rail wear. Folders have no
+            // state of their own, so they render none.
+            Node::host("uiSessionState", &[])
+                .bind("tone", &session_state::tone_of("r"))
+                .iff("r.kind === 'session'"),
             // Sessions only; folders carry no `created`, so the span stays
             // hidden on them. Empty `created` (a session predating the field)
             // is falsy too, which keeps the row's shape unchanged.
@@ -410,6 +399,13 @@ fn session_row(s: &JsValue, depth: usize) -> JsValue {
     // When it was started: `relTime` formats the same `createdAt` field
     // everywhere, so no part of the UI can disagree about an age.
     js::set_str(&r, "created", &js::get_str(s, "createdAt"));
+    // The state symbol reads these two. A row that carries neither renders
+    // the widget's default tone, which looks like every conversation is done.
+    js::set_str(&r, "status", &js::get_str(s, "status"));
+    let turns = js::get(s, "turns");
+    if !turns.is_undefined() && !turns.is_null() {
+        js::set_num(&r, "turns", turns.as_f64().unwrap_or(0.0));
+    }
     js::set_num(&r, "count", 0.0);
     js::set_bool(&r, "open", false);
     js::set_bool(&r, "leaf", true);

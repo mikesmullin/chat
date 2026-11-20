@@ -5,7 +5,7 @@
 //!   * `page_rail(active)` — the live left sidebar used by every storybook
 //!     page; its items link to the other storybook routes.
 //!
-//! Both share the `.sb-rail` / `.rail-head` / `.kicker` / `.nav-list` /
+//! Both share the `.sb-rail` / `.sb-rail-head` / `.kicker` / `.nav-list` /
 //! `.nav-item` classes so the CSS is the contract. Both carry a top-right
 //! layout toggle (`.rail-toggle`); clicking it collapses to a 56px icon column
 //! and back (live rail collapses `#sb`'s grid track; demo collapses its width).
@@ -17,7 +17,7 @@ use rustex1_kit::h::{lit, m, Node};
 /// the fixed catalog of storybook components, depth-first (0 = atomic, most
 /// composite last); ties break alphabetically. The count shown in the rail
 /// is the number of distinct library components the item is built from.
-const ENTRIES: [(&'static str, &'static str, &'static str); 42] = [
+const ENTRIES: [(&'static str, &'static str, &'static str); 43] = [
     ("Approval Card", "/storybook/approval-card", "0"),
     ("Assistant Card", "/storybook/assistant-card", "0"),
     ("Counter", "/storybook/counter", "0"),
@@ -30,6 +30,7 @@ const ENTRIES: [(&'static str, &'static str, &'static str); 42] = [
     ("Left Sidebar Navigation", "/storybook/nav-rail", "0"),
     ("Pie Ring Graph", "/storybook/pie-ring", "0"),
     ("Prompt Card", "/storybook/prompt-card", "0"),
+    ("Rail Head", "/storybook/rail-head", "0"),
     ("Reasoning Card", "/storybook/reasoning-card", "0"),
     ("Relative Timestamp", "/storybook/reltime", "0"),
     ("Settings Menu Item", "/storybook", "0"),
@@ -41,7 +42,6 @@ const ENTRIES: [(&'static str, &'static str, &'static str); 42] = [
     ("User Card", "/storybook/user-card", "0"),
     ("Validation Info", "/storybook/validation", "0"),
     ("Picker", "/storybook/picker", "1"),
-    ("Project Tree", "/storybook/project-tree", "1"),
     ("Radio Input", "/storybook/radio", "1"),
     ("Range Input", "/storybook/range", "1"),
     ("Sandboxes Menu", "/storybook/sandboxes", "1"),
@@ -55,8 +55,9 @@ const ENTRIES: [(&'static str, &'static str, &'static str); 42] = [
     ("Tab", "/storybook/tab", "2"),
     ("Field", "/storybook/field", "3"),
     ("Item Group", "/storybook/item-group", "3"),
+    ("Project Tree", "/storybook/project-tree", "3"),
     ("Tab Bar", "/storybook/tab-bar", "3"),
-    ("Agents Menu", "/storybook/agents", "4"),
+    ("Agents Menu", "/storybook/agents", "5"),
     ("Session", "/storybook/session", "5"),
     ("Session Panel", "/storybook/session-panel", "9"),
     ("New Automation", "/storybook/automation", "10"),
@@ -88,9 +89,8 @@ pub const CSS: &str = r#"
   overflow: hidden;
   position: relative;
 }
-.rail-head { padding: 24px 20px 14px; }
-.rail-head h1 { font-size: 15px; font-weight: 700; letter-spacing: -.015em; line-height: 1.2; color: var(--text); }
-.rail-head p { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.sb-rail-head { padding: 24px 20px 14px; }
+.sb-rail-head h1 { font-size: 15px; font-weight: 700; letter-spacing: -.015em; line-height: 1.2; color: var(--text); }
 .rail-group { margin-top: 18px; padding: 4px 20px 10px; }
 .kicker {
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
@@ -147,7 +147,7 @@ pub const CSS: &str = r#"
 /* collapsed = width shrinks toward the left edge; the icon stays
    centred in the 56px column so it remains clickable. */
 .nav-demo.collapsed { width: 56px; }
-.nav-demo.collapsed .rail-head,
+.nav-demo.collapsed .sb-rail-head,
 .nav-demo.collapsed .rail-group,
 .nav-demo.collapsed .nav-list { display: none; }
 .nav-demo .nav-list { padding-bottom: 8px; }
@@ -179,7 +179,7 @@ pub const CSS: &str = r#"
 .sb-rail.collapsed .rail-toggle .ph { transform: scaleX(-1); }
 /* live rail collapsed: hide the text content so the 56px grid track shows
    only the toggle, centred. (#sb animates the track width; the rail clips.) */
-.sb-rail.collapsed .rail-head,
+.sb-rail.collapsed .sb-rail-head,
 .sb-rail.collapsed .rail-group,
 .sb-rail.collapsed .nav-list { display: none; }
 .sb-rail.collapsed .rail-toggle { right: 13px; }
@@ -201,11 +201,11 @@ fn rail(active: Option<&str>, demo: bool) -> Node {
         .attr("role", if demo { "figure" } else { "navigation" })
         .attr("aria-label", "Design Guide")
         .kids(vec![
-            // toggle is a direct child (not in .rail-head) so it stays visible
+            // toggle is a direct child (not in .sb-rail-head) so it stays visible
             // when the collapsed state hides the head/group/list.
             toggle_button(),
             m("header")
-                .class("rail-head")
+                .class("sb-rail-head")
                 .child(m("h1").child(lit("Design Guide"))),
             m("div").class("rail-group").child(m("span").class("kicker").child(lit("Components"))),
             m("ul")

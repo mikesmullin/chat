@@ -320,7 +320,10 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     js::set_str(&s, "store", store);
     js::set_str(&s, "name", name);
     js::set_str(&s, "original", name);
-    js::set_str(&s, "icon", &format!("ph ph-{icon}"));
+    // The bare Phosphor name: the template hands this to `Node::icon_dyn`,
+    // which supplies the `ph ph-` prefix itself. Writing the prefix here too
+    // yields `ph ph-ph-folder-plus`, which draws nothing.
+    js::set_str(&s, "icon", icon);
     js::set_str(&s, "dangerNote", danger_note(kind));
     js::set_bool(&s, "busy", false);
     js::set_str(&s, "path", "");
@@ -657,7 +660,7 @@ pub fn register() {
         .str("name", "")
         .str("original", "")
         .str("heading", "")
-        .str("icon", "ph ph-folder-plus")
+        .str("icon", "folder-plus")
         .str("note", "")
         .str("mountNote", "")
         .str("dangerNote", "")

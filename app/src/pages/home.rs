@@ -139,7 +139,11 @@ pub const CSS: &str = r#"
 
 /* The projects section opens the rail, with the same gutters as the
    sections below it so they read as one column. */
-.home-projects { padding: 14px 10px 4px; }
+/* The head carries no side padding of its own any more — `rail_head` is the
+   same brick in both sections — so the section owns the whole inset. 14px
+   puts the title where it always was and the rows 6px in, the way the
+   agents list sits. */
+.home-projects { padding: 14px 14px 4px; }
 
 /* The rail is a column so Settings can be pinned under everything else. */
 .home-rail { display: flex; flex-direction: column; }
