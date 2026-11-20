@@ -234,10 +234,10 @@ fn messages() -> JsValue {
     out.into()
 }
 
-/// The sessions the guide's history rail and tab strip show.
+/// The sessions the guide's project tree and tab strip show.
 ///
 /// `(ordinal, id, title, status)` — the same fields the live list carries,
-/// because the rail and the strip are the live ones.
+/// because the tree and the strip are the live ones.
 /// The last field is the folder it is filed under — `""` for unfiled, which
 /// the tree draws in its own group at the bottom. One of each, so the guide
 /// exercises a nested folder, a sibling, and the unfiled case rather than

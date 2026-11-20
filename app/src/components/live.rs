@@ -5,7 +5,7 @@
 //!
 //! | column | reads |
 //! |---|---|
-//! | history rail | `sessions` |
+//! | project tree | `projects` + `sessions` |
 //! | tab bar | `sessions` + `activeId` (one tab per session, per the design) |
 //! | session panel | `messages`, plus the live `streamText` / `streamReasoning` |
 //! | composer | `draft`, `waiting` |
@@ -148,7 +148,7 @@ fn clear_stream(s: &JsValue) {
     js::set_str(s, "streamHandle", "");
 }
 
-/// `openSession(id)` — a click in the history rail or the tab bar.
+/// `openSession(id)` — a click in the project tree or the tab bar.
 fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     if id.is_empty() {
@@ -163,7 +163,7 @@ fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     // Likewise the roster: the fetch below replaces it, and until it lands
     // the old session's agents would be shown as this one's.
     clear_roster(&s);
-    // Opening from the history rail puts it on the strip if it is not there.
+    // Opening from the project tree puts it on the strip if it is not there.
     add_open_id(&id);
     rebuild_tabs(&s);
     js::set_str(&s, "activeId", &id);
@@ -742,7 +742,7 @@ pub fn register() {
     d.val("sessions", &js_sys::Array::new().into())
         .str("model", &saved_model())
         .val("models", &default_models())
-        // `sessions` is every session on disk (the history rail).
+        // `sessions` is every session on disk (the project tree).
         // `tabs` is the subset currently open (the tab strip). Closing a tab
         // must not destroy a session, so these are deliberately distinct.
         .val("tabs", &js_sys::Array::new().into())
@@ -985,7 +985,7 @@ fn add_html(msg: &JsValue) {
 
 /// `relTime(iso)` — "just now", "5m", "3h", "2d".
 ///
-/// Coarse on purpose: the history rail wants a glanceable age, and a value
+/// Coarse on purpose: the project tree wants a glanceable age, and a value
 /// that changes every second would redraw the list for no reason.
 fn rel_time(_this: JsValue, args: js_sys::Array) -> JsValue {
     let iso = js::arg_str(&args, 0);
@@ -1152,8 +1152,8 @@ fn remove_open_id(id: &str) {
     write_open_ids(&ids);
 }
 
-/// `closeTab(id)` — take it off the strip. The session stays on disk and in
-/// the history rail; only the trash button deletes.
+/// `closeTab(id)` — take it off the strip. The session stays on disk in
+/// `sessions`; only a direct `deleteSession` call removes it.
 fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     if id.is_empty() {
