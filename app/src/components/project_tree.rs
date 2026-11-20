@@ -137,6 +137,9 @@ pub const CSS: &str = r#"
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 .ptree-row.is-session.is-active .ptree-name { color: var(--fg); }
+/* Unread: the newest unread wins the eye without a colour, so it stays in
+   the same family as the dimmed conversation text but reads bolder. */
+.ptree-row.is-unread .ptree-name { font-weight: bold; }
 
 /* ---- drag and drop ----------------------------------------------
    The row being dragged fades; the folder under the pointer lights up.
@@ -203,6 +206,7 @@ fn row(st: &str, on_open: &str) -> Node {
                  + (r.leaf ? ' is-leaf' : '') \
                  + (r.open ? ' is-open' : '') \
                  + (r.id && r.id === {st}.activeId ? ' is-active' : '') \
+                 + (r.kind === 'session' && {st}.unreadSessions.includes(r.id) ? ' is-unread' : '') \
                  + ($store.{STORE}.dragId === r.id && r.kind === 'session' ? ' is-dragging' : '') \
                  + ($store.{STORE}.dropName === r.drop && r.kind !== 'session' ? ' is-drop' : ''))"
             ),

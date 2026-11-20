@@ -58,6 +58,20 @@ pub const CSS: &str = r#"
   font-size: 11px;
   line-height: 1.6;
 }
+/* A note that blocks you (bad service, no repos) is an error, not a hint: red
+   ink on a tinted danger surface, with the phosphor error glyph so it reads
+   as "stop" rather than as a quiet aside. */
+:is(#sb, #home) .tform-note.tform-warn {
+  display: flex; align-items: flex-start; gap: 6px;
+  color: var(--danger, #d9534f);
+  border-color: color-mix(in srgb, var(--danger, #d9534f) 30%, transparent);
+  background: color-mix(in srgb, var(--danger, #d9534f) 8%, transparent);
+}
+:is(#sb, #home) .tform-warn .ph {
+  flex: 0 0 auto;
+  font-size: 13px; line-height: 1.6;
+  margin-top: 0.5px;
+}
 /* The path a name implies, shown under the field as it is typed, so the
    folder you are about to make is visible before you make it. */
 :is(#sb, #home) .tform-path {
@@ -189,6 +203,27 @@ pub fn panel() -> Node {
                     m("span").child(lit("create this branch too")),
                 ]),
             // ---- sandbox ----------------------------------------------
+            // The label you give the box is what the sandbox menu reads; the
+            // id sbox-b hands back is a key, not something a person should
+            // squint at every time.
+            // x-if, not x-show: the field remounts on every open, so its
+            // init fires each time and the cursor lands in a fresh input —
+            // the one case where show-then-focus would silently do nothing.
+            m("div")
+                .class("ae-field")
+                .iff(&format!("{ST}.kind === 'sandbox'"))
+                .kids(vec![
+                    m("label").class("ae-label").kids(vec![
+                        m("span").child(lit("Name")),
+                        m("span").class("hint").child(lit("shown in the menu")),
+                    ]),
+                    m("input")
+                        .attr("type", "text")
+                        .attr("spellcheck", "false")
+                        .attr("placeholder", "give the box a name")
+                        .model(&format!("{ST}.name"))
+                        .init("$el.focus()"),
+                ]),
             m("div")
                 .class("ae-field")
                 .show(&format!("{ST}.kind === 'sandbox' && {ST}.mode !== 'edit'"))
@@ -219,9 +254,12 @@ pub fn panel() -> Node {
                 .show(&format!("{ST}.kind === 'sandbox' && {ST}.mode !== 'edit'"))
                 .text(&format!("{ST}.mountNote")),
             m("p")
-                .class("tform-note")
+                .class("tform-note tform-warn")
                 .show(&format!("{ST}.note"))
-                .text(&format!("{ST}.note")),
+                .kids(vec![
+                    Node::icon("warning").class("ph ph-warning tform-warn-icon"),
+                    m("span").text(&format!("{ST}.note")),
+                ]),
             m("p")
                 .class("ae-error")
                 .show(&format!("{ST}.error"))
@@ -230,12 +268,11 @@ pub fn panel() -> Node {
                 m("button")
                     .class("ae-btn primary")
                     .attr("type", "button")
-                    // Only a project can be renamed. A sandbox's id is
-                    // sbox-b's, a repo's identity is its path on disk and a
-                    // worktree's is its branch — none of them has a name
-                    // this form could change, so in edit mode the button is
-                    // not disabled, it is absent.
-                    .show(&format!("({ST}.mode !== 'edit' || {ST}.kind === 'project')"))
+                    // Only a project and a sandbox have a renameable name. A
+                    // repo's identity is its path on disk and a worktree's is
+                    // its branch — none of those can be renamed from here, so
+                    // in edit mode the button is not disabled, it is absent.
+                    .show(&format!("({ST}.mode !== 'edit' || {ST}.kind === 'project' || {ST}.kind === 'sandbox')"))
                     .bind("disabled", &format!("({ST}.busy || !{ST}.ready())"))
                     .on("click", &format!("{ST}.save()"))
                     .text(&format!(
@@ -393,6 +430,21 @@ fn seed_from_host(s: &JsValue, kind: &str, mode: &str, name: &str) {
     }
 
     if kind == "sandbox" {
+        if mode == "edit" {
+            // The id came in; the form should open on the label that row is
+            // already showing, not a raw hex id.
+            let id = name;
+            let sandboxes = js_sys::Array::from(&js::get(&host, "sandboxes"));
+            for item in sandboxes.iter() {
+                if js::get_str(&item, "id") == id {
+                    let display = js::get_str(&item, "name");
+                    if !display.is_empty() {
+                        js::set_str(s, "name", &display);
+                    }
+                    break;
+                }
+            }
+        }
         if !js::get_bool(&host, "sboxUp") {
             js::set_str(
                 s,
@@ -437,7 +489,7 @@ fn repos(_this: JsValue, _args: js_sys::Array) -> JsValue {
 /// `ready()` — is there enough here to submit?
 ///
 /// Per kind, because the required field differs: a repo needs a path, a
-/// branch needs a name and a repo, a sandbox needs nothing at all.
+/// branch needs a name and a repo, a sandbox needs a name.
 fn ready(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let kind = js::get_str(&s, "kind");
@@ -448,7 +500,7 @@ fn ready(_this: JsValue, _args: js_sys::Array) -> JsValue {
             !js::get_str(&s, "name").trim().is_empty()
                 && !js::get_str(&s, "repoId").trim().is_empty()
         }
-        "sandbox" => true,
+        "sandbox" => !js::get_str(&s, "name").trim().is_empty(),
         _ => false,
     };
     JsValue::from_bool(ok)
@@ -573,24 +625,44 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
             ),
             "sandbox" => {
                 let host = mjs::store_ref(&js::get_str(&s, "store"));
-                send(
-                    &s,
-                    "sandbox-add",
-                    &[
-                        ("kind", JsValue::from_str(&js::get_str(&s, "image"))),
-                        ("network", JsValue::from_bool(js::get_bool(&s, "network"))),
-                        // The checkout comes from the composer row, not from
-                        // this form — the row is where that choice lives.
-                        (
-                            "worktreeId",
-                            JsValue::from_str(&js::get_str(&host, "worktreeId")),
-                        ),
-                        (
-                            "branchId",
-                            JsValue::from_str(&js::get_str(&host, "branchId")),
-                        ),
-                    ],
-                )
+                if name.is_empty() {
+                    js::set_str(&s, "error", "give the sandbox a name");
+                    mjs::redraw();
+                    return JsValue::UNDEFINED;
+                }
+                let editing = js::get_str(&s, "mode") == "edit";
+                if editing {
+                    // Rename only the label; sbox-b's id never changes.
+                    send(
+                        &s,
+                        "sandbox-rename",
+                        &[
+                            ("id", JsValue::from_str(&js::get_str(&s, "original"))),
+                            ("name", JsValue::from_str(&name)),
+                        ],
+                    )
+                } else {
+                    send(
+                        &s,
+                        "sandbox-add",
+                        &[
+                            ("name", JsValue::from_str(&name)),
+                            ("kind", JsValue::from_str(&js::get_str(&s, "image"))),
+                            ("network", JsValue::from_bool(js::get_bool(&s, "network"))),
+                            // The checkout comes from the composer row, not
+                            // from this form — the row is where that choice
+                            // lives.
+                            (
+                                "worktreeId",
+                                JsValue::from_str(&js::get_str(&host, "worktreeId")),
+                            ),
+                            (
+                                "branchId",
+                                JsValue::from_str(&js::get_str(&host, "branchId")),
+                            ),
+                        ],
+                    )
+                }
             }
             _ => {}
         }
