@@ -179,7 +179,7 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     if req.path == "/api/targets" && req.method == "GET" {
         let root = project_root();
         let mut body = crate::hostgit::everything(&root);
-        let (sandboxes, up) = match crate::sbox::list() {
+        let (sandboxes, up) = match crate::sbox::list(&root) {
             Ok(v) => (v, true),
             // An empty list and a dead service look identical in a menu, so
             // the flag travels with it and the picker can say which.
@@ -219,7 +219,17 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 &f("worktreeId"),
                 &f("branchId"),
                 flag("network", true),
+                &f("name"),
             ),
+            // Rename only the label (chat-owned); sbox-b's id never changes.
+            "sandbox-rename" => {
+                crate::hostgit::set_sandbox_name(
+                    &root,
+                    &f("id"),
+                    &f("name"),
+                )
+                    .map(|_| serde_json::json!({}))
+            }
             "sandbox-remove" => crate::sbox::destroy(&root, &f("id")),
             other => Err(format!("unknown target action: {other}")),
         };
@@ -234,7 +244,7 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                             map.insert(k, val);
                         }
                     }
-                    if let Ok(list) = crate::sbox::list() {
+                    if let Ok(list) = crate::sbox::list(&root) {
                         map.insert("sandboxes".into(), list);
                     }
                 }

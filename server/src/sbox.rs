@@ -108,11 +108,12 @@ fn request(method: &str, path: &str, body: Option<&Value>) -> Result<Value, Stri
 
 /// The sandbox picker's rows.
 ///
-/// The id is the name: sbox-b's ids (`sandbox2-a76cc5b2`) are what its own
-/// logs and CLI show, so inventing a friendlier label here would mean the UI
-/// and every other view of the same box disagreed. The state is the hint,
-/// because a stopped sandbox is still selectable and you should know.
-pub fn list() -> Result<Value, String> {
+/// The id is sbox-b's; the label is chat's. sbox-b has no idea a human reads
+/// a name, so its own id is the fallback — but the moment chat names a box, the
+/// menu, the trigger and every other view agree on the friendlier label. The
+/// state is the hint, because a stopped sandbox is still selectable and you
+/// should know.
+pub fn list(root: &Path) -> Result<Value, String> {
     let v = request("GET", "/api/orchestration/sandboxes", None)?;
     let rows = v
         .get("sandboxes")
@@ -124,9 +125,11 @@ pub fn list() -> Result<Value, String> {
             .map(|s| {
                 let id = s.get("id").and_then(Value::as_str).unwrap_or_default();
                 let state = s.get("state").and_then(Value::as_str).unwrap_or("unknown");
+                let name = crate::hostgit::sandbox_name(root, &id)
+                    .unwrap_or_else(|| id.to_string());
                 json!({
                     "id": id,
-                    "name": id,
+                    "name": name,
                     "hint": state,
                     "icon": "desktop",
                     "state": state,
@@ -152,6 +155,7 @@ pub fn create(
     worktree_id: &str,
     branch_id: &str,
     network: bool,
+    name: &str,
 ) -> Result<Value, String> {
     let kind = match kind {
         "headed" | "headless" => kind,
@@ -179,6 +183,14 @@ pub fn create(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+
+    // The label is chat's: sbox-b names nothing, and a box that was made on
+    // purpose should be findable by what you called it, not a hex id. The
+    // write is best-effort — the box already exists in sbox-b, and a label
+    // that fails to store degrades to the id rather than failing the create.
+    if !name.trim().is_empty() {
+        let _ = crate::hostgit::set_sandbox_name(root, &id, name);
+    }
 
     // Tie the checkout to the box, so destroying the box removes it. Only a
     // worktree is claimed — a plain repo was here first and is not ours.
@@ -210,5 +222,6 @@ pub fn destroy(root: &Path, id: &str) -> Result<Value, String> {
     let path = format!("/api/orchestration/sandboxes/{id}");
     let out = request("DELETE", &path, None)?;
     crate::hostgit::forget_for_sandbox(root, id);
+    crate::hostgit::forget_sandbox_name(root, id);
     Ok(out)
 }

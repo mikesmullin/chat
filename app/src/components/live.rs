@@ -189,9 +189,10 @@ fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     clear_stream(&s);
     pin_to_bottom();
     mjs::redraw();
-    // This is a user's own selection: when the meta lands, the inspector
-    // follows it with the Edit Session form.
-    js::set_bool(&s, "openEditorOnSelect", true);
+    // Viewing a session (tree preview or tab) is not the same as asking for
+    // the Edit Session form: opening the inspector on every conversation switch
+    // is noise, and the column is contextual, opening only for the explicit
+    // selectors (pencil, agents, settings, target form).
     open_session_by_id(&id);
     JsValue::UNDEFINED
 }
@@ -1380,9 +1381,8 @@ fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
             set_active(&s, &next);
             js::set_bool(&s, "compacted", false);
             js::set(&s, "threads", &js_sys::Array::new().into());
-            // Falling back to the next tab is still a selection: the
-            // inspector follows it the way a tree click would.
-            js::set_bool(&s, "openEditorOnSelect", true);
+            // Falling back to the next tab is a selection, but like every
+            // other view of a session it does not force the inspector open.
             open_session_by_id(&next);
         } else {
             set_active(&s, "");

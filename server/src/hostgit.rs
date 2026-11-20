@@ -624,6 +624,77 @@ pub fn everything(root: &Path) -> Value {
     Value::Object(m)
 }
 
+/// ── sandbox names ───────────────────────────────────────────────────────
+//
+// sbox-b names its boxes by id and knows nothing of a human label, so the
+// label chat shows in the menu is chat's own concern: a `sandboxNames` object
+// in the registry, keyed by the box id. `list()` overlays it, falling back to
+// the id when a box is unlabelled. Per project root, like every other registry
+// entry — which is where the box is mounted, so the label travels with it.
+
+/// The label for a sandbox, if chat has stored one; empty names are ignored.
+pub fn sandbox_name(root: &Path, id: &str) -> Option<String> {
+    if id.trim().is_empty() {
+        return None;
+    }
+    load(root)
+        .get("sandboxNames")
+        .and_then(Value::as_object)
+        .and_then(|m| m.get(id))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|n| !n.trim().is_empty())
+}
+
+/// Store a label for a sandbox id, overwriting any previous one.
+pub fn set_sandbox_name(root: &Path, id: &str, name: &str) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("a sandbox needs a name".into());
+    }
+    let mut reg = load(root);
+    if let Some(obj) = reg.as_object_mut() {
+        let names = obj
+            .entry("sandboxNames".to_string())
+            .or_insert_with(|| json!({}));
+        if let Some(nm) = names.as_object_mut() {
+            nm.insert(id.to_string(), json!(name));
+        }
+    }
+    save(root, &reg)
+}
+
+/// Drop a sandbox's label, on destroy (or whenever the box goes away). Harmless
+/// if the label never existed.
+pub fn forget_sandbox_name(root: &Path, id: &str) {
+    if id.trim().is_empty() {
+        return;
+    }
+    let reg = load(root);
+    // nothing to drop if there is no names table, or this id isn't in it.
+    let Some(Value::Object(names)) = reg.get("sandboxNames") else {
+        return;
+    };
+    if !names.contains_key(id) {
+        return;
+    }
+    // Rebuild the registry without the dead label. Clone-first so the borrow
+    // on `names` can end before we mutate anything.
+    let mut out = reg.clone();
+    if let Some(obj) = out.as_object_mut() {
+        let mut new_names = json!({});
+        if let Some(nm) = new_names.as_object_mut() {
+            for (k, v) in names {
+                if *k != id {
+                    nm.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        obj.insert("sandboxNames".to_string(), new_names);
+    }
+    let _ = save(root, &out);
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
