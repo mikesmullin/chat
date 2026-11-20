@@ -63,7 +63,7 @@ use crate::components::{
     samples,
     dropdown, error_card, fold_card, picker, project_tree, prompt_card, rail_head,
     target_form,
-    field, hint_text, history_tree, item_group, label, nav_rail, perf_badge, radio_input, range_input,
+    field, hint_text, history_tree, item_group, label, nav_rail, notification_toggle, perf_badge, radio_input, range_input,
     presence, reasoning_card, relative_timestamp, sandboxes_menu, session, session_editor, session_panel,
     system_card, tab, tag_input, task_list, text_area, text_input, thinking, toggle_button, tool_call_card, tool_response_card,
     user_card, validation_info,
@@ -458,6 +458,10 @@ pub fn register(rt: &mut Runtime) {
     // the live tab bar: tabs close, the plus adds, click sets the active tab.
     rt.route("/storybook/tab-bar", "Tab Bar", |_| {
         route_def("route /storybook/tab-bar", "Tab Bar", tab::tab_bar(samples::EXPR))
+    });
+
+    rt.route("/storybook/notification-toggle", "Notification Toggle", |_| {
+        route_def("route /storybook/notification-toggle", "Notification Toggle", notification_toggle::button(samples::EXPR))
     });
 
     // who is in the conversation: the cluster, truncated, unseated, empty.

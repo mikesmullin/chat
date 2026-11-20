@@ -427,6 +427,12 @@ thread_local! {
 pub(crate) fn receive_turn_snapshot(snapshot: JsValue) {
     let id = js::get_str(&snapshot, "sessionId");
     if id.is_empty() { return; }
+    let turn_id = js::get_str(&snapshot, "turnId");
+    for row in js_sys::Array::from(&js::get(&snapshot, "rows")).iter() {
+        if js::get_str(&row, "type") == "done" {
+            crate::components::notification_toggle::completed(&id, &turn_id, None);
+        }
+    }
     TURNS.with(|t| { t.borrow_mut().insert(id.clone(), snapshot); });
     let s = mjs::store_ref(STORE);
     if js::get_str(&s, "activeId") == id && !api::chat_stream_active()
@@ -439,6 +445,9 @@ pub(crate) fn receive_turn_event(event: JsValue) {
     let id = js::get_str(&event, "sessionId");
     let turn_id = js::get_str(&event, "turnId");
     let row = js::get(&event, "row");
+    if js::get_str(&row, "type") == "done" {
+        crate::components::notification_toggle::completed(&id, &turn_id, None);
+    }
     let cached = TURNS.with(|t| {
         let map = t.borrow();
         let Some(turn) = map.get(&id) else { return false; };
@@ -873,6 +882,8 @@ pub fn register() {
         .val("messages", &js_sys::Array::new().into())
         .val("session", &js::obj().into())
         .str("activeId", "")
+        .bool("notifyEnabled", crate::components::notification_toggle::enabled())
+        .val("unreadSessions", &crate::components::notification_toggle::unread())
         // Set when a *user* just picked a session (tree row, tab, the new-
         // session plus, or the next tab after one closes), and consumed by
         // `open_session_by_id` so the inspector follows the selection only
@@ -984,6 +995,8 @@ pub fn register() {
         .val("treeRows", &js_sys::Array::new().into())
         .method("loadSessions", load_sessions)
         .method("openSession", open_session)
+        .method("toggleNotifications", crate::components::notification_toggle::toggle)
+        .method("markSessionRead", crate::components::notification_toggle::mark_read)
         .method("previewSession", preview_session)
         .method("pinTab", pin_tab)
         .method("newSession", new_session)
@@ -1211,6 +1224,12 @@ fn set_active(store: &JsValue, id: &str) {
     js::set_str(store, "activeId", id);
     let storage = js::get(&js::global(), "sessionStorage");
     js::call(&storage, "setItem", &[JsValue::from_str(ACTIVE_KEY), JsValue::from_str(id)]);
+    // Looking at a session means it is read: drop anything it had queued
+    // as unread the moment it becomes the one on screen, regardless of how
+    // it got there (tab, tree, preview, new session, restored tab).
+    if !id.is_empty() {
+        crate::components::notification_toggle::clear_session_unread(store, id);
+    }
 }
 
 
@@ -1406,6 +1425,15 @@ fn on_scroll(_this: JsValue, args: js_sys::Array) -> JsValue {
     // Written directly rather than through a redraw: this fires on every
     // scroll frame, and the value only gates the next auto-scroll.
     js::set_bool(&s, "stickBottom", at_bottom);
+    // Reaching the bottom of the transcript means the reader has caught up:
+    // whatever this session had queued as unread is now read. The guard is
+    // cheap (an `all()` over the unread list) and runs only on real scroll.
+    if at_bottom {
+        let active_id = js::get_str(&s, "activeId");
+        if !active_id.is_empty() {
+            crate::components::notification_toggle::clear_session_unread(&s, &active_id);
+        }
+    }
     JsValue::UNDEFINED
 }
 

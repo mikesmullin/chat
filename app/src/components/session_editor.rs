@@ -170,12 +170,6 @@ pub fn panel() -> Node {
         m("div").class("agent-editor-head").kids(vec![
             Node::icon("pencil-simple"),
             m("span").class("agent-editor-title").child(lit("Edit session")),
-            m("button")
-                .class("ae-btn")
-                .attr("type", "button")
-                .attr("title", "Close")
-                .on("click", &format!("{ST}.close()"))
-                .child(Node::icon("x").class("ph ph-x")),
         ]),
         field(
             "Title",
