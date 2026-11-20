@@ -31,8 +31,8 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::components::{
-    agent_editor, agents_menu, project_tree, session_panel, tab,
-    target_form,
+    agent_editor, agents_menu, project_tree, session_editor, session_panel,
+    tab, target_form,
 };
 use crate::css;
 
@@ -172,7 +172,7 @@ fn rail() -> Node {
             // the rail always answers "what am I working in" at a glance.
             m("div").class("home-projects").child(project_tree::tree(
                 LIVE,
-                &format!("{LIVE}.openSession({{}})"),
+                &format!("{LIVE}.previewSession({{}})"),
                 &format!("{LIVE}.createTarget('project')"),
             )),
             m("div").class("home-agents").child(agents_menu::agents_menu_live()),
@@ -237,7 +237,7 @@ fn aside() -> Node {
                 agent_editor::agent_editor(),
                 agent_editor::settings_panel(),
                 target_form::panel(),
-                agent_editor::inspector_empty(),
+                session_editor::panel(),
             ]),
         ])
 }
@@ -250,7 +250,7 @@ pub fn shell() -> Node {
         // Pull the session, project and target lists once the shell exists.
         // `x-init` runs from the deferred lifecycle queue, so the store is
         // safe to write here. `loadSessions` backs the project tree's
-        // "Unfiled" group and the tab strip; the flat history rail is gone.
+        // "(ungrouped)" group and the tab strip; the flat history rail is gone.
         .init("$store.live.loadProjects(); $store.live.loadSessions(); $store.live.loadTargets()")
         .bind(
             "class",

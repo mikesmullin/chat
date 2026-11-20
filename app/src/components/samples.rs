@@ -87,7 +87,7 @@ fn rows() -> Vec<Row> {
             ..BLANK
         },
         Row {
-            id: "ap1",
+            id: "agent-prompt-1",
             kind: "agent_prompt",
             handle: "fish",
             turn: true,
@@ -421,7 +421,163 @@ fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
 /// the network: a guide that cannot be clicked teaches half the component.
 fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
-    js::set_str(&s, "activeId", &js::arg_str(&args, 0));
+    let id = js::arg_str(&args, 0);
+    if js::get_str(&s, "activeId") != id { crate::components::composer::reset_history(&s); }
+    let preview = js::get_str(&s, "previewId");
+    if !preview.is_empty() && preview != id && js::get_str(&s, "activeId") == preview {
+        let tabs = js_sys::Array::new();
+        for row in js_sys::Array::from(&js::get(&s, "tabs")).iter() {
+            if js::get_str(&row, "id") != preview { tabs.push(&row); }
+        }
+        js::set(&s, "tabs", &tabs.into());
+        js::set_str(&s, "previewId", "");
+    }
+    js::set_str(&s, "activeId", &id);
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+fn history_move(_this: JsValue, args: js_sys::Array) -> JsValue {
+    crate::components::composer::history_move(&mjs::store_ref(STORE), args)
+}
+
+fn sample_tree() -> JsValue {
+    let nodes = js_sys::Array::new();
+    for (id, parent, role, content) in [
+        ("zero", "", "", "Session started"),
+        ("one", "zero", "user", "Hi"),
+        ("two", "one", "assistant", "How can I help?"),
+        ("three", "two", "user", "What is the status?"),
+        ("four", "three", "assistant", "Here is the current status."),
+        ("five", "two", "user", "Show me another approach."),
+        ("six", "five", "assistant", "Here is another approach."),
+    ] {
+        let n = js::obj();
+        js::set_str(&n, "id", id); js::set_str(&n, "parentId", parent);
+        js::set_str(&n, "kind", if role.is_empty() { "system" } else { "context_window" });
+        js::set_str(&n, "role", role); js::set_str(&n, "content", content);
+        nodes.push(&n);
+    }
+    crate::components::history_tree::flatten(&nodes, "four")
+}
+
+fn tree_close(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    js::set_bool(&s, "treeOpen", false); js::set_num(&s, "treeEscapeAt", 0.0);
+    mjs::redraw(); crate::components::history_tree::focus_composer(); JsValue::UNDEFINED
+}
+
+fn tree_escape(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let e = js::arg(&args, 0);
+    if js::get_bool(&e, "repeat") { return JsValue::UNDEFINED; }
+    if js::get_bool(&s, "treeOpen") { return tree_close(JsValue::UNDEFINED, js_sys::Array::new()); }
+    let now = js_sys::Date::now();
+    let previous = js::get(&s, "treeEscapeAt").as_f64().unwrap_or(0.0);
+    js::set_num(&s, "treeEscapeAt", now);
+    if previous > 0.0 && now - previous <= 750.0 {
+        js::call(&e, "preventDefault", &[]);
+        js::set(&s, "treeRows", &sample_tree());
+        js::set_num(&s, "treeIndex", 4.0);
+        js::set_bool(&s, "treeOpen", true);
+        js::set_num(&s, "treeEscapeAt", 0.0);
+        mjs::redraw();
+    }
+    JsValue::UNDEFINED
+}
+
+fn tree_reset_escape(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    js::set_num(&mjs::store_ref(STORE), "treeEscapeAt", 0.0);
+    JsValue::UNDEFINED
+}
+
+fn tree_select(_this: JsValue, args: js_sys::Array) -> JsValue {
+    crate::components::history_tree::select(&mjs::store_ref(STORE), js::arg_num(&args, 0, 0.0) as i64);
+    JsValue::UNDEFINED
+}
+fn tree_move(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let i = js::get(&s, "treeIndex").as_f64().unwrap_or(0.0) as i64;
+    crate::components::history_tree::select(&s, i + js::arg_num(&args, 0, 0.0) as i64);
+    JsValue::UNDEFINED
+}
+fn tree_choose(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    js::set_str(&s, "cursor", &js::arg_str(&args, 0));
+    tree_close(JsValue::UNDEFINED, js_sys::Array::new())
+}
+fn tree_choose_selected(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let rows = js_sys::Array::from(&js::get(&s, "treeRows"));
+    let i = js::get(&s, "treeIndex").as_f64().unwrap_or(0.0) as u32;
+    let args = js_sys::Array::new(); args.push(&JsValue::from_str(&js::get_str(&rows.get(i), "id")));
+    tree_choose(JsValue::UNDEFINED, args)
+}
+
+fn send_sample(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let text = js::get_str(&s, "draft");
+    if !text.trim().is_empty() {
+        let rows = js_sys::Array::from(&js::get(&s, "messages"));
+        let row = js::obj();
+        js::set_str(&row, "kind", "user");
+        js::set_str(&row, "text", text.trim());
+        js::set_str(&row, "id", &format!("sample-user-{}", rows.length()));
+        rows.push(&row);
+        js::set(&s, "messages", &rows.into());
+        crate::components::composer::reset_history(&s);
+        js::set_str(&s, "draft", "");
+        mjs::redraw();
+    }
+    JsValue::UNDEFINED
+}
+
+fn preview_session(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let id = js::arg_str(&args, 0);
+    let tabs = js_sys::Array::from(&js::get(&s, "tabs"));
+    if !tabs.iter().any(|row| js::get_str(&row, "id") == id) {
+        let preview = js::get_str(&s, "previewId");
+        let next = js_sys::Array::new();
+        let session = js_sys::Array::from(&js::get(&s, "sessions"))
+            .iter().find(|row| js::get_str(row, "id") == id);
+        if let Some(session) = session {
+            let mut replaced = false;
+            for row in tabs.iter() {
+                if !preview.is_empty() && js::get_str(&row, "id") == preview {
+                    next.push(&session);
+                    replaced = true;
+                } else { next.push(&row); }
+            }
+            if !replaced { next.push(&session); }
+            js::set(&s, "tabs", &next.into());
+            js::set_str(&s, "previewId", &id);
+        }
+    }
+    open_session(JsValue::UNDEFINED, args)
+}
+
+fn pin_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    if js::get_str(&s, "previewId") == js::arg_str(&args, 0) {
+        js::set_str(&s, "previewId", "");
+        mjs::redraw();
+    }
+    JsValue::UNDEFINED
+}
+
+fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let id = js::arg_str(&args, 0);
+    let tabs = js_sys::Array::new();
+    for row in js_sys::Array::from(&js::get(&s, "tabs")).iter() {
+        if js::get_str(&row, "id") != id { tabs.push(&row); }
+    }
+    if js::get_str(&s, "previewId") == id { js::set_str(&s, "previewId", ""); }
+    if js::get_str(&s, "activeId") == id {
+        js::set_str(&s, "activeId", &js::get_str(&tabs.get(0), "id"));
+    }
+    js::set(&s, "tabs", &tabs.into());
     mjs::redraw();
     JsValue::UNDEFINED
 }
@@ -519,6 +675,26 @@ pub fn register() {
     js::set_str(&accents, "fish", "#38bdf8");
     let icons = js::obj();
     js::set_str(&icons, "fish", "fish");
+    js::set_str(&icons, "joker", "mask-happy");
+
+    // The room `session::messages` renders against: you, the agent answering,
+    // and the one who just joined (the transcript ends on "joker joined the
+    // conversation"). Same shape `store_roster` writes, so the roster template
+    // reads the guide exactly the way it reads the app.
+    let others = js_sys::Array::new();
+    for (i, (handle, icon, accent)) in
+        [("fish", "fish", "#38bdf8"), ("joker", "mask-happy", "#be5cff")]
+            .iter()
+            .enumerate()
+    {
+        let seat = js::obj();
+        js::set_num(&seat, "id", (i + 1) as f64);
+        js::set_str(&seat, "handle", handle);
+        js::set_str(&seat, "icon", icon);
+        js::set_str(&seat, "accentColor", accent);
+        js::set_bool(&seat, "active", true);
+        others.push(&seat);
+    }
 
     let metrics = crate::helpers::metrics_html(&crate::helpers::SessionMetrics {
         tok_per_sec: 42.0,
@@ -530,6 +706,11 @@ pub fn register() {
 
     let session = js::obj();
     js::set_num(&session, "contextWindow", 200000.0);
+    let sample_sessions = sessions();
+    let initial_tabs = js_sys::Array::new();
+    let all = js_sys::Array::from(&sample_sessions);
+    initial_tabs.push(&all.get(0));
+    initial_tabs.push(&all.get(1));
 
     let mut d = Def::new().named("store samples");
     d
@@ -557,19 +738,26 @@ pub fn register() {
         .str("activeId", "samples")
         .str("model", "muse:opus")
         .val("models", &models())
-        .val("sessions", &sessions())
-        .val("tabs", &sessions())
-        .bool("threadView", false)
+        .val("sessions", &sample_sessions)
+        .val("tabs", &initial_tabs.into())
+        .str("previewId", "s-2")
+        .bool("compacted", false)
+        .bool("treeOpen", false)
+        .bool("treeLoading", false)
+        .num("treeEscapeAt", 0.0)
+        .num("treeIndex", 4.0)
+        .val("treeRows", &sample_tree())
+        .str("cursor", "four")
         // ── the room ───────────────────────────────────────────────
-        .val("others", &js_sys::Array::new().into())
-        .val("branches", &js_sys::Array::new().into())
-        .num("agentCount", 1.0)
-        .bool("isGroup", false)
-        .bool("hasBranches", false)
-        .num("memCount", 0.0)
+        .val("others", &others.into())
+        .str("userName", "Mike Smullin")
+        .num("agentCount", 2.0)
+        .bool("isGroup", true)
         .bool("compacting", false)
         // ── the composer ───────────────────────────────────────────
         .str("draft", "")
+        .num("historyPosition", -1.0)
+        .str("historyDraft", "")
         .bool("waiting", false)
         .bool("stopping", false)
         .str("allowlist", "")
@@ -590,8 +778,10 @@ pub fn register() {
         .method("row", row_of)
         .method("decideApproval", decide_approval)
         .method("openSession", open_session)
+        .method("previewSession", preview_session)
+        .method("pinTab", pin_tab)
         .method("deleteSession", inert)
-        .method("closeTab", inert)
+        .method("closeTab", close_tab)
         .method("newSession", inert)
         // The same clock *and* the same rendering the app uses: the guide's
         // project tree is the same component, so its ages must read `12m`,
@@ -604,13 +794,23 @@ pub fn register() {
         .method("keepPinned", inert)
         .method("onScroll", inert)
         .method("forkPrompt", inert)
-        .method("send", inert)
+        .method("send", send_sample)
+        .method("historyMove", history_move)
+        .method("treeEscape", tree_escape)
+        .method("treeResetEscape", tree_reset_escape)
+        .method("treeClose", tree_close)
+        .method("treeSelect", tree_select)
+        .method("treeMove", tree_move)
+        .method("treeChoose", tree_choose)
+        .method("treeChooseSelected", tree_choose_selected)
         .method("stop", inert)
         .method("compact", inert)
         .method("toggleThread", inert)
-        .method("toggleThreadView", inert)
         .method("removeAgent", inert)
-        .method("switchBranch", inert)
+        // The pencil beside the cluster. Inert like the rest: the editor it
+        // will open is not mounted yet, and a missing method is a template
+        // error, not a quiet nothing.
+        .method("openSessionEditor", inert)
         .method("saveAllowlist", inert)
         .method("revertAllowlist", inert)
         .method("setModel", inert)
@@ -622,6 +822,7 @@ pub fn register() {
         // The guide's form opens and validates; it persists nothing.
         .method("saveTarget", inert)
         .method("saveProject", inert)
+        .method("renameTreeRow", rename_tree_row)
         .method("pickTarget", pick_target)
         .method("editTarget", edit_target)
         .method("createTarget", create_target)
@@ -629,4 +830,33 @@ pub fn register() {
         // The guide's rail heads have buttons; the guide creates nothing.
         .method("noop", inert);
     mjs::store(STORE, &d.finish());
+}
+
+fn rename_tree_row(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let kind = js::arg_str(&args, 0);
+    let old = js::arg_str(&args, 1);
+    let id = js::arg_str(&args, 2);
+    let name = js::arg_str(&args, 3).trim().to_string();
+    if name.is_empty() { return JsValue::UNDEFINED; }
+    let s = mjs::store_ref(STORE);
+    if kind == "session" {
+        for row in js_sys::Array::from(&js::get(&s, "sessions")).iter() {
+            if js::get_str(&row, "id") == id { js::set_str(&row, "title", &name); }
+        }
+    } else if kind == "project" && !name.contains('/') && name != "." && name != ".." {
+        let new = match old.rsplit_once('/') {
+            Some((parent, _)) => format!("{parent}/{name}"),
+            None => name,
+        };
+        for (list, field) in [("projects", "name"), ("sessions", "project")] {
+            for row in js_sys::Array::from(&js::get(&s, list)).iter() {
+                let value = js::get_str(&row, field);
+                if value == old || value.starts_with(&format!("{old}/")) {
+                    js::set_str(&row, field, &format!("{new}{}", &value[old.len()..]));
+                }
+            }
+        }
+    }
+    mjs::redraw();
+    JsValue::UNDEFINED
 }

@@ -113,7 +113,6 @@ fn open_session_by_id(id: &str) {
         // The tree and the memory view are separate reads: neither is needed
         // to draw the transcript, and asking for both up front would make
         // opening a session wait on work most sessions never show.
-        load_branches(&want);
         load_view(JsValue::UNDEFINED, js_sys::Array::new());
     });
 }
@@ -132,8 +131,6 @@ fn clear_roster(s: &JsValue) {
     js::set_num(s, "agentCount", 0.0);
     js::set_bool(s, "isGroup", false);
     js::set_str(s, "cursor", "");
-    js::set(s, "branches", &js_sys::Array::new().into());
-    js::set_bool(s, "hasBranches", false);
 }
 
 fn clear_stream(s: &JsValue) {
@@ -148,17 +145,19 @@ fn clear_stream(s: &JsValue) {
     js::set_str(s, "streamHandle", "");
 }
 
-/// `openSession(id)` — a click in the project tree or the tab bar.
+/// `openSession(id)` — select an already open tab.
 fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     if id.is_empty() {
         return JsValue::UNDEFINED;
     }
     let s = mjs::store_ref(STORE);
-    // Each session decides for itself whether it is threaded; carrying the
-    // last one's answer over would show a flat conversation under a
-    // "Threaded" label. `loadView` turns it back on if this one is compacted.
-    js::set_bool(&s, "threadView", false);
+    if js::get_str(&s, "activeId") != id { crate::components::composer::reset_history(&s); }
+    js::set_bool(&s, "treeOpen", false);
+    js::set_num(&s, "treeEscapeAt", 0.0);
+    close_preview_on_leave(&s, &id);
+    // The next session's memory view decides whether it has summaries.
+    js::set_bool(&s, "compacted", false);
     js::set(&s, "threads", &js_sys::Array::new().into());
     // Likewise the roster: the fetch below replaces it, and until it lands
     // the old session's agents would be shown as this one's.
@@ -175,6 +174,30 @@ fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+/// A project-tree selection opens one replaceable preview, unless already open.
+fn preview_session(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let id = js::arg_str(&args, 0);
+    if id.is_empty() { return JsValue::UNDEFINED; }
+    let ids = read_open_ids();
+    if !ids.iter().any(|open| open == &id) {
+        let (next, preview) = preview_tabs(ids, &read_preview_id(), &id);
+        write_open_ids(&next);
+        write_preview_id(&preview);
+    }
+    open_session(JsValue::UNDEFINED, args)
+}
+
+/// Double-clicking the preview keeps it alongside the other tabs.
+fn pin_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let id = js::arg_str(&args, 0);
+    if !id.is_empty() && read_preview_id() == id {
+        write_preview_id("");
+        js::set_str(&mjs::store_ref(STORE), "previewId", "");
+        mjs::redraw();
+    }
+    JsValue::UNDEFINED
+}
+
 /// `newSession()` — the tab bar's `+`.
 fn new_session(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let payload = js::obj();
@@ -182,8 +205,13 @@ fn new_session(_this: JsValue, _args: js_sys::Array) -> JsValue {
         let s = mjs::store_ref(STORE);
         let id = js::get_str(&js::get(&v, "session"), "id");
         if !id.is_empty() {
+            close_preview_on_leave(&s, &id);
+            crate::components::composer::reset_history(&s);
+            js::set_bool(&s, "treeOpen", false);
             add_open_id(&id);
             js::set_str(&s, "activeId", &id);
+            js::set_bool(&s, "compacted", false);
+            js::set(&s, "threads", &js_sys::Array::new().into());
             js::set(&s, "messages", &js_sys::Array::new().into());
             clear_stream(&s);
             // A new conversation is empty of agents. Without this the
@@ -215,6 +243,10 @@ fn new_session(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+fn history_move(_this: JsValue, args: js_sys::Array) -> JsValue {
+    crate::components::composer::history_move(&mjs::store_ref(STORE), args)
+}
+
 /// `send()` — the composer. Streams the turn into the store.
 fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
@@ -228,11 +260,15 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     // transcript, so it is handled before anything else happens.
     if content.starts_with('/') {
         run_command(&s, &content);
+        if js::get_str(&s, "draft").is_empty() {
+            crate::components::composer::reset_history(&s);
+        }
         return JsValue::UNDEFINED;
     }
 
     // Echo the prompt immediately: the turn is already durable server-side,
     // and waiting for the round trip would make the UI feel dead.
+    crate::components::composer::reset_history(&s);
     push_message(&s, "user", &content, "");
     js::set_str(&s, "draft", "");
     js::set_bool(&s, "waiting", true);
@@ -468,9 +504,7 @@ fn on_row(row: &JsValue) {
             js::set_bool(&s, "stopPending", false);
             // A new message changes the tree's leaf set, so a threaded view
             // on screen is now one message short.
-            if js::get_bool(&s, "threadView") {
-                load_view(JsValue::UNDEFINED, js_sys::Array::new());
-            }
+            load_view(JsValue::UNDEFINED, js_sys::Array::new());
             mjs::redraw();
         }
         _ => {}
@@ -746,6 +780,7 @@ pub fn register() {
         // `tabs` is the subset currently open (the tab strip). Closing a tab
         // must not destroy a session, so these are deliberately distinct.
         .val("tabs", &js_sys::Array::new().into())
+        .str("previewId", "")
         .val("messages", &js_sys::Array::new().into())
         .val("session", &js::obj().into())
         .str("activeId", "")
@@ -769,6 +804,8 @@ pub fn register() {
         .str("worktreeId", "")
         .str("branchId", "")
         .str("draft", "")
+        .num("historyPosition", -1.0)
+        .str("historyDraft", "")
         .str("streamText", "")
         .str("streamHtml", "")
         .str("streamReasoningHtml", "")
@@ -810,9 +847,7 @@ pub fn register() {
         // True once something has actually been folded into a thread.
         .bool("compacted", false)
         // Show the threaded history instead of the flat transcript.
-        .bool("threadView", false)
         .bool("compacting", false)
-        .num("memCount", 0.0)
         // 0 = the server's default budget. Set it to force threading on a
         // conversation that would otherwise still fit.
         .num("memoryHigh", 0.0)
@@ -827,6 +862,11 @@ pub fn register() {
         .val("accents", &js::obj().into())
         // handle -> phosphor icon name, for drawing a byline as its author.
         .val("icons", &js::obj().into())
+        // The reader's own name for the cluster's first disc. The server never
+        // sends it (it sends the user *seat*, which the roster skips), so it
+        // stays empty until something fills it - the template falls back to
+        // 'You'.
+        .str("userName", "")
         .num("agentCount", 0.0)
         .bool("isGroup", false)
         .bool("rosterOpen", false)
@@ -840,14 +880,20 @@ pub fn register() {
         .bool("stopPending", false)
         // --- branches -------------------------------------------------------
         .str("cursor", "")
-        .val("branches", &js_sys::Array::new().into())
-        .bool("hasBranches", false)
-        .bool("branchOpen", false)
+        .bool("treeOpen", false)
+        .bool("treeLoading", false)
+        .num("treeEscapeAt", 0.0)
+        .num("treeRequest", 0.0)
+        .num("treeIndex", 0.0)
+        .val("treeRows", &js_sys::Array::new().into())
         .method("loadSessions", load_sessions)
         .method("openSession", open_session)
+        .method("previewSession", preview_session)
+        .method("pinTab", pin_tab)
         .method("newSession", new_session)
         .method("closeTab", close_tab)
         .method("send", send)
+        .method("historyMove", history_move)
         .method("relTime", rel_time)
         .method("relAgo", rel_ago)
         .method("onScroll", on_scroll)
@@ -868,17 +914,23 @@ pub fn register() {
         .method("saveTarget", save_target)
         .method("dropSession", drop_session)
         .method("saveProject", save_project)
+        .method("renameTreeRow", rename_tree_row)
         .method("pickTarget", pick_target)
         .method("editTarget", edit_target)
         .method("createTarget", create_target)
         .method("loadView", load_view)
         .method("compact", compact)
         .method("toggleThread", toggle_thread)
-        .method("toggleThreadView", toggle_thread_view)
         .method("removeAgent", remove_agent)
-        .method("forkAt", fork_at)
+        .method("openSessionEditor", open_session_editor)
+        .method("treeEscape", tree_escape)
+        .method("treeResetEscape", tree_reset_escape)
+        .method("treeClose", tree_close)
+        .method("treeSelect", tree_select)
+        .method("treeMove", tree_move)
+        .method("treeChoose", tree_choose)
+        .method("treeChooseSelected", tree_choose_selected)
         .method("forkPrompt", fork_prompt)
-        .method("switchBranch", switch_branch)
         .method("handleOf", handle_of)
         .method("toggleCard", toggle_reasoning)
         .method("accentOf", accent_of)
@@ -1083,6 +1135,7 @@ fn delete_session(_this: JsValue, args: js_sys::Array) -> JsValue {
 /// access is wrapped, because storage throws in a private window and reads
 /// back empty after a clear.
 const OPEN_KEY: &str = "chat.openTabs";
+const PREVIEW_KEY: &str = "chat.previewTab";
 
 fn storage() -> JsValue {
     js::get(&js_sys::global(), "localStorage")
@@ -1115,6 +1168,47 @@ fn write_open_ids(ids: &[String]) {
     );
 }
 
+fn read_preview_id() -> String {
+    js::call(&storage(), "getItem", &[JsValue::from_str(PREVIEW_KEY)])
+        .as_string().unwrap_or_default()
+}
+
+fn write_preview_id(id: &str) {
+    js::call(&storage(), "setItem", &[JsValue::from_str(PREVIEW_KEY), JsValue::from_str(id)]);
+}
+
+/// Preserve the preview's position while replacing it, leaving kept tabs alone.
+fn preview_tabs(mut ids: Vec<String>, previous: &str, id: &str) -> (Vec<String>, String) {
+    if ids.iter().any(|open| open == id) {
+        return (ids, previous.to_string());
+    }
+    if let Some(pos) = ids.iter().position(|open| !previous.is_empty() && open == previous) {
+        ids[pos] = id.to_string();
+    } else {
+        ids.push(id.to_string());
+    }
+    (ids, id.to_string())
+}
+
+#[cfg(test)]
+mod preview_tab_tests {
+    use super::preview_tabs;
+
+    #[test]
+    fn preview_replaces_only_the_previous_preview() {
+        let ids = vec!["kept".into(), "peek".into(), "other".into()];
+        let (ids, preview) = preview_tabs(ids, "peek", "next");
+        assert_eq!(ids, ["kept", "next", "other"]);
+        assert_eq!(preview, "next");
+        let (ids, preview) = preview_tabs(ids, &preview, "kept");
+        assert_eq!(ids, ["kept", "next", "other"]);
+        assert_eq!(preview, "next");
+        let (ids, preview) = preview_tabs(ids, "", "new");
+        assert_eq!(ids, ["kept", "next", "other", "new"]);
+        assert_eq!(preview, "new");
+    }
+}
+
 /// Rebuild `tabs` from the open-id list and the known sessions.
 ///
 /// Ids whose session no longer exists are dropped, so deleting a session
@@ -1136,6 +1230,13 @@ fn rebuild_tabs(s: &JsValue) {
     if kept.len() != open.len() {
         write_open_ids(&kept);
     }
+    let preview = read_preview_id();
+    if !preview.is_empty() && !kept.contains(&preview) {
+        write_preview_id("");
+        js::set_str(s, "previewId", "");
+    } else {
+        js::set_str(s, "previewId", &preview);
+    }
     js::set(s, "tabs", &tabs.into());
 }
 
@@ -1150,6 +1251,15 @@ fn add_open_id(id: &str) {
 fn remove_open_id(id: &str) {
     let ids: Vec<String> = read_open_ids().into_iter().filter(|x| x != id).collect();
     write_open_ids(&ids);
+    if read_preview_id() == id { write_preview_id(""); }
+}
+
+/// Leaving the active preview closes its tab, without deleting the session.
+fn close_preview_on_leave(s: &JsValue, next: &str) {
+    let preview = read_preview_id();
+    if !preview.is_empty() && preview != next && js::get_str(s, "activeId") == preview {
+        remove_open_id(&preview);
+    }
 }
 
 /// `closeTab(id)` — take it off the strip. The session stays on disk in
@@ -1169,7 +1279,11 @@ fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
         let tabs = js_sys::Array::from(&js::get(&s, "tabs"));
         if tabs.length() > 0 {
             let next = js::get_str(&tabs.get(0), "id");
+            crate::components::composer::reset_history(&s);
+            js::set_bool(&s, "treeOpen", false);
             js::set_str(&s, "activeId", &next);
+            js::set_bool(&s, "compacted", false);
+            js::set(&s, "threads", &js_sys::Array::new().into());
             open_session_by_id(&next);
         } else {
             js::set_str(&s, "activeId", "");
@@ -1422,6 +1536,51 @@ fn save_project(_this: JsValue, args: js_sys::Array) -> JsValue {
             mjs::redraw();
         });
     });
+    JsValue::UNDEFINED
+}
+
+/// Rename the visible segment of a project, or a conversation's title.
+fn rename_tree_row(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let kind = js::arg_str(&args, 0);
+    let old = js::arg_str(&args, 1);
+    let id = js::arg_str(&args, 2);
+    let name = js::arg_str(&args, 3).trim().to_string();
+    if name.is_empty() { return JsValue::UNDEFINED; }
+    if kind == "project" {
+        if name.contains('/') || name == "." || name == ".." { return JsValue::UNDEFINED; }
+        let new = match old.rsplit_once('/') {
+            Some((parent, _)) => format!("{parent}/{name}"),
+            None => name,
+        };
+        if new != old {
+            // The backend merges names on collision. An inline rename should
+            // never silently merge two existing project trees.
+            let s = mjs::store_ref(STORE);
+            let projects = js_sys::Array::from(&js::get(&s, "projects"));
+            if projects.iter().any(|p| {
+                let path = js::get_str(&p, "name");
+                path == new || path.starts_with(&format!("{new}/"))
+            }) { return JsValue::UNDEFINED; }
+            let a = js_sys::Array::new();
+            for value in ["rename", &old, &new] { a.push(&JsValue::from_str(value)); }
+            save_project(JsValue::UNDEFINED, a);
+        }
+    } else if kind == "session" && name != old && !id.is_empty() {
+        let payload = js::obj();
+        js::set_str(&payload, "title", &name);
+        rustex1_kit::api::post_json(&format!("/api/sessions/{id}/settings"), &payload.into(), move |v| {
+            let s = mjs::store_ref(STORE);
+            if js::get_str(&s, "activeId") == id {
+                js::set(&s, "session", &js::get(&v, "session"));
+            }
+            api::sessions(|v| {
+                let s = mjs::store_ref(STORE);
+                js::set(&s, "sessions", &js::get(&v, "sessions"));
+                rebuild_tabs(&s);
+                mjs::redraw();
+            });
+        });
+    }
     JsValue::UNDEFINED
 }
 
@@ -1706,13 +1865,6 @@ fn load_view(_this: JsValue, _args: js_sys::Array) -> JsValue {
         }
         js::set(&s, "threads", &rows.into());
         js::set_bool(&s, "compacted", js::get_bool(&v, "compacted"));
-        js::set_num(&s, "memCount", js::get(&v, "count").as_f64().unwrap_or(0.0));
-        // The threaded view is only worth showing once something has
-        // actually been folded; before that it is the flat transcript with
-        // extra chrome.
-        if js::get_bool(&v, "compacted") {
-            js::set_bool(&s, "threadView", true);
-        }
         mjs::redraw();
     });
     JsValue::UNDEFINED
@@ -1851,18 +2003,6 @@ fn collapse_at(s: &JsValue, rows: &js_sys::Array, at: i32) {
     mjs::redraw();
 }
 
-/// `toggleThreadView()` — flat transcript or threaded history.
-fn toggle_thread_view(_this: JsValue, _args: js_sys::Array) -> JsValue {
-    let s = mjs::store_ref(STORE);
-    let on = !js::get_bool(&s, "threadView");
-    js::set_bool(&s, "threadView", on);
-    if on {
-        load_view(JsValue::UNDEFINED, js_sys::Array::new());
-    }
-    mjs::redraw();
-    JsValue::UNDEFINED
-}
-
 // ===========================================================================
 // The roster: who is in the conversation
 // ===========================================================================
@@ -1922,6 +2062,61 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
     js::set_bool(s, "isGroup", agents > 1.0);
 }
 
+/// `openSessionEditor()` — the pencil beside the presence cluster.
+///
+/// Seeds the draft from the live conversation — its meta for the five fields,
+/// its roster for the seats — closes the panels it displaces, and opens the
+/// column. The seats are copies, not the roster's own objects: unseating in
+/// the editor must not dim the live cluster before anything is saved, and
+/// inviting must not seat a reference the room never approved.
+fn open_session_editor(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let live = mjs::store_ref(STORE);
+    let draft = mjs::store_ref("sessionDraft");
+    let meta = js::get(&live, "session");
+    for (draft_key, meta_key) in [
+        ("title", "title"),
+        ("purpose", "purpose"),
+        ("notes", "notes"),
+        ("routing", "routing"),
+    ] {
+        js::set_str(&draft, draft_key, &js::get_str(&meta, meta_key));
+    }
+    // A missing routing never leaves the switch without a side.
+    if js::get_str(&draft, "routing").is_empty() {
+        js::set_str(&draft, "routing", "everyone");
+    }
+    let mh = js::get(&meta, "memoryHigh");
+    if mh.is_null() || mh.is_undefined() || mh.as_f64().is_none() {
+        js::set(&draft, "memoryHigh", &JsValue::NULL);
+    } else {
+        js::set(&draft, "memoryHigh", &mh);
+    }
+    let seats = js_sys::Array::new();
+    for p in js_sys::Array::from(&js::get(&live, "others")).iter() {
+        let copy = js::obj();
+        js::set(&copy, "id", &js::get(&p, "id"));
+        for key in ["handle", "icon", "accentColor"] {
+            js::set_str(&copy, key, &js::get_str(&p, key));
+        }
+        js::set_bool(&copy, "active", js::get_bool(&p, "active"));
+        seats.push(&copy);
+    }
+    js::set(&draft, "seats", &seats.into());
+    js::set_str(&draft, "inviteHandle", "");
+    js::set_str(&draft, "message", "");
+    js::set_str(&draft, "messageTone", "");
+    js::set_bool(&draft, "open", true);
+    // One panel at a time: the inspector shows what you last selected.
+    let agents = mjs::store_ref("agents");
+    js::set_bool(&agents, "open", false);
+    js::set_str(&agents, "selected", "");
+    js::set_bool(&mjs::store_ref("settings"), "open", false);
+    js::set_bool(&mjs::store_ref("tform"), "open", false);
+    js::set_bool(&mjs::store_ref("home"), "asideOpen", true);
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
 /// `removeAgent(id)` — unseat a participant.
 fn remove_agent(_this: JsValue, args: js_sys::Array) -> JsValue {
     let pid = js::arg_num(&args, 0, 0.0);
@@ -1959,6 +2154,107 @@ fn load_roster(id: &str) {
 // Branching: the cursor picks which version of the conversation you are in
 // ===========================================================================
 
+fn tree_escape(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let event = js::arg(&args, 0);
+    if js::get_bool(&event, "repeat") { return JsValue::UNDEFINED; }
+    if js::get_bool(&s, "treeOpen") {
+        js::call(&event, "preventDefault", &[]);
+        return tree_close(JsValue::UNDEFINED, js_sys::Array::new());
+    }
+    let now = js_sys::Date::now();
+    let previous = js::get(&s, "treeEscapeAt").as_f64().unwrap_or(0.0);
+    js::set_num(&s, "treeEscapeAt", now);
+    let id = js::get_str(&s, "activeId");
+    if previous == 0.0 || now - previous > 750.0 || id.is_empty() || js::get_bool(&s, "waiting") {
+        return JsValue::UNDEFINED;
+    }
+    js::call(&event, "preventDefault", &[]);
+    js::set_num(&s, "treeEscapeAt", 0.0);
+    js::set_bool(&s, "treeOpen", true);
+    js::set_bool(&s, "treeLoading", true);
+    let request = js::get(&s, "treeRequest").as_f64().unwrap_or(0.0) + 1.0;
+    js::set_num(&s, "treeRequest", request);
+    js::set(&s, "treeRows", &js_sys::Array::new().into());
+    mjs::redraw();
+    let want = id.clone();
+    api::tree(&id, move |v| {
+        let s = mjs::store_ref(STORE);
+        if js::get_str(&s, "activeId") != want || !js::get_bool(&s, "treeOpen")
+            || js::get(&s, "treeRequest").as_f64() != Some(request) { return; }
+        let nodes = js_sys::Array::from(&js::get(&v, "nodes"));
+        let cursor = js::get_str(&v, "cursor");
+        let rows = crate::components::history_tree::flatten(&nodes, &cursor);
+        let array = js_sys::Array::from(&rows);
+        let index = array.iter().position(|r| js::get_str(&r, "id") == cursor).unwrap_or(0);
+        js::set(&s, "treeRows", &rows);
+        js::set_bool(&s, "treeLoading", false);
+        crate::components::history_tree::select(&s, index as i64);
+        mjs::redraw();
+    });
+    JsValue::UNDEFINED
+}
+
+fn tree_reset_escape(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    js::set_num(&mjs::store_ref(STORE), "treeEscapeAt", 0.0);
+    JsValue::UNDEFINED
+}
+
+fn tree_close(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    js::set_bool(&s, "treeOpen", false);
+    js::set_num(&s, "treeEscapeAt", 0.0);
+    mjs::redraw();
+    crate::components::history_tree::focus_composer();
+    JsValue::UNDEFINED
+}
+
+fn tree_select(_this: JsValue, args: js_sys::Array) -> JsValue {
+    crate::components::history_tree::select(&mjs::store_ref(STORE), js::arg_num(&args, 0, 0.0) as i64);
+    JsValue::UNDEFINED
+}
+
+fn tree_move(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let index = js::get(&s, "treeIndex").as_f64().unwrap_or(0.0) as i64;
+    crate::components::history_tree::select(&s, index + js::arg_num(&args, 0, 0.0) as i64);
+    JsValue::UNDEFINED
+}
+
+fn tree_choose_selected(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let rows = js_sys::Array::from(&js::get(&s, "treeRows"));
+    let index = js::get(&s, "treeIndex").as_f64().unwrap_or(0.0) as u32;
+    let args = js_sys::Array::new();
+    args.push(&JsValue::from_str(&js::get_str(&rows.get(index), "id")));
+    tree_choose(JsValue::UNDEFINED, args)
+}
+
+fn tree_choose(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let id = js::arg_str(&args, 0);
+    if id.is_empty() || js::get_bool(&s, "waiting") { return JsValue::UNDEFINED; }
+    let session = js::get_str(&s, "activeId");
+    let payload = js::obj();
+    js::set_str(&payload, "eventId", &id);
+    api::set_cursor(&session.clone(), &payload.into(), move |v| {
+        let s = mjs::store_ref(STORE);
+        if js::get_str(&s, "activeId") != session || !js::get_bool(&v, "ok") { return; }
+        js::set_str(&s, "cursor", &js::get_str(&v, "cursor"));
+        js::set_bool(&s, "treeOpen", false);
+        crate::components::composer::reset_history(&s);
+        open_session_by_id(&session);
+        mjs::redraw();
+        let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+            let document = js::get(&js_sys::global(), "document");
+            let input = js::call(&document, "querySelector", &[JsValue::from_str("#home .composer .draft-ta")]);
+            if !js::is_missing(&input) { js::call(&input, "focus", &[]); }
+        });
+        js::call(&js_sys::global(), "requestAnimationFrame", &[callback]);
+    });
+    JsValue::UNDEFINED
+}
+
 /// Move before the selected prompt and place its text back in the composer.
 fn fork_prompt(_this: JsValue, args: js_sys::Array) -> JsValue {
     let event_id = js::arg_str(&args, 0);
@@ -1975,7 +2271,6 @@ fn fork_prompt(_this: JsValue, args: js_sys::Array) -> JsValue {
         js::set_str(&s, "cursor", &js::get_str(&v, "cursor"));
         js::set_str(&s, "draft", &prompt);
         open_session_by_id(&want);
-        load_branches(&want);
         mjs::redraw();
         let expected = want.clone();
         let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
@@ -1989,98 +2284,6 @@ fn fork_prompt(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `forkAt(eventId)` — point the cursor at an earlier message.
-///
-/// This is the whole fork operation. The branch you were on is untouched and
-/// still reachable; the next message you send simply hangs off the node you
-/// chose instead of off the tail.
-fn fork_at(_this: JsValue, args: js_sys::Array) -> JsValue {
-    let event_id = js::arg_str(&args, 0);
-    let s = mjs::store_ref(STORE);
-    let id = js::get_str(&s, "activeId");
-    if id.is_empty() || event_id.is_empty() {
-        return JsValue::UNDEFINED;
-    }
-    let payload = js::obj();
-    js::set_str(&payload, "eventId", &event_id);
-    let want = id.clone();
-    api::set_cursor(&id, &payload.into(), move |v| {
-        let s = mjs::store_ref(STORE);
-        if js::get_str(&s, "activeId") != want {
-            return;
-        }
-        js::set_str(&s, "cursor", &js::get_str(&v, "cursor"));
-        // Re-read rather than trusting the local list: the rendered
-        // conversation is now a different path through the tree.
-        open_session_by_id(&want);
-        load_branches(&want);
-        mjs::redraw();
-    });
-    JsValue::UNDEFINED
-}
-
-/// Pull the forest and keep the fork points: nodes with more than one child
-/// are where the conversation actually diverged, and they are the only ones
-/// worth offering as a branch switch.
-fn load_branches(id: &str) {
-    let want = id.to_string();
-    api::tree(id, move |v| {
-        let s = mjs::store_ref(STORE);
-        if js::get_str(&s, "activeId") != want {
-            return;
-        }
-        let nodes = js_sys::Array::from(&js::get(&v, "nodes"));
-        let on_path = js_sys::Array::from(&js::get(&v, "onPath"));
-        let mut counts: std::collections::HashMap<String, Vec<JsValue>> =
-            std::collections::HashMap::new();
-        for n in nodes.iter() {
-            let parent = js::get_str(&n, "parentId");
-            if parent.is_empty() {
-                continue;
-            }
-            counts.entry(parent).or_default().push(n);
-        }
-        let on: Vec<String> = on_path.iter().map(|x| x.as_string().unwrap_or_default()).collect();
-        let out = js_sys::Array::new();
-        for n in nodes.iter() {
-            let nid = js::get_str(&n, "id");
-            let kids = match counts.get(&nid) {
-                Some(k) if k.len() > 1 => k,
-                _ => continue,
-            };
-            for (i, k) in kids.iter().enumerate() {
-                let kid = js::get_str(k, "id");
-                let b = js::obj();
-                js::set_str(&b, "id", &kid);
-                js::set_str(&b, "forkOf", &nid);
-                js::set_num(&b, "n", (i + 1) as f64);
-                js::set_num(&b, "of", kids.len() as f64);
-                js::set_bool(&b, "current", on.contains(&kid));
-                // Switching lands on the branch's TIP, not on the node where
-                // it split off: a branch chip means "show me that version of
-                // the conversation", and stopping at the fork would show one
-                // message of it.
-                js::set_str(&b, "tip", &branch_tip(k, &counts));
-                // Label the branch with the first real message under it,
-                // not with the node that happens to sit at the fork. A fork
-                // often lands on a `reasoning` or `gen_info` node, and
-                // "The user just said hi…" tells you nothing about which
-                // branch you would be switching to.
-                js::set_str(&b, "text", &helpers::clip(&first_message_under(k, &counts), 60));
-                out.push(&b.into());
-            }
-        }
-        js::set(&s, "branches", &out.into());
-        js::set_bool(&s, "hasBranches", !counts.values().all(|v| v.len() < 2));
-        mjs::redraw();
-    });
-}
-
-/// `switchBranch(eventId)` — render a different branch from a fork point.
-fn switch_branch(this: JsValue, args: js_sys::Array) -> JsValue {
-    fork_at(this, args)
-}
-
 /// `handleOf(participantId)` — the `@handle` that authored a message.
 fn handle_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     let pid = js::arg_num(&args, 0, 0.0);
@@ -2088,55 +2291,6 @@ fn handle_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     let map = js::get(&s, "handles");
     let h = js::get_str(&map, &format!("{pid}"));
     JsValue::from_str(&h)
-}
-
-
-/// The text of the first message at or below `node`, following the eldest
-/// child at each step.
-///
-/// Bounded by a step count rather than a visited set: the tree is acyclic by
-/// construction (a parent's `seq` is always smaller than its child's), so the
-/// only thing worth guarding against here is a pathologically deep branch.
-fn first_message_under(
-    node: &JsValue,
-    children: &std::collections::HashMap<String, Vec<JsValue>>,
-) -> String {
-    let mut cur = node.clone();
-    for _ in 0..64 {
-        if js::get_str(&cur, "kind") == "context_window" {
-            let text = js::get_str(&cur, "content");
-            if !text.trim().is_empty() {
-                return text;
-            }
-        }
-        let id = js::get_str(&cur, "id");
-        match children.get(&id).and_then(|k| k.first()) {
-            Some(next) => cur = next.clone(),
-            None => break,
-        }
-    }
-    // Nothing said on this branch yet: name what is actually there.
-    format!("({})", js::get_str(node, "kind"))
-}
-
-
-/// The deepest node on a branch, following the eldest child at each step.
-///
-/// Bounded by a step count rather than a visited set: the tree is acyclic by
-/// construction, so this guards only against a pathologically long branch.
-fn branch_tip(
-    node: &JsValue,
-    children: &std::collections::HashMap<String, Vec<JsValue>>,
-) -> String {
-    let mut cur = node.clone();
-    for _ in 0..4096 {
-        let id = js::get_str(&cur, "id");
-        match children.get(&id).and_then(|k| k.first()) {
-            Some(next) => cur = next.clone(),
-            None => return id,
-        }
-    }
-    js::get_str(&cur, "id")
 }
 
 
