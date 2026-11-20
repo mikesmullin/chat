@@ -83,7 +83,7 @@ pub fn abort_chat_stream() -> bool {
     })
 }
 
-/// `GET /api/sessions` — the history rail and the tab bar.
+/// `GET /api/sessions` — the project tree and the tab bar.
 pub fn sessions<F: FnMut(JsValue) + 'static>(then: F) {
     rustex1_kit::api::get("/api/sessions", None, then);
 }

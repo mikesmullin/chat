@@ -5,8 +5,8 @@
 //! hot-reload protocol). Components, templates, state, routes and networking
 //! are all Rust.
 //!
-//! What the UI is: the m-js-cmp-chat demo grid — fullscreen chat (history +
-//! tabs + agent + transcript + composer) beside the sidebar rail (same
+//! What the UI is: the m-js-cmp-chat demo grid — fullscreen chat (tabs +
+//! agent + transcript + composer) beside the sidebar rail (same
 //! transcript + composer, no tabs/agent/goto/visibility) — backed by the one
 //! shared `chat` store. The store keeps the `m-js-cmp-chat` field/method names
 //! so the port stays mechanical; the wire is angela's HTTP API

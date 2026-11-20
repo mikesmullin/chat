@@ -34,7 +34,6 @@ pub mod samples;
 pub mod relative_timestamp;
 pub mod sandboxes_menu;
 pub mod session;
-pub mod session_history;
 pub mod session_panel;
 pub mod session_state;
 pub mod settings;
@@ -90,7 +89,6 @@ pub fn register() {
     settings_menu_item::register();
     reltime::register();
     session::register();
-    session_history::register();
     session_panel::register();
     session_state::register();
     system_card::register();

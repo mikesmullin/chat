@@ -23,7 +23,6 @@
 //!   /storybook/text-area  -> Text Area (bare kit uiArea)
 //!   /storybook/tags       -> Tag Input (bare kit uiChips)
 //!   /storybook/validation -> Validation Info (error / ok)
-//!   /storybook/session-history -> Session History (past sessions)
 //!   /storybook/session   -> Session (transcript of message cards)
 //!   /storybook/session-panel -> Session Panel (transcript + composer)
 //!   /storybook/composer  -> Composer (draft + row: dropdowns, ctx pie, send)
@@ -61,8 +60,8 @@ use crate::components::{
     dropdown, error_card, fold_card, picker, project_tree, prompt_card,
     target_form,
     field, hint_text, item_group, label, nav_rail, radio_input, range_input,
-    reasoning_card, relative_timestamp, sandboxes_menu, session, session_history,
-    session_panel, system_card, tab, tag_input, task_list, text_area, text_input, thinking, toggle_button, tool_call_card, tool_response_card,
+    reasoning_card, relative_timestamp, sandboxes_menu, session, session_panel,
+    system_card, tab, tag_input, task_list, text_area, text_input, thinking, toggle_button, tool_call_card, tool_response_card,
     user_card, validation_info,
 };
 
@@ -311,15 +310,6 @@ pub fn register(rt: &mut Runtime) {
             "route /storybook/validation",
             "Validation Info",
             validation_info::demo(),
-        )
-    });
-
-    // the sidebar session list.
-    rt.route("/storybook/session-history", "Session History", |_| {
-        route_def(
-            "route /storybook/session-history",
-            "Session History",
-            session_history::demo(),
         )
     });
 

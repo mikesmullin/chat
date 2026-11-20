@@ -3,17 +3,17 @@
 //!
 //! ```text
 //!  +-------------+------------------------------+--------+
-//!  | session     |  tab bar (one per session)   |        |
-//!  | history     +------------------------------+ right  |
-//!  |             |                              | aside  |
-//!  | agents menu |  session panel               | (empty)|
+//!  | projects    |  tab bar (one per session)   |        |
+//!  |             +------------------------------+ right  |
+//!  | agents menu |  session panel               | aside  |
+//!  |             |                              | (empty)|
 //!  +-------------+------------------------------+--------+
 //!    transparent        rounded --panel card      rounded
 //!    (part of the                                 --panel
 //!     black page)                                 card
 //! ```
 //!
-//! The columns reuse the storybook builders — `session_history`,
+//! The columns reuse the storybook builders — `project_tree`,
 //! `agents_menu`, `tab::tab_bar`, the session cards and the composer — in
 //! their **live** variants, which carry the same class names bound to
 //! `$store.live` instead of demo consts. The design guide and the app stay
@@ -31,7 +31,7 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::components::{
-    agent_editor, agents_menu, project_tree, session_history, session_panel, tab,
+    agent_editor, agents_menu, project_tree, session_panel, tab,
     target_form,
 };
 use crate::css;
@@ -68,15 +68,6 @@ pub const CSS: &str = r#"
   padding: 10px 0 10px 4px;
   /* clears the rail's scrollbar from the content card beside it */
   margin-right: 10px;
-}
-/* the history panel is a section of the rail, not a floating card: it
-   gives up the --panel fill and the divider it carries in the chat app,
-   so it reads as part of the black page like the agents menu below it. */
-.home-rail .mjs-chat { background: transparent; height: auto; }
-.home-rail .history {
-  background: transparent;
-  border-right: 0;
-  width: auto;
 }
 .home-agents { padding: 0 14px 10px; }
 
@@ -146,8 +137,8 @@ pub const CSS: &str = r#"
 
 .home-aside-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 12px 12px; }
 
-/* The projects section sits between the flat history and the agents, with
-   the same gutters as its neighbours so the three read as one column. */
+/* The projects section opens the rail, with the same gutters as the
+   sections below it so they read as one column. */
 .home-projects { padding: 14px 10px 4px; }
 
 /* The rail is a column so Settings can be pinned under everything else. */
@@ -166,17 +157,15 @@ pub const CSS: &str = r#"
 #home.aside-collapsed .home-aside-body { display: none; }
 "#;
 
-/// left column: session history over the agents menu, on the black page.
+/// left column: projects over the agents menu, on the black page.
 fn rail() -> Node {
     m("aside")
         .class("home-rail")
-        .attr("aria-label", "Sessions and agents")
+        .attr("aria-label", "Projects and agents")
         .kids(vec![
-            session_history::session_history(LIVE),
-            // The same conversations, by where they are filed rather than by
-            // when they were touched. Below the flat history on purpose:
-            // "what was I just doing" is the more common question, and it
-            // should not need scrolling past the filing cabinet.
+            // The filing cabinet, first: conversations grouped by where they
+            // are filed rather than by when they were touched, so the top of
+            // the rail always answers "what am I working in" at a glance.
             m("div").class("home-projects").child(project_tree::tree(
                 LIVE,
                 &format!("{LIVE}.openSession({{}})"),
@@ -254,9 +243,11 @@ pub fn shell() -> Node {
     m("div")
         .attr("id", "home")
         .class("home")
-        // Pull the session list once the shell exists. `x-init` runs from the
-        // deferred lifecycle queue, so the store is safe to write here.
-        .init("$store.live.loadSessions(); $store.live.loadProjects(); $store.live.loadTargets()")
+        // Pull the session, project and target lists once the shell exists.
+        // `x-init` runs from the deferred lifecycle queue, so the store is
+        // safe to write here. `loadSessions` backs the project tree's
+        // "Unfiled" group and the tab strip; the flat history rail is gone.
+        .init("$store.live.loadProjects(); $store.live.loadSessions(); $store.live.loadTargets()")
         .bind(
             "class",
             &format!("($store.{STORE}.asideOpen ? '' : 'aside-collapsed')"),

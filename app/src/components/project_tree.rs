@@ -117,6 +117,15 @@ pub const CSS: &str = r#"
   color: var(--gray-dim);
   font-variant-numeric: tabular-nums;
 }
+/* The conversation's age: pinned to the row's right edge. The name keeps
+   `flex: 1 1 auto` plus ellipsis, so it takes exactly the space between
+   icon and age and truncates rather than wrapping. */
+.ptree-time {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--gray-dim);
+  font-variant-numeric: tabular-nums;
+}
 
 /* A conversation reads lighter than the folder holding it: the folders are
    the structure, the conversations are the contents. */
@@ -232,6 +241,13 @@ fn row(st: &str, on_open: &str) -> Node {
             m("i").class("ph ph-caret-right ptree-caret"),
             Node::icon_dyn("r.icon").class("ph ptree-icon"),
             m("span").class("ptree-name").text("r.label"),
+            // Sessions only; folders carry no `created`, so the span stays
+            // hidden on them. Empty `created` (a session predating the field)
+            // is falsy too, which keeps the row's shape unchanged.
+            m("span")
+                .class("ptree-time relative-timestamp")
+                .show("r.created")
+                .text(&format!("{st}.relTime(r.created)")),
             m("span")
                 .class("ptree-count")
                 .show("r.count")
@@ -391,6 +407,9 @@ fn session_row(s: &JsValue, depth: usize) -> JsValue {
     );
     js::set_str(&r, "drop", "");
     js::set_str(&r, "icon", "chat-circle");
+    // When it was started: `relTime` formats the same `createdAt` field
+    // everywhere, so no part of the UI can disagree about an age.
+    js::set_str(&r, "created", &js::get_str(s, "createdAt"));
     js::set_num(&r, "count", 0.0);
     js::set_bool(&r, "open", false);
     js::set_bool(&r, "leaf", true);
