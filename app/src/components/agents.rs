@@ -183,6 +183,10 @@ fn select(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::set_bool(&s, "creating", false);
     js::set_str(&s, "error", "");
     js::set_str(&s, "saved", "");
+    // The inspector is the third column, and it starts collapsed: picking an
+    // agent with the column shut would look like the row did nothing. Same
+    // line as `new_agent` below, for the same reason.
+    js::set_bool(&mjs::store_ref("home"), "asideOpen", true);
     mjs::redraw();
     JsValue::UNDEFINED
 }

@@ -20,6 +20,9 @@
 //! literally the same markup (STORYBOOKING.md §6). The palette
 //! comes from the shared `:is(#sb, #home)` token ramp in `web/storybook.css`.
 //!
+//! The aside is drawn above as it looks once something has opened it; on a
+//! fresh load it is collapsed and the centre column has its track.
+//!
 //! Either side column collapses through the `home` store rather than an
 //! imperative class toggle, because the grid track has to shrink with it —
 //! `x-show` alone would leave the column's width behind. Both toggles sit in
@@ -34,8 +37,8 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::components::{
-    agent_editor, agents_menu, project_tree, session_editor, session_panel,
-    tab, target_form,
+    agent_editor, agents_menu, perf_badge, project_tree, session_editor,
+    session_panel, tab, target_form,
 };
 use crate::css;
 
@@ -184,20 +187,28 @@ pub const CSS: &str = r#"
    owning its own rules (its narrow mode lives in its own file). */
 @media (max-width: 1180px) {
   #home { grid-template-columns: 248px minmax(0, 1fr) 288px; }
-  #home.aside-collapsed { grid-template-columns: 248px minmax(0, 1fr) 48px; }
+  #home.aside-collapsed { grid-template-columns: 248px minmax(0, 1fr) 0px; }
 }
 @media (max-width: 1020px) {
   #home { grid-template-columns: 216px minmax(0, 1fr) 256px; }
-  #home.aside-collapsed { grid-template-columns: 216px minmax(0, 1fr) 48px; }
+  #home.aside-collapsed { grid-template-columns: 216px minmax(0, 1fr) 0px; }
 }
 /* Narrow: the rail becomes a 60px icon strip and the aside becomes an overlay
    driven by the same store flag as ever — anything that opens it (agent
    select, settings, a target form, the roster pencil) still opens it, and its
-   own toggle still closes it. Collapsed at this width means gone, since a
-   48px strip floating over the transcript would be neither affordance nor
-   content. */
+   own toggle still closes it. Collapsed means gone at every width: the aside
+   is `display: none` when collapsed, so a reserved track holds nothing — it
+   was 48px of dead gap beside the transcript, not a strip. */
 @media (max-width: 900px) {
-  #home { grid-template-columns: 60px minmax(0, 1fr); }
+  /* `.aside-collapsed` is spelled out alongside the bare `#home`, and it is
+     not redundant: the 1020px block above sets `#home.aside-collapsed`, which
+     is id+class (0,2,0) and so outranks a bare `#home` (0,1,0) here no matter
+     that this query is narrower and later. Without it a collapsed aside — the
+     default — kept the 216px rail and a 48px dead track at phone width, which
+     is precisely the layout this block exists to replace. Any rule added here
+     that the wider tiers also set by class needs the same treatment. */
+  #home,
+  #home.aside-collapsed { grid-template-columns: 60px minmax(0, 1fr); }
   #home.rail-collapsed,
   #home.rail-collapsed.aside-collapsed { grid-template-columns: 0px minmax(0, 1fr); }
   .home-rail { padding: 10px 0; margin-right: 8px; gap: 12px; }
@@ -262,6 +273,11 @@ fn main_col() -> Node {
                     .on("click", "$store.home.toggleRail()")
                     .child(Node::icon("sidebar-simple")),
                 tab::tab_bar(LIVE),
+                // m-js's own draw counters, at the top of the page. It reads
+                // the runtime, not the store, so it is the same widget the
+                // guide mounts at /storybook/perf-badge — see that module for
+                // why it writes its own text instead of binding it.
+                perf_badge::badge(),
                 m("button")
                     .class("tabs-toggle for-aside")
                     .attr("type", "button")
@@ -343,7 +359,15 @@ fn toggle_rail(_this: JsValue, _args: js_sys::Array) -> JsValue {
 pub fn register() {
     css::inject("home", CSS);
     let mut d = Def::new().named("store home");
-    d.bool("asideOpen", true)
+    // The inspector starts **closed**. It is contextual — it holds whatever
+    // was last selected — so with nothing selected yet it has nothing to
+    // show, and 320px of empty card beside the transcript reads as a panel
+    // that failed to load. Everything that puts something in it opens it on
+    // the way (see `agents::select`, `agents::new_agent`,
+    // `settings::open_panel`, `live::open_session_editor`,
+    // `target_form::open_with`), so the column appears exactly when it has an
+    // answer. Its toggle in the tab strip stays visible either way.
+    d.bool("asideOpen", false)
         .bool("railOpen", true)
         .method("toggleAside", toggle_aside)
         .method("toggleRail", toggle_rail);

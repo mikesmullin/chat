@@ -22,6 +22,7 @@ pub mod markdown;
 pub mod label;
 pub mod name_tag;
 pub mod nav_rail;
+pub mod perf_badge;
 pub mod picker;
 pub mod pie_ring_graph;
 pub mod presence;
@@ -85,6 +86,7 @@ pub fn register() {
     live::register();
     markdown::register();
     label::register();
+    perf_badge::register();
     picker::register();
     presence::register();
     target_form::register();
