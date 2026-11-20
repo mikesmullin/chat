@@ -41,6 +41,7 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::css;
+use crate::components::dropdown;
 
 const STORE: &str = "tform";
 const ST: &str = "$store.tform";
@@ -86,6 +87,18 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .tform-path .sep { opacity: .5; }
 
+/* The icon and its animation belong to the status field in this form. */
+.tform-status { display: inline-flex; align-items: center; gap: 6px; }
+.tform-status-icon { display: inline-block; font-size: 14px; line-height: 1; }
+.tform-status.is-busy .tform-status-icon { color: var(--mjs-yellow); animation: tform-status-spin 1s linear infinite; }
+.tform-status.is-ready .tform-status-icon { color: var(--pastel-green, var(--ok, #22c55e)); }
+.tform-status.is-error .tform-status-icon { color: var(--pastel-red, var(--danger, #d9534f)); }
+.tform-status.is-warning .tform-status-icon { color: var(--pastel-amber, #f5d8a6); }
+.tform-status.is-idle .tform-status-icon { color: var(--gray-dim); }
+@keyframes tform-status-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .tform-status.is-busy .tform-status-icon { animation: none; }
+}
 .tform-demo { width: 320px; }
 "#;
 
@@ -220,8 +233,8 @@ pub fn panel() -> Node {
                     m("input")
                         .attr("type", "text")
                         .attr("spellcheck", "false")
-                        .attr("placeholder", "give the box a name")
                         .model(&format!("{ST}.name"))
+                        .on("keydown.enter", &format!("{ST}.save()"))
                         .init("$el.focus()"),
                 ]),
             m("div")
@@ -232,11 +245,19 @@ pub fn panel() -> Node {
                         m("span").child(lit("Image")),
                         m("span").class("hint").child(lit("headless has no desktop")),
                     ]),
-                    m("select").model(&format!("{ST}.image")).kids(vec![
-                        m("option").attr("value", "headless").child(lit("headless")),
-                        m("option").attr("value", "headed").child(lit("headed")),
-                    ]),
+                    dropdown::choice("sandbox-image", "desktop", &format!("{ST}.image"),
+                        &["headless", "headed"], &format!("{ST}.setImage('{{}}')")),
                 ]),
+            m("div").class("ae-field")
+                .show(&format!("{ST}.kind === 'sandbox' && {ST}.mode === 'edit'"))
+                .kids(vec![m("label").class("ae-label").child(lit("Status")),
+                    m("span").class("tform-status").attr("role", "status")
+                        .bind("class", &format!("{ST}.statusClass({ST}.status)"))
+                        .kids(vec![
+                            Node::icon_dyn(&format!("{ST}.statusIcon({ST}.status)"))
+                                .class("tform-status-icon").attr("aria-hidden", "true"),
+                            m("span").text(&format!("{ST}.status")),
+                        ])]),
             m("label")
                 .class("ae-label")
                 .show(&format!("{ST}.kind === 'sandbox' && {ST}.mode !== 'edit'"))
@@ -300,10 +321,13 @@ pub fn panel() -> Node {
 }
 
 /// standalone demo — the form as the inspector shows it, over the guide.
-pub fn demo() -> Node {
-    m("div")
-        .class("tform-demo")
-        .init(&format!("{ST}.openCreate('project', 'samples')"))
+pub fn demo() -> Node { demo_for("project") }
+
+pub fn demo_sandbox() -> Node { demo_for("sandbox") }
+
+fn demo_for(kind: &str) -> Node {
+    m("div").class("tform-demo")
+        .init(&format!("{ST}.openCreate('{kind}', 'samples')"))
         .child(panel())
 }
 
@@ -345,12 +369,14 @@ fn danger_note(kind: &str) -> &'static str {
 fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     let (label, icon) = kind_info(kind);
     let s = mjs::store_ref(STORE);
+    js::set_num(&s, "requestId", js::get_num(&s, "requestId") + 1.0);
     js::set_bool(&s, "open", true);
     js::set_str(&s, "kind", kind);
     js::set_str(&s, "mode", mode);
     js::set_str(&s, "store", store);
     js::set_str(&s, "name", name);
     js::set_str(&s, "original", name);
+    js::set_str(&s, "status", "Unknown");
     // The bare Phosphor name: the template hands this to `Node::icon_dyn`,
     // which supplies the `ph ph-` prefix itself. Writing the prefix here too
     // yields `ph ph-ph-folder-plus`, which draws nothing.
@@ -362,6 +388,7 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     js::set_str(&s, "image", "headless");
     js::set_bool(&s, "network", true);
     seed_from_host(&s, kind, mode, name);
+    if kind == "sandbox" && store == "live" { sync_sandbox_status(&mjs::store_ref(store)); }
     js::set_str(
         &s,
         "heading",
@@ -437,6 +464,8 @@ fn seed_from_host(s: &JsValue, kind: &str, mode: &str, name: &str) {
             let sandboxes = js_sys::Array::from(&js::get(&host, "sandboxes"));
             for item in sandboxes.iter() {
                 if js::get_str(&item, "id") == id {
+                    let state = js::get_str(&item, "state");
+                    if !state.is_empty() { js::set_str(s, "status", &state); }
                     let display = js::get_str(&item, "name");
                     if !display.is_empty() {
                         js::set_str(s, "name", &display);
@@ -536,6 +565,7 @@ fn open_edit(_this: JsValue, args: js_sys::Array) -> JsValue {
 
 fn close(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
+    js::set_num(&s, "requestId", js::get_num(&s, "requestId") + 1.0);
     js::set_bool(&s, "open", false);
     js::set_bool(&s, "confirming", false);
     js::set_str(&s, "error", "");
@@ -592,6 +622,7 @@ fn send(s: &JsValue, action: &str, fields: &[(&str, JsValue)]) {
 
 fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
+    if js::get_bool(&s, "busy") || !ready(JsValue::UNDEFINED, js_sys::Array::new()).is_truthy() { return JsValue::UNDEFINED; }
     let kind = js::get_str(&s, "kind");
     js::set_str(&s, "error", "");
     if kind != "project" {
@@ -724,6 +755,57 @@ fn remove(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+/// One mapping for the label's icon and styling, including unknown states.
+fn status_appearance(status: &str) -> (&'static str, &'static str) {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "creating" | "cloning" | "starting" => ("circle-notch", "is-busy"),
+        "ready" => ("check-circle", "is-ready"),
+        "stopped" => ("stop-circle", "is-idle"),
+        "error" | "failed" => ("x-circle", "is-error"),
+        "service unavailable" | "not found" => ("warning-circle", "is-warning"),
+        _ => ("question", "is-idle"),
+    }
+}
+
+fn status_icon(_this: JsValue, args: js_sys::Array) -> JsValue {
+    JsValue::from_str(status_appearance(&js::arg_str(&args, 0)).0)
+}
+
+fn status_class(_this: JsValue, args: js_sys::Array) -> JsValue {
+    JsValue::from_str(status_appearance(&js::arg_str(&args, 0)).1)
+}
+
+fn set_image(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let image = js::arg_str(&args, 0);
+    if image == "headless" || image == "headed" { js::set_str(&mjs::store_ref(STORE), "image", &image); }
+    JsValue::UNDEFINED
+}
+
+/// Update only the status, leaving a user's in-progress name edit untouched.
+pub(crate) fn sync_sandbox_status(host: &JsValue) {
+    let form = mjs::store_ref(STORE);
+    if !js::get_bool(&form, "open") || js::get_str(&form, "kind") != "sandbox"
+        || js::get_str(&form, "store") != "live" { return; }
+    let warning = if js::get_bool(host, "sboxUp") { "" } else { "The sandbox service is not answering." };
+    if js::get_str(&form, "note") != warning { js::set_str(&form, "note", warning); }
+    if js::get_str(&form, "mode") != "edit" { return; }
+    let id = js::get_str(&form, "original");
+    let rows = js_sys::Array::from(&js::get(host, "sandboxes"));
+    let status = if !js::get_bool(host, "sboxUp") { "Service unavailable".to_string() }
+        else { rows.iter().find(|row| js::get_str(row, "id") == id)
+            .map(|row| js::get_str(&row, "state"))
+            .filter(|state| !state.is_empty()).unwrap_or_else(|| "Not found".to_string()) };
+    if js::get_str(&form, "status") != status { js::set_str(&form, "status", &status); }
+}
+
+/// Switch a successful create into the same editor used by the picker.
+pub(crate) fn sandbox_created(id: &str, state: &str, name: &str, host: &str) {
+    open_with("sandbox", "edit", host, id);
+    let form = mjs::store_ref(STORE);
+    if js::get_str(&form, "name") == id && !name.is_empty() { js::set_str(&form, "name", name); }
+    if !state.is_empty() { js::set_str(&form, "status", state); }
+}
+
 pub fn register() {
     css::inject("target-form", CSS);
     let mut d = Def::new().named("store tform");
@@ -742,10 +824,15 @@ pub fn register() {
         .str("path", "")
         .str("repoId", "")
         .str("image", "headless")
+        .str("status", "Unknown")
+        .num("requestId", 0.0)
         .bool("network", true)
         .bool("create", true)
         .bool("busy", false)
         .bool("confirming", false)
+        .method("statusIcon", status_icon)
+        .method("statusClass", status_class)
+        .method("setImage", set_image)
         .method("openCreate", open_create)
         .method("openEdit", open_edit)
         .method("close", close)

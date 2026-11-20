@@ -155,6 +155,7 @@ pub const CSS: &str = r#"
 
 /* ---- right aside ------------------------------------------------- */
 .home-aside-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 12px 12px; }
+.home-aside-toggle-row { display: none; }
 
 /* The projects section opens the rail, with the same gutters as the
    sections below it so they read as one column. */
@@ -214,7 +215,12 @@ pub const CSS: &str = r#"
   .home-rail { padding: 10px 0; margin-right: 8px; gap: 12px; }
   .home-projects { padding: 10px 6px 4px; }
   .home-agents { padding: 0 6px 10px; }
-  .home-col { margin-right: 8px; }
+  /* Keep the center column's internal z-index layers beneath the overlay. */
+  .home-col { margin-right: 8px; isolation: isolate; }
+  .home-aside-toggle-row {
+    display: flex; justify-content: flex-end; flex: 0 0 auto;
+    padding: 6px 8px 0;
+  }
   .home-aside {
     position: fixed; top: 10px; right: 10px; bottom: 10px;
     width: min(340px, calc(100vw - 100px));
@@ -258,6 +264,19 @@ fn rail() -> Node {
         ])
 }
 
+/// The same inspector toggle is used in the tab strip and the narrow overlay.
+fn aside_toggle() -> Node {
+    m("button")
+        .class("tabs-toggle for-aside")
+        .attr("type", "button")
+        .attr("title", "Toggle inspector")
+        .attr("aria-label", "Toggle inspector")
+        .attr("aria-controls", "home-aside")
+        .bind("aria-expanded", "($store.home.asideOpen ? 'true' : 'false')")
+        .on("click", "$store.home.toggleAside()")
+        .child(Node::icon("sidebar-simple"))
+}
+
 /// centre column: the tab bar above the session panel, in one card.
 fn main_col() -> Node {
     // The tab strip sits OUTSIDE the card: tabs label the panel, so the
@@ -278,14 +297,7 @@ fn main_col() -> Node {
                 // guide mounts at /storybook/perf-badge — see that module for
                 // why it writes its own text instead of binding it.
                 perf_badge::badge(),
-                m("button")
-                    .class("tabs-toggle for-aside")
-                    .attr("type", "button")
-                    .attr("title", "Toggle inspector")
-                    .attr("aria-label", "Toggle inspector")
-                    .bind("aria-expanded", "($store.home.asideOpen ? 'true' : 'false')")
-                    .on("click", "$store.home.toggleAside()")
-                    .child(Node::icon("sidebar-simple")),
+                aside_toggle(),
             ]),
         // With no tabs open there is nothing for the card to hold, so the
         // column falls back to the bare page: a slate rectangle wrapping an
@@ -305,8 +317,10 @@ fn main_col() -> Node {
 fn aside() -> Node {
     m("aside")
         .class("home-aside")
+        .attr("id", "home-aside")
         .attr("aria-label", "Details")
         .kids(vec![
+            m("div").class("home-aside-toggle-row").child(aside_toggle()),
             // The inspector: contextual, so its contents are whatever is
             // selected elsewhere. Today that is an agent definition.
             m("div").class("home-aside-body").kids(vec![

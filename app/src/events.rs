@@ -5,6 +5,7 @@ use wasm_bindgen::{prelude::*, JsCast};
 thread_local! {
     static SESSIONS: std::cell::RefCell<JsValue> = const { std::cell::RefCell::new(JsValue::UNDEFINED) };
     static APPROVALS: std::cell::RefCell<JsValue> = const { std::cell::RefCell::new(JsValue::UNDEFINED) };
+    static SANDBOXES: std::cell::RefCell<JsValue> = const { std::cell::RefCell::new(JsValue::UNDEFINED) };
 }
 
 fn session_delta(delta: &JsValue) {
@@ -32,6 +33,32 @@ fn session_delta(delta: &JsValue) {
         let next: JsValue = next.into();
         *slot.borrow_mut() = next.clone();
         crate::components::live::apply_sessions(next);
+    });
+}
+
+fn sandbox_delta(delta: &JsValue) {
+    SANDBOXES.with(|slot| {
+        let old = slot.borrow().clone();
+        let by_id = js::obj();
+        for row in js_sys::Array::from(&js::get(&old, "sandboxes")).iter() {
+            js::set(&by_id, &js::get_str(&row, "id"), &row);
+        }
+        for row in js_sys::Array::from(&js::get(delta, "changed")).iter() {
+            js::set(&by_id, &js::get_str(&row, "id"), &row);
+        }
+        let rows = js_sys::Array::new();
+        for id in js_sys::Array::from(&js::get(delta, "order")).iter() {
+            if let Some(id) = id.as_string() {
+                let row = js::get(&by_id, &id);
+                if !js::is_missing(&row) { rows.push(&row); }
+            }
+        }
+        let next = js::obj();
+        js::set(&next, "sandboxes", &rows.into());
+        js::set(&next, "sboxUp", &js::get(delta, "sboxUp"));
+        let next: JsValue = next.into();
+        *slot.borrow_mut() = next.clone();
+        crate::components::live::apply_sandboxes(&next);
     });
 }
 
@@ -86,6 +113,8 @@ pub fn start() {
         "models",
         "approvals",
         "approvals-delta",
+        "sandboxes",
+        "sandboxes-delta",
         "turn-snapshot",
         "turn-event",
         "turn-finished",
@@ -109,6 +138,11 @@ pub fn start() {
                         crate::components::live::apply_pending(value);
                     }
                     "approvals-delta" => approval_delta(&value),
+                    "sandboxes" => {
+                        SANDBOXES.with(|s| *s.borrow_mut() = value.clone());
+                        crate::components::live::apply_sandboxes(&value);
+                    }
+                    "sandboxes-delta" => sandbox_delta(&value),
                     "turn-snapshot" => crate::components::live::receive_turn_snapshot(value),
                     "turn-event" => crate::components::live::receive_turn_event(value),
                     "turn-finished" => crate::components::notification_toggle::completed(
