@@ -663,6 +663,7 @@ mod metric_tests {
 
 /// Truncate to `n` characters with an ellipsis, counting characters rather
 /// than bytes so a multi-byte glyph is never cut in half.
+#[cfg(test)]
 pub fn clip(text: &str, n: usize) -> String {
     let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let chars: Vec<char> = flat.chars().collect();

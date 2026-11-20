@@ -27,9 +27,13 @@ pub const STORE: &str = "live";
 
 /// Pull the session list; refresh the rail and the tab bar.
 fn load_sessions(_this: JsValue, _args: js_sys::Array) -> JsValue {
-    load_models();
-    api::sessions(|v| {
+    api::sessions(apply_sessions);
+    JsValue::UNDEFINED
+}
+
+pub(crate) fn apply_sessions(v: JsValue) {
         let s = mjs::store_ref(STORE);
+        if same_json(&js::get(&s, "sessions"), &js::get(&v, "sessions")) && js::get_str(&s, "projectRoot") == js::get_str(&v, "projectRoot") { return; }
         js::set(&s, "sessions", &js::get(&v, "sessions"));
         js::set_str(&s, "projectRoot", &js::get_str(&v, "projectRoot"));
         rebuild_tabs(&s);
@@ -43,13 +47,11 @@ fn load_sessions(_this: JsValue, _args: js_sys::Array) -> JsValue {
                 open_session_by_id(&id);
             }
         }
-        mjs::redraw();
-    });
-    JsValue::UNDEFINED
-}
+    }
 
 /// Load one session's transcript into `messages`.
 fn open_session_by_id(id: &str) {
+    apply_cached_approvals();
     let want = id.to_string();
     api::session(id, move |v| {
         let s = mjs::store_ref(STORE);
@@ -288,8 +290,7 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_bool(&s, "stopping", false);
     js::set_bool(&s, "stopPending", false);
     js::set(&s, "approvals", &js_sys::Array::new().into());
-    // Only while a turn is running: the poll stops itself when it ends.
-    rustex1_kit::lifecycle::after(ASK_POLL_MS, poll_pending);
+    apply_cached_approvals();
     clear_stream(&s);
     // Sending is an explicit "show me the bottom", even if the reader had
     // scrolled up a moment ago.
@@ -682,19 +683,27 @@ fn set_model(_this: JsValue, args: js_sys::Array) -> JsValue {
 }
 
 /// Fill the model list from agl's own config, and settle on one.
-/// The slow poll: re-read the session list, which changes on its own.
-pub fn refresh() {
-    load_sessions(JsValue::UNDEFINED, js_sys::Array::new());
+pub fn load_models() {
+    crate::api::models(apply_models);
 }
 
-pub fn load_models() {
-    crate::api::models(|v| {
+fn refresh_models(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    load_models();
+    JsValue::UNDEFINED
+}
+
+fn same_json(a: &JsValue, b: &JsValue) -> bool {
+    js_sys::JSON::stringify(a).ok() == js_sys::JSON::stringify(b).ok()
+}
+
+pub(crate) fn apply_models(v: JsValue) {
         let s = mjs::store_ref(STORE);
         let models = js::get(&v, "models");
         if models.is_undefined() || models.is_null() {
             return;
         }
-        js::set(&s, "models", &models);
+        let changed = !same_json(&js::get(&s, "models"), &models);
+        if changed { js::set(&s, "models", &models); }
         // Keep the current pick only if the server still offers it; otherwise
         // take the configured default, so the box never names a model that
         // would be refused.
@@ -708,56 +717,44 @@ pub fn load_models() {
             js::set_str(&mjs::store_ref("dropdown"), "model", &pick);
             save_model(&pick);
         }
-        mjs::redraw();
-    });
-}
+    }
 
 // ── approvals ──────────────────────────────────────────────────────────────
 //
 // A tool the allowlist does not permit stops the turn on the server and asks.
 // The question cannot come down the turn's own stream — the thread writing
-// that stream is the one blocked on the answer — so while a turn is in
-// flight the browser asks a second connection what is pending.
+// that stream is the one blocked on the answer — the server pushes changes
+// through the shared event stream.
 
-/// How often to ask. Fast enough that a gated turn does not look hung,
-/// slow enough to be free: one tiny request a second, only while waiting.
-const ASK_POLL_MS: f64 = 1000.0;
+thread_local! {
+    static PENDING: std::cell::RefCell<JsValue> = const { std::cell::RefCell::new(JsValue::UNDEFINED) };
+    static PENDING_KEY: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
 
-/// Ask once, then keep asking for as long as the turn is still running.
-fn poll_pending() {
+pub(crate) fn apply_pending(v: JsValue) {
+    PENDING.with(|p| *p.borrow_mut() = v);
+    apply_cached_approvals();
+}
+
+fn apply_cached_approvals() {
     let s = mjs::store_ref(STORE);
-    if !js::get_bool(&s, "waiting") {
-        // The turn ended: anything still on screen was answered, and the
-        // transcript now carries it as a real row.
-        js::set(&s, "approvals", &js_sys::Array::new().into());
-        mjs::redraw();
-        return;
-    }
     let id = js::get_str(&s, "activeId");
-    if id.is_empty() {
-        rustex1_kit::lifecycle::after(ASK_POLL_MS, poll_pending);
-        return;
+    let rows = PENDING.with(|p| js::get(&p.borrow(), &id));
+    let rows = if rows.is_undefined() || rows.is_null() { js_sys::Array::new().into() } else { rows };
+    let key = format!("{}:{}", id, js_sys::JSON::stringify(&rows).ok().and_then(|x| x.as_string()).unwrap_or_default());
+    if PENDING_KEY.with(|p| *p.borrow() == key) { return; }
+    PENDING_KEY.with(|p| *p.borrow_mut() = key);
+    // Copy before adding UI fields; the cached wire snapshot stays unchanged.
+    let copy = js_sys::JSON::stringify(&rows).ok().and_then(|v| v.as_string()).and_then(|v| js_sys::JSON::parse(&v).ok()).unwrap_or(rows);
+    let arr = js_sys::Array::from(&copy);
+    for r in arr.iter() {
+        js::set_bool(&r, "expanded", true);
+        js::set_bool(&r, "turn", true);
+        js::set_str(&r, "handle", &js::get_str(&s, "streamHandle"));
     }
-    crate::api::pending(&id, |v| {
-        let s = mjs::store_ref(STORE);
-        let rows = js::get(&v, "pending");
-        if !rows.is_undefined() && !rows.is_null() {
-            // Each question is drawn by the same card the transcript uses,
-            // so it needs the fields a row has. `expanded` starts open: it
-            // is a question, and a question folded shut is one nobody
-            // answers.
-            let arr = js_sys::Array::from(&rows);
-            for i in 0..arr.length() {
-                let r = arr.get(i);
-                js::set_bool(&r, "expanded", true);
-                js::set_bool(&r, "turn", true);
-                js::set_str(&r, "handle", &js::get_str(&s, "streamHandle"));
-            }
-            js::set(&s, "approvals", &arr.into());
-        }
-        mjs::redraw();
-    });
-    rustex1_kit::lifecycle::after(ASK_POLL_MS, poll_pending);
+    if arr.length() != 0 || js_sys::Array::from(&js::get(&s, "approvals")).length() != 0 {
+        js::set(&s, "approvals", &arr.into());
+    }
 }
 
 /// `decideApproval(id, verdict)` — answer, and take the card off the screen.
@@ -914,7 +911,6 @@ pub fn register() {
         .method("closeTab", close_tab)
         .method("send", send)
         .method("historyMove", history_move)
-        .method("relTime", rel_time)
         .method("relAgo", rel_ago)
         .method("onScroll", on_scroll)
         .method("keepPinned", keep_pinned)
@@ -957,7 +953,8 @@ pub fn register() {
         .method("iconOf", icon_of)
         .method("stop", stop)
         .method("decideApproval", decide_approval)
-        .method("setModel", set_model);
+        .method("setModel", set_model)
+        .method("refreshModels", refresh_models);
     mjs::store(STORE, &d.finish());
 }
 
@@ -1055,39 +1052,7 @@ fn add_html(msg: &JsValue) {
     js::set_str(msg, "html", &helpers::markdown_to_html(&text));
 }
 
-/// `relTime(iso)` — "just now", "5m", "3h", "2d".
-///
-/// Coarse on purpose: the project tree wants a glanceable age, and a value
-/// that changes every second would redraw the list for no reason.
-pub(crate) fn rel_time(_this: JsValue, args: js_sys::Array) -> JsValue {
-    let iso = js::arg_str(&args, 0);
-    if iso.is_empty() {
-        return JsValue::from_str("");
-    }
-    let date = js_sys::Date::new(&JsValue::from_str(&iso));
-    let then = date.get_time();
-    if then.is_nan() {
-        return JsValue::from_str("");
-    }
-    let now = js_sys::Date::now();
-    let secs = ((now - then) / 1000.0).max(0.0);
-    let out = if secs < 45.0 {
-        "just now".to_string()
-    } else if secs < 3600.0 {
-        format!("{}m", (secs / 60.0).round().max(1.0) as i64)
-    } else if secs < 86_400.0 {
-        format!("{}h", (secs / 3600.0).floor() as i64)
-    } else {
-        format!("{}d", (secs / 86_400.0).floor() as i64)
-    };
-    JsValue::from_str(&out)
-}
-
-/// `relAgo(iso)` — the same elapsed time as [`rel_time`], read as prose.
-///
-/// A byline is a sentence fragment ("fish, 24min ago"), not a column of
-/// figures, so it gets words rather than the rail's compact `24m`. Both read
-/// the same clock; only the rendering differs.
+/// Format a byline's elapsed time as prose, such as "24min ago".
 pub(crate) fn rel_ago(_this: JsValue, args: js_sys::Array) -> JsValue {
     let iso = js::arg_str(&args, 0);
     if iso.is_empty() {

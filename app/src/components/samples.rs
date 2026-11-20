@@ -291,7 +291,8 @@ fn sessions() -> JsValue {
         let created = js_sys::Date::new_0();
         created.set_time(now.get_time() - minutes * 60_000.0);
         js::set_str(&o, "createdAt", &iso(&created));
-        js::set_str(&o, "updatedAt", &iso(&now));
+        js::set_str(&o, "updatedAt", &iso(&created));
+        js::set_str(&o, "lastEventAt", &iso(&created));
         out.push(&o);
     }
     out.into()
@@ -786,7 +787,6 @@ pub fn register() {
         // The same clock *and* the same rendering the app uses: the guide's
         // project tree is the same component, so its ages must read `12m`,
         // not `12min ago`. `relAgo` is the prose form, for bylines.
-        .method("relTime", crate::components::live::rel_time)
         .method("toggleCard", toggle_card)
         .method("accentOf", accent_of)
         .method("iconOf", icon_of)
@@ -817,6 +817,7 @@ pub fn register() {
         .method("setPolicy", inert)
         .method("setReasoning", inert)
         .method("dropSession", drop_session)
+        .method("refreshModels", inert)
         .method("loadProjects", inert)
         .method("loadTargets", inert)
         // The guide's form opens and validates; it persists nothing.

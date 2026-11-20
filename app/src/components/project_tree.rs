@@ -118,6 +118,7 @@ pub const CSS: &str = r#"
   color: var(--gray-dim);
   font-variant-numeric: tabular-nums;
 }
+.ptree-time .ui-reltime { min-width: 0; font: inherit; color: inherit; }
 /* Narrow shell (see home.rs breakpoints): the row is a centred glyph. Rows
    still toggle on click; the caret is just not given room. The row `title`
    still names the folder or session on hover. */
@@ -255,13 +256,11 @@ fn row(st: &str, on_open: &str) -> Node {
             Node::host("uiSessionState", &[])
                 .bind("tone", &session_state::tone_of("r"))
                 .iff("r.kind === 'session'"),
-            // Sessions only; folders carry no `created`, so the span stays
-            // hidden on them. Empty `created` (a session predating the field)
-            // is falsy too, which keeps the row's shape unchanged.
-            m("span")
+            // Sessions only; folders have no event timestamp.
+            Node::host("uiRelTime", &[])
                 .class("ptree-time relative-timestamp")
-                .show("r.created")
-                .text(&format!("{st}.relTime(r.created)")),
+                .bind("at", "r.lastEventAt")
+                .iff("r.lastEventAt"),
         ])
 }
 
@@ -310,10 +309,21 @@ fn rows(_this: JsValue, args: js_sys::Array) -> JsValue {
         .get(0)
         .dyn_into::<js_sys::Array>()
         .unwrap_or_else(|_| js_sys::Array::new());
-    let sessions = args
+    let mut sessions: Vec<JsValue> = args
         .get(1)
         .dyn_into::<js_sys::Array>()
-        .unwrap_or_else(|_| js_sys::Array::new());
+        .unwrap_or_else(|_| js_sys::Array::new())
+        .iter()
+        .collect();
+    sessions.sort_by(|a, b| {
+        let time = |s: &JsValue| {
+            let updated = js::get_str(s, "updatedAt");
+            let iso = if updated.is_empty() { js::get_str(s, "createdAt") } else { updated };
+            let n = js_sys::Date::parse(&iso);
+            if n.is_finite() { n } else { f64::NEG_INFINITY }
+        };
+        time(b).total_cmp(&time(a)).then_with(|| js::get_str(a, "id").cmp(&js::get_str(b, "id")))
+    });
 
     let st = mjs::store_ref(STORE);
     let collapsed: Vec<String> = js::get(&st, "collapsed")
@@ -375,6 +385,7 @@ fn rows(_this: JsValue, args: js_sys::Array) -> JsValue {
     let loose: Vec<JsValue> = sessions
         .iter()
         .filter(|s| session_project(s).is_empty())
+        .cloned()
         .collect();
     if !loose.is_empty() {
         let shut = is_collapsed("");
@@ -414,9 +425,10 @@ fn session_row(s: &JsValue, depth: usize) -> JsValue {
     );
     js::set_str(&r, "drop", "");
     js::set_str(&r, "icon", "chat-circle");
-    // When it was started: `relTime` formats the same `createdAt` field
-    // everywhere, so no part of the UI can disagree about an age.
-    js::set_str(&r, "created", &js::get_str(s, "createdAt"));
+    // Use the most recent event, falling back for a session with no events.
+    let last = js::get_str(s, "lastEventAt");
+    let last = if last.is_empty() { js::get_str(s, "createdAt") } else { last };
+    js::set_str(&r, "lastEventAt", &last);
     // The state symbol reads these two. A row that carries neither renders
     // the widget's default tone, which looks like every conversation is done.
     js::set_str(&r, "status", &js::get_str(s, "status"));

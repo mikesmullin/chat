@@ -132,6 +132,8 @@ pub const CSS: &str = r#"
 .dropdown-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .dropdown-item.on { color: var(--accent-soft); background: var(--accent-tint); }
 .dropdown-item-label { flex: 1 1 auto; }
+.dropdown-model-tools { display: flex; justify-content: flex-end; }
+.dropdown-model-tools .model-refresh { width: auto; padding: 5px 8px; }
 .dropdown-item-check {
   font-size: 12px;
   color: var(--accent);
@@ -226,7 +228,11 @@ pub fn dropdown_ex(
                 .class("dropdown-menu")
                 .show(&is_open)
                 .kids(if key == "model" {
-                    vec![model_item(st).for_each(&format!("modelOption in {st}.models"))]
+                    vec![m("div").class("dropdown-model-tools").child(m("button").class("dropdown-item model-refresh").attr("type", "button")
+                        .attr("title", "Refresh models").attr("aria-label", "Refresh models")
+                        .on("click", &format!("{st}.refreshModels()"))
+                        .child(m("i").class("ph ph-arrows-clockwise"))),
+                        model_item(st).for_each(&format!("modelOption in {st}.models"))]
                 } else {
                     options.iter().map(|o| item(key, o, after)).collect()
                 }),

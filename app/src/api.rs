@@ -42,23 +42,6 @@ pub fn abort<F: FnMut(JsValue) + 'static>(session_id: &str, then: F) {
     rustex1_kit::api::post_json("/api/abort", &payload.into(), then);
 }
 
-/// What this conversation is waiting on, if anything.
-///
-/// Polled while a turn is in flight. The question cannot ride the turn's own
-/// NDJSON stream: the server thread writing that stream is the one blocked
-/// on the answer (see angela's `approvals`), so it arrives over a second
-/// connection or not at all.
-pub fn pending<F: FnMut(JsValue) + 'static>(session_id: &str, then: F) {
-    let id = js::call(
-        &js::global(),
-        "encodeURIComponent",
-        &[JsValue::from_str(session_id)],
-    )
-    .as_string()
-    .unwrap_or_default();
-    rustex1_kit::api::get(&format!("/api/pending?sessionId={id}"), None, then);
-}
-
 /// Answer one. `allow` runs it once, `always` stops asking for this exact
 /// call in this conversation, `deny` refuses and tells the model so.
 pub fn approve<F: FnMut(JsValue) + 'static>(id: &str, decision: &str, then: F) {

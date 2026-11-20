@@ -27,7 +27,7 @@ pub fn project_root() -> std::path::PathBuf {
 
 /// Built once: it owns the session store and the tokio runtime that turns
 /// drive agl on. Rebuilding per request would spin up a runtime per call.
-fn angela(port: u16) -> &'static AngelaServer {
+pub(crate) fn angela(port: u16) -> &'static AngelaServer {
     use std::sync::OnceLock;
     static SERVER: OnceLock<AngelaServer> = OnceLock::new();
     SERVER.get_or_init(|| {
@@ -87,24 +87,63 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
     }
 }
 
-/// The dev server's raw `/api/` handler.
-pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
-    if req.path == "/api/models" {
-        let cfg = agl::config::read_user_config();
-        let default = cfg.get("default_model").and_then(|v| v.to_scalar_string()).unwrap_or_default();
-        let mut models = Vec::<String>::new();
-        if let Some(providers) = cfg.get("context_windows").and_then(|v| v.as_map()) {
-            for (provider, entries) in providers {
-                if let Some(entries) = entries.as_map() {
-                    for name in entries.keys() {
-                        let id = format!("{provider}:{name}");
-                        if !models.contains(&id) { models.push(id); }
-                    }
-                }
+/// Current model configuration, shared by the on-demand endpoint and event feed.
+pub fn models() -> Value {
+    let cfg = agl::config::read_user_config();
+    let default = cfg.get("default_model").and_then(|v| v.to_scalar_string()).unwrap_or_default();
+    let mut models = Vec::<String>::new();
+    if let Some(providers) = cfg.get("context_windows").and_then(|v| v.as_map()) {
+        for (provider, entries) in providers {
+        if let Some(entries) = entries.as_map() {
+            for name in entries.keys() {
+            let id = format!("{provider}:{name}");
+            if !models.contains(&id) { models.push(id); }
             }
         }
-        if !default.is_empty() && !models.contains(&default) { models.push(default.clone()); }
-        let body = serde_json::json!({"default_model": default, "models": models});
+        }
+    }
+    if !default.is_empty() && !models.contains(&default) { models.push(default.clone()); }
+    serde_json::json!({"default_model": default, "models": models})
+}
+
+/// Session metadata plus the timestamp of the newest event on any branch.
+/// `updatedAt` also changes for settings edits, so it is not an event timestamp.
+pub(crate) fn sessions(port: u16) -> Value {
+    let mut data = angela(port).sessions_list_for_test();
+    let path = project_root().join(".angela").join("conversations.db");
+    if let Ok(conn) = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        add_latest_events(&mut data, &conn);
+    }
+    data
+}
+
+fn add_latest_events(data: &mut Value, db: &rusqlite::Connection) {
+    let Some(rows) = data.get_mut("sessions").and_then(Value::as_array_mut) else { return; };
+    let Ok(mut query) = db.prepare_cached(
+        "SELECT ts FROM nodes WHERE conversation_id = ?1 ORDER BY seq DESC LIMIT 1"
+    ) else { return; };
+    for row in rows {
+        let Some(id) = row.get("id").and_then(Value::as_str) else { continue; };
+        let time: Option<String> = rusqlite::OptionalExtension::optional(query.query_row([id], |r| r.get(0))).ok().flatten();
+        if let (Some(time), Some(row)) = (time, row.as_object_mut()) {
+            row.insert("lastEventAt".into(), Value::String(time));
+        }
+    }
+}
+
+/// The dev server's raw `/api/` handler.
+pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
+    if req.path == "/api/sessions" && req.method == "GET" {
+        let _ = out.json(200, &sessions(state.config.port));
+        return;
+    }
+    if req.path == "/api/events" && req.method == "GET" {
+        crate::events::stream(out);
+        return;
+    }
+    if req.path == "/api/models" {
+        let body = models();
+        crate::events::publish_models(body.clone());
         let _ = out.json(200, &body);
         return;
     }
@@ -308,4 +347,26 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     };
     angela(state.config.port).dispatch(&areq, &mut sink);
     sink.end();
+}
+
+#[cfg(test)]
+mod latest_event_tests {
+    use super::*;
+
+    #[test]
+    fn latest_event_is_taken_from_the_latest_sequence_not_metadata() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE nodes (conversation_id TEXT, seq INTEGER, ts TEXT);
+            INSERT INTO nodes VALUES ('a', 1, '2020-01-01T00:00:00Z');
+            INSERT INTO nodes VALUES ('a', 2, '2020-02-01T00:00:00Z');
+            INSERT INTO nodes VALUES ('b', 1, '2020-03-01T00:00:00Z');").unwrap();
+        let mut sessions = serde_json::json!({"sessions": [
+            {"id":"a", "updatedAt":"2025-01-01T00:00:00Z"},
+            {"id":"b"}, {"id":"empty"}
+        ]});
+        add_latest_events(&mut sessions, &db);
+        assert_eq!(sessions["sessions"][0]["lastEventAt"], "2020-02-01T00:00:00Z");
+        assert_eq!(sessions["sessions"][1]["lastEventAt"], "2020-03-01T00:00:00Z");
+        assert!(sessions["sessions"][2].get("lastEventAt").is_none());
+    }
 }
