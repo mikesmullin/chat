@@ -16,3 +16,4 @@ rustex1-devserver = { path = "../vendor/rustex1/devserver" }
 angela = { path = "../../../angela-rs" }
 agl = { path = "../../../agl-rs" }
 serde_json = "1"
+rusqlite = "0.42"

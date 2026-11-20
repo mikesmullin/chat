@@ -7,6 +7,7 @@
 //! Sessions live under `<cwd>/.angela/sessions`, or `ANGELA_ROOT` if set.
 
 mod api;
+mod events;
 mod hostgit;
 mod sbox;
 
@@ -26,7 +27,7 @@ fn main() {
     // /api/ is answered in-process by the embedded angela. The NDJSON chat
     // stream is written frame by frame, so a turn reaches the browser as the
     // model produces it.
-    let mut server = Server::new(config).raw("/api/", api::handle_api);
+    let mut server = Server::new(config).raw("/api/", api::handle_api).on_start(events::start);
     if rebuild {
         server = server.rebuild_on_start();
     }

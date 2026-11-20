@@ -130,6 +130,7 @@ version = "0.1.0"
 dependencies = [
  "agl",
  "angela",
+ "rusqlite",
  "rustex1-devserver",
  "serde_json",
 ]

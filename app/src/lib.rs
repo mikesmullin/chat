@@ -17,14 +17,11 @@ use rustex1_kit::{self as kit, App, Runtime};
 use wasm_bindgen::prelude::*;
 
 mod api;
+mod events;
 mod helpers;
 mod pages;
 mod components;
 mod css;
-
-/// How often the wall re-reads sessions. The list changes on its own (another
-/// tab, a `/new`, a delete), so the poll is the reconciler.
-const POLL_MS: f64 = 4000.0;
 
 struct Chat;
 
@@ -41,13 +38,11 @@ impl App for Chat {
         None
     }
 
-    fn started(&self, rt: &mut Runtime) {
+    fn kit_dev_telemetry(&self) -> bool { false }
+
+    fn started(&self, _rt: &mut Runtime) {
         components::live::load_models();
-        rt.every(POLL_MS, || {
-            // light poll: the session list changes on its own — another tab,
-            // a `/new`, a delete — so the poll is the reconciler.
-            components::live::refresh();
-        });
+        events::start();
     }
 }
 
