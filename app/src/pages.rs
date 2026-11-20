@@ -11,6 +11,8 @@
 //! gone: those are components now, and the design guide shows them against
 //! sample data without a second copy of the markup.
 
+use crate::css;
+use rustex1_kit::h::{lit, m};
 use rustex1_kit::{mjs, Runtime};
 use rustex1_kit::mjs::Def;
 
@@ -30,4 +32,46 @@ pub fn register(rt: &mut Runtime) {
     });
 
     storybook::register(rt);
+
+    // /test — a single small Rust + m-js hello world for diagnosing the Fire
+    // crashes: no components, no stores, no fetches. Just the framework, the
+    // wasm instance and Chromium. If this crashes on the tablet, the stack
+    // itself is the problem; if it holds, the heavy app's data/rendering is.
+    css::inject(
+        "test",
+        r#"#test {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  text-align: center;
+  padding: 2rem;
+}
+#test h1 {
+  font-size: 2.4rem;
+  line-height: 1.2;
+}
+#test p {
+  color: var(--muted);
+  max-width: 34ch;
+  line-height: 1.55;
+  margin: 0 auto;
+}
+"#,
+    );
+    rt.route("/test", "Test", |_| {
+        let mut d = Def::new().named("route /test");
+        d.tree(
+            m("div")
+                .attr("id", "test")
+                .class("test-page")
+                .kids(vec![
+                    m("h1").child(lit("Hello, World")),
+                    m("p").child(lit(
+                        "One tiny component. No stores, no fetches, no widgets. If this crashes on the Fire, it is the Rust + m-js + Chromium stack, not the heavy app.",
+                    )),
+                ]),
+        );
+        d.finish()
+    });
 }

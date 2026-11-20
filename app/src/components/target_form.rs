@@ -353,6 +353,11 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     if mjs::has_store("sessionDraft") {
         js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
     }
+    // ...and the column it is drawn in has to be there to show it. The
+    // inspector starts collapsed, so a form opened into it without this is a
+    // `+` that appears to do nothing. Harmless on `/storybook`, which
+    // registers the same `home` store but has no third column to collapse.
+    js::set_bool(&mjs::store_ref("home"), "asideOpen", true);
     mjs::redraw();
 }
 

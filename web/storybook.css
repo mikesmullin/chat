@@ -47,6 +47,7 @@
   --pastel-teal: #7dcfc1;
   --pastel-cyan: #aecbe3;
   --pastel-red: #f2adab;
+  --mjs-yellow: var(--pastel-amber);
 
   /* dim gray, near #666 - idle state + its symbol */
   --gray-dim: #6e717a;
@@ -263,16 +264,20 @@
    Page-level responsive rules
    ================================================================ */
 @media (max-width: 860px) {
-  #sb { grid-template-columns: 1fr; }
-  .sb-rail {
-    grid-row: 1 / 1; flex-direction: row; align-items: center;
-    border-right: 0; border-bottom: 1px solid var(--border);
-    overflow: hidden; height: auto; margin-right: 0;
+  /* Narrow viewports (e.g. the fire, ~600px CSS width): the storybook rail is
+     too long (~90 items) to sit as a horizontal bar, so keep the two-column
+     layout and just narrow the rail instead of stacking content below it. */
+  #sb { grid-template-columns: 220px 1fr; }
+  /* #sb-prefixed (id selector) beats the component <style> tags injected at
+     boot, so the narrow-rail width and 0 margin survive the cascade. */
+  /* The rail fills its (now narrower) grid column. No width/flex overrides —
+     a grid item should size to its track, not a flex basis. */
+  #sb .sb-rail {
+    grid-column: 1 / 1;
+    margin-right: 0;
+    border-right: 1px solid var(--border);
   }
-  .sb-rail-head { margin: 0; padding: 12px 16px; display: flex; align-items: center; gap: 16px; }
-  .rail-group { display: none; }
-  .nav-list { flex-direction: row; flex-wrap: wrap; gap: 8px; padding: 10px; overflow: hidden; white-space: nowrap; }
-  .sb-content { padding: 16px; margin: 0 10px 10px; }
-  .nav-demo { width: 100%; height: 340px; }
-  .rail-toggle { display: none; }
+  #sb .sb-content { padding: 16px; margin: 10px 10px 10px 0; }
+  #sb .nav-demo { width: 100%; height: 340px; }
 }
+

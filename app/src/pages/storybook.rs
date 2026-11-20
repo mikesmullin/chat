@@ -6,6 +6,7 @@
 //!   /storybook            -> Settings Menu Item (home)
 //!   /storybook/counter    -> Counter
 //!   /storybook/nav-rail   -> Left Sidebar Navigation (standalone demo)
+//!   /storybook/perf-badge -> Perf Badge (m-js draw counters, live)
 //!   /storybook/pie-ring   -> Pie Ring Graph
 //!   /storybook/reltime    -> Relative Timestamp (live — the kit `uiRelTime`)
 //!   /storybook/session-state -> Session State (done / working / idle symbols)
@@ -62,7 +63,7 @@ use crate::components::{
     samples,
     dropdown, error_card, fold_card, picker, project_tree, prompt_card, rail_head,
     target_form,
-    field, hint_text, history_tree, item_group, label, nav_rail, radio_input, range_input,
+    field, hint_text, history_tree, item_group, label, nav_rail, perf_badge, radio_input, range_input,
     presence, reasoning_card, relative_timestamp, sandboxes_menu, session, session_editor, session_panel,
     system_card, tab, tag_input, task_list, text_area, text_input, thinking, toggle_button, tool_call_card, tool_response_card,
     user_card, validation_info,
@@ -187,6 +188,13 @@ pub fn register(rt: &mut Runtime) {
             "Left Sidebar Navigation",
             nav_rail::nav_rail_demo(),
         )
+    });
+
+    // perf badge: m-js's own draw counters. Live here, exactly as on `/` —
+    // the widget reads the runtime rather than a store, so there is no
+    // sample to pass and nothing that could disagree with the app.
+    rt.route("/storybook/perf-badge", "Perf Badge", |_| {
+        route_def("route /storybook/perf-badge", "Perf Badge", perf_badge::badge())
     });
 
     // pie ring: a 68% accent ring.
