@@ -46,6 +46,8 @@
 //!   /storybook/task-list -> Task List (todo panel)
 //!   /storybook/tab        -> Tab (single unit, three static samples)
 //!   /storybook/tab-bar    -> Tab Bar (live: add / pick / close)
+//!   /storybook/presence   -> Presence (who is seated, as a cluster of discs)
+//!   /storybook/session-editor -> Session Editor (what the cluster's `+` opens)
 //!
 //! The rail is rebuilt on every page (each route re-renders the whole `#app`
 //! tree), highlighting whichever entry matches the current component.
@@ -60,8 +62,8 @@ use crate::components::{
     samples,
     dropdown, error_card, fold_card, picker, project_tree, prompt_card, rail_head,
     target_form,
-    field, hint_text, item_group, label, nav_rail, radio_input, range_input,
-    reasoning_card, relative_timestamp, sandboxes_menu, session, session_panel,
+    field, hint_text, history_tree, item_group, label, nav_rail, radio_input, range_input,
+    presence, reasoning_card, relative_timestamp, sandboxes_menu, session, session_editor, session_panel,
     system_card, tab, tag_input, task_list, text_area, text_input, thinking, toggle_button, tool_call_card, tool_response_card,
     user_card, validation_info,
 };
@@ -364,6 +366,10 @@ pub fn register(rt: &mut Runtime) {
         route_def("route /storybook/project-tree", "Project Tree", project_tree::demo())
     });
 
+    rt.route("/storybook/history-tree", "History Tree", |_| {
+        route_def("route /storybook/history-tree", "History Tree", history_tree::demo())
+    });
+
     // the inspector form behind the pickers' Create and Edit actions.
     rt.route("/storybook/target-form", "Target Form", |_| {
         route_def("route /storybook/target-form", "Target Form", target_form::demo())
@@ -444,6 +450,20 @@ pub fn register(rt: &mut Runtime) {
     // the live tab bar: tabs close, the plus adds, click sets the active tab.
     rt.route("/storybook/tab-bar", "Tab Bar", |_| {
         route_def("route /storybook/tab-bar", "Tab Bar", tab::tab_bar(samples::EXPR))
+    });
+
+    // who is in the conversation: the cluster, truncated, unseated, empty.
+    rt.route("/storybook/presence", "Presence", |_| {
+        route_def("route /storybook/presence", "Presence", presence::demo())
+    });
+
+    // the panel the cluster's `+` opens: rename + purpose + routing + the seats.
+    rt.route("/storybook/session-editor", "Session Editor", |_| {
+        route_def(
+            "route /storybook/session-editor",
+            "Session Editor",
+            session_editor::demo(),
+        )
     });
 }
 

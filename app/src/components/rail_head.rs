@@ -15,6 +15,10 @@ pub const CSS: &str = r#"
   display: flex; align-items: center; gap: 6px;
   margin-bottom: 10px;
 }
+/* The button is neutral; the head is what puts it at the far edge of a title
+   row. `presence` mounts the same button beside a cluster it changes, where
+   pushing it to the far edge would detach it from what it acts on. */
+.rail-head .rail-add { margin-left: auto; }
 /* The title is a label, not a heading: same size and weight as the rows
    beneath it, dimmed so the list reads first. */
 .rail-title {
@@ -23,7 +27,6 @@ pub const CSS: &str = r#"
   color: var(--gray-dim);
 }
 .rail-add {
-  margin-left: auto;
   width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;
   border: 0; border-radius: 6px;
@@ -35,22 +38,43 @@ pub const CSS: &str = r#"
 .rail-head-demo { display: flex; flex-direction: column; gap: 18px; width: 264px; }
 "#;
 
+/// The add button on its own.
+///
+/// Split out of [`head`] because the same button is the one control beside a
+/// presence cluster — "who is here, and the thing that changes it" — and a
+/// second definition of a 22px `+` is the thing this repo exists to avoid.
+/// `title` is what it is called, written the way it is written in prose.
+/// The click is an **expression**, not a closure, so the guide's button writes
+/// to the guide's store and the app's writes to the session.
+fn button(icon: &str, tip: &str, on: &str) -> Node {
+    m("button")
+        .class("rail-add")
+        .attr("type", "button")
+        .attr("title", tip)
+        .attr("aria-label", tip)
+        .on("click", on)
+        .child(Node::icon(icon))
+}
+
+pub fn add(tip: &str, on: &str) -> Node {
+    button("plus", tip, on)
+}
+
+/// The same 22px ghost button with a pencil: the session header edit
+/// control. It lives beside the presence cluster but is not part of the
+/// indicator - it edits the session the cluster belongs to. Same brick,
+/// different glyph, so the two never drift into two button styles.
+pub fn edit(tip: &str, on: &str) -> Node {
+    button("pencil-simple", tip, on)
+}
+
 /// `title` is what the section is called, written the way it is written in
 /// prose. `add` is `(tooltip, click expression)`; `None` draws the title
-/// alone. The click expression — not a closure — so the guide's button writes
-/// to the guide's store and the app's writes to the session.
+/// alone.
 pub fn head(title: &str, add: Option<(&str, &str)>) -> Node {
     let mut kids = vec![m("p").class("rail-title").child(lit(title))];
     if let Some((tip, on)) = add {
-        kids.push(
-            m("button")
-                .class("rail-add")
-                .attr("type", "button")
-                .attr("title", tip)
-                .attr("aria-label", tip)
-                .on("click", on)
-                .child(Node::icon("plus")),
-        );
+        kids.push(self::add(tip, on));
     }
     m("div").class("rail-head").kids(kids)
 }
@@ -61,7 +85,7 @@ pub fn demo() -> Node {
     m("div").class("rail-head-demo").kids(vec![
         head("Projects", Some(("New project", "$store.samples.noop()"))),
         head("Agents", Some(("Define a new agent", "$store.samples.noop()"))),
-        head("Unfiled", None),
+        head("(ungrouped)", None),
     ])
 }
 
