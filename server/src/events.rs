@@ -2,13 +2,25 @@
 use rustex1_devserver::{State, Stream};
 use serde_json::{json, Value};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
 struct Snapshot {
     values: [Option<Value>; 3],
     versions: [u64; 3],
+    turns: HashMap<u64, Turn>,
+    turn_version: u64,
 }
+struct Turn {
+    session_id: String,
+    baseline: Vec<Value>,
+    prompt: String,
+    rows: Vec<Value>,
+    completed: Option<Instant>,
+}
+
 struct Feed {
     snapshot: Mutex<Snapshot>,
     changed: Condvar,
@@ -30,6 +42,43 @@ fn publish(index: usize, value: Value) {
         s.values[index] = Some(value);
         s.versions[index] += 1;
         f.changed.notify_all();
+    }
+}
+
+/// The journal belongs to the server, not to the originating HTTP socket.
+pub fn begin_turn(session_id: &str, baseline: Vec<Value>, prompt: String) -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let f = feed();
+    let mut s = f.snapshot.lock().unwrap();
+    s.turns.retain(|_, t| t.completed.is_none_or(|at| at.elapsed() < Duration::from_secs(120)));
+    s.turns.insert(id, Turn { session_id: session_id.to_string(), baseline, prompt, rows: Vec::new(), completed: None });
+    s.turn_version += 1;
+    f.changed.notify_all();
+    id
+}
+
+pub fn turn_row(id: u64, row: &Value) {
+    let f = feed();
+    let mut s = f.snapshot.lock().unwrap();
+    if let Some(turn) = s.turns.get_mut(&id) {
+        turn.rows.push(row.clone());
+        if row.get("type").and_then(Value::as_str) == Some("done") { turn.completed = Some(Instant::now()); }
+        s.turn_version += 1;
+        f.changed.notify_all();
+    }
+}
+
+pub fn end_turn(id: u64) {
+    let f = feed();
+    let mut s = f.snapshot.lock().unwrap();
+    if let Some(turn) = s.turns.get_mut(&id) {
+        if turn.completed.is_none() {
+            turn.rows.push(json!({"type":"done", "ok":false, "error":"Turn ended unexpectedly", "sessionId":turn.session_id}));
+            turn.completed = Some(Instant::now());
+            s.turn_version += 1;
+            f.changed.notify_all();
+        }
     }
 }
 
@@ -61,6 +110,10 @@ pub fn start(state: Arc<State>) {
                 }
             }
             publish(2, Value::Object(pending));
+            {
+                let mut snapshot = feed().snapshot.lock().unwrap();
+                snapshot.turns.retain(|_, t| t.completed.is_none_or(|at| at.elapsed() < Duration::from_secs(120)));
+            }
             std::thread::sleep(Duration::from_secs(1));
         }
     });
@@ -148,9 +201,12 @@ pub fn stream(out: &mut Stream<'_>) {
     let f = feed();
     let mut seen = [0; 3];
     let mut previous: [Option<Value>; 3] = [None, None, None];
+    let mut turns_seen: HashMap<u64, usize> = HashMap::new();
+    let mut turn_version = 0;
+    let mut initial = true;
     loop {
         let mut guard = f.snapshot.lock().unwrap();
-        if guard.versions == seen {
+        if !initial && guard.versions == seen && guard.turn_version == turn_version {
             let (g, _) = f
                 .changed
                 .wait_timeout(guard, Duration::from_secs(15))
@@ -174,6 +230,26 @@ pub fn stream(out: &mut Stream<'_>) {
                 }
             }
         }
+        turn_version = guard.turn_version;
+        for (id, turn) in &guard.turns {
+            if let Some(offset) = turns_seen.get_mut(id) {
+                for (index, row) in turn.rows.iter().enumerate().skip(*offset) {
+                    let data = json!({"turnId":id.to_string(), "sessionId":turn.session_id, "seq":index, "row":row});
+                    frames.push(format!("event: turn-event\ndata: {data}\n\n"));
+                }
+                *offset = turn.rows.len();
+            } else {
+                if !initial || turn.completed.is_none() {
+                    let data = json!({"turnId":id.to_string(), "sessionId":turn.session_id,
+                        "baseline":turn.baseline, "prompt":turn.prompt, "rows":turn.rows});
+                    frames.push(format!("event: turn-snapshot\ndata: {data}\n\n"));
+                }
+                // Completed turns that predate this connection come from the
+                // persisted transcript, including after later feed wakes.
+                turns_seen.insert(*id, turn.rows.len());
+            }
+        }
+        initial = false;
         drop(guard);
         if frames.is_empty() {
             frames.push(": keepalive\n\n".to_string());
@@ -189,6 +265,47 @@ pub fn stream(out: &mut Stream<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_turn_replays_on_reconnect_and_continues_in_order() {
+        use std::io::Read;
+        use std::net::{TcpListener, TcpStream};
+        fn connect() -> TcpStream {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (mut server, _) = listener.accept().unwrap();
+            std::thread::spawn(move || { stream(&mut Stream::new(&mut server)); });
+            client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            client
+        }
+        fn read_until(socket: &mut TcpStream, wanted: &str) -> String {
+            let mut result = String::new();
+            let mut buf = [0; 8192];
+            while !result.contains(wanted) {
+                let n = socket.read(&mut buf).expect("expected event frame");
+                assert!(n > 0);
+                result.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+            result
+        }
+        let id = begin_turn("test-reconnect-session", vec![json!({"kind":"user", "text":"before"})], "new prompt".into());
+        turn_row(id, &json!({"type":"assistant_delta", "text":"first"}));
+        let mut client = connect();
+        let snapshot = read_until(&mut client, "event: turn-snapshot");
+        assert!(snapshot.contains("test-reconnect-session"));
+        assert!(snapshot.contains("new prompt"));
+        assert!(snapshot.contains("first"));
+        turn_row(id, &json!({"type":"assistant_delta", "text":"second"}));
+        let live = read_until(&mut client, "event: turn-event");
+        assert!(live.contains("second"));
+        let mut reconnected = connect();
+        let replay = read_until(&mut reconnected, "event: turn-snapshot");
+        assert!(replay.contains("first"));
+        assert!(replay.contains("second"));
+        turn_row(id, &json!({"type":"done"}));
+        let done = read_until(&mut reconnected, "event: turn-event");
+        assert!(done.contains("done"));
+    }
 
     #[test]
     fn session_delta_contains_only_changes_and_order() {

@@ -48,6 +48,13 @@ struct DevSink<'s, 'a> {
     out: &'s mut Stream<'a>,
     streaming: bool,
     ended: bool,
+    chat: bool,
+    session_id: String,
+    prompt: String,
+    baseline: Vec<Value>,
+    turn_id: Option<u64>,
+    disconnected: bool,
+    port: u16,
 }
 
 impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
@@ -68,14 +75,31 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
             ],
         );
         self.streaming = true;
+        if self.chat && !self.session_id.is_empty() {
+            self.turn_id = Some(crate::events::begin_turn(&self.session_id, std::mem::take(&mut self.baseline), self.prompt.clone()));
+        }
     }
 
     fn row(&mut self, value: &Value) -> bool {
-        let mut line = serde_json::to_vec(value).unwrap_or_else(|_| b"{}".to_vec());
-        line.push(b'\n');
-        // One frame per row, written straight out — this is what lets the UI
-        // show a token appearing instead of a finished paragraph.
-        self.out.chunk(&line).is_ok()
+        if self.chat {
+            if self.turn_id.is_none() && value.get("type").and_then(Value::as_str) == Some("session") {
+                if let Some(id) = value.get("sessionId").and_then(Value::as_str) {
+                    self.session_id = id.to_string();
+                    let mut baseline = angela::serve::reconstruct_messages(&angela(self.port).state.store, id);
+                    if baseline.last().is_some_and(|v| v.get("kind").and_then(Value::as_str) == Some("user") && v.get("text").and_then(Value::as_str) == Some(self.prompt.as_str())) { baseline.pop(); }
+                    self.turn_id = Some(crate::events::begin_turn(id, baseline, self.prompt.clone()));
+                }
+            }
+            if let Some(id) = self.turn_id { crate::events::turn_row(id, value); }
+        }
+        if !self.disconnected {
+            let mut line = serde_json::to_vec(value).unwrap_or_else(|_| b"{}".to_vec());
+            line.push(b'\n');
+            self.disconnected = self.out.chunk(&line).is_err();
+        }
+        // A browser reload closes its POST socket; the turn still belongs to
+        // the server and its SSE subscribers, so do not cancel inference.
+        self.chat || !self.disconnected
     }
 
     fn end(&mut self) {
@@ -83,7 +107,8 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
             return;
         }
         self.ended = true;
-        let _ = self.out.finish();
+        if let Some(id) = self.turn_id { crate::events::end_turn(id); }
+        if !self.disconnected { let _ = self.out.finish(); }
     }
 }
 
@@ -340,10 +365,16 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
             .collect(),
         body: req.body.clone(),
     };
+    let chat = req.method == "POST" && req.path == "/api/chat";
+    let body: Value = if chat { serde_json::from_slice(&req.body).unwrap_or(Value::Null) } else { Value::Null };
+    let session_id = body.get("sessionId").and_then(Value::as_str).unwrap_or_default().to_string();
+    let prompt = body.get("content").and_then(Value::as_str).unwrap_or_default().to_string();
+    let baseline = if chat && !session_id.is_empty() {
+        angela::serve::reconstruct_messages(&angela(state.config.port).state.store, &session_id)
+    } else { Vec::new() };
     let mut sink = DevSink {
-        out,
-        streaming: false,
-        ended: false,
+        out, streaming: false, ended: false, chat, session_id, prompt, baseline,
+        turn_id: None, disconnected: false, port: state.config.port,
     };
     angela(state.config.port).dispatch(&areq, &mut sink);
     sink.end();

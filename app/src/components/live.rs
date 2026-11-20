@@ -42,8 +42,11 @@ pub(crate) fn apply_sessions(v: JsValue) {
         if js::get_str(&s, "activeId").is_empty() {
             let tabs = js_sys::Array::from(&js::get(&s, "tabs"));
             if tabs.length() > 0 {
-                let id = js::get_str(&tabs.get(0), "id");
-                js::set_str(&s, "activeId", &id);
+                let remembered = read_active_id();
+                let id = tabs.iter().find(|tab| js::get_str(tab, "id") == remembered)
+                    .map(|tab| js::get_str(&tab, "id"))
+                    .unwrap_or_else(|| js::get_str(&tabs.get(0), "id"));
+                set_active(&s, &id);
                 open_session_by_id(&id);
             }
         }
@@ -51,6 +54,7 @@ pub(crate) fn apply_sessions(v: JsValue) {
 
 /// Load one session's transcript into `messages`.
 fn open_session_by_id(id: &str) {
+    SESSION_LOADING.with(|v| *v.borrow_mut() = id.to_string());
     apply_cached_approvals();
     let want = id.to_string();
     api::session(id, move |v| {
@@ -118,7 +122,13 @@ fn open_session_by_id(id: &str) {
             js::set_bool(&s, "openEditorOnSelect", false);
             open_session_editor(JsValue::UNDEFINED, js_sys::Array::new());
         }
+        SESSION_LOADING.with(|v| v.borrow_mut().clear());
+        let turn_done = replay_active_turn(&want);
         mjs::redraw();
+        if turn_done {
+            open_session_by_id(&want);
+            return;
+        }
         // The tree and the memory view are separate reads: neither is needed
         // to draw the transcript, and asking for both up front would make
         // opening a session wait on work most sessions never show.
@@ -174,7 +184,7 @@ fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     // Opening from the project tree puts it on the strip if it is not there.
     add_open_id(&id);
     rebuild_tabs(&s);
-    js::set_str(&s, "activeId", &id);
+    set_active(&s, &id);
     js::set(&s, "messages", &js_sys::Array::new().into());
     clear_stream(&s);
     pin_to_bottom();
@@ -221,7 +231,7 @@ fn new_session(_this: JsValue, _args: js_sys::Array) -> JsValue {
             crate::components::composer::reset_history(&s);
             js::set_bool(&s, "treeOpen", false);
             add_open_id(&id);
-            js::set_str(&s, "activeId", &id);
+            set_active(&s, &id);
             js::set_bool(&s, "compacted", false);
             js::set(&s, "threads", &js_sys::Array::new().into());
             js::set(&s, "messages", &js_sys::Array::new().into());
@@ -301,6 +311,7 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_str(&payload, "tabId", "1");
     js::set_str(&payload, "content", &content);
     let active = js::get_str(&s, "activeId");
+    if !active.is_empty() { set_active(&s, &active); }
     let model = js::get_str(&s, "model");
     if !model.is_empty() {
         js::set_str(&payload, "model", &model);
@@ -406,7 +417,75 @@ fn stop(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// One NDJSON row from `/api/chat`.
+thread_local! {
+    static SESSION_LOADING: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    static TURNS: std::cell::RefCell<std::collections::HashMap<String, JsValue>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Install the server's turn journal, which includes the transcript as it
+/// stood before the prompt. It can be replayed after an in-flight GET lands.
+pub(crate) fn receive_turn_snapshot(snapshot: JsValue) {
+    let id = js::get_str(&snapshot, "sessionId");
+    if id.is_empty() { return; }
+    TURNS.with(|t| { t.borrow_mut().insert(id.clone(), snapshot); });
+    let s = mjs::store_ref(STORE);
+    if js::get_str(&s, "activeId") == id && !api::chat_stream_active()
+        && SESSION_LOADING.with(|v| *v.borrow() != id) {
+        if replay_active_turn(&id) { open_session_by_id(&id); }
+    }
+}
+
+pub(crate) fn receive_turn_event(event: JsValue) {
+    let id = js::get_str(&event, "sessionId");
+    let turn_id = js::get_str(&event, "turnId");
+    let row = js::get(&event, "row");
+    let cached = TURNS.with(|t| {
+        let map = t.borrow();
+        let Some(turn) = map.get(&id) else { return false; };
+        if js::get_str(turn, "turnId") != turn_id { return false; }
+        let rows = js_sys::Array::from(&js::get(turn, "rows"));
+        rows.push(&row);
+        js::set(turn, "rows", &rows.into());
+        true
+    });
+    if !cached { return; }
+    let done = js::get_str(&row, "type") == "done";
+    let active = js::get_str(&mjs::store_ref(STORE), "activeId") == id;
+    let loading = SESSION_LOADING.with(|v| *v.borrow() == id);
+    if active && !loading && !api::chat_stream_active() {
+        on_row(&row);
+        if done {
+            TURNS.with(|t| { t.borrow_mut().remove(&id); });
+            open_session_by_id(&id);
+        }
+    } else if done && (!active || api::chat_stream_active()) {
+        TURNS.with(|t| { t.borrow_mut().remove(&id); });
+    }
+}
+
+/// Returns true if replay included the end of a turn and a fresh transcript
+/// should be loaded once more (the first read may have raced finalization).
+fn replay_active_turn(id: &str) -> bool {
+    if api::chat_stream_active() { return false; }
+    let turn = TURNS.with(|t| t.borrow().get(id).cloned());
+    let Some(turn) = turn else { return false; };
+    let s = mjs::store_ref(STORE);
+    let baseline = js_sys::Array::from(&js::get(&turn, "baseline"));
+    for row in baseline.iter() { add_html(&row); }
+    js::set(&s, "messages", &baseline.into());
+    clear_stream(&s);
+    js::set_bool(&s, "waiting", true);
+    let prompt = js::get_str(&turn, "prompt");
+    if !prompt.is_empty() { push_message(&s, "user", &prompt, ""); }
+    let mut done = false;
+    for row in js_sys::Array::from(&js::get(&turn, "rows")).iter() {
+        done |= js::get_str(&row, "type") == "done";
+        on_row(&row);
+    }
+    if done { TURNS.with(|t| { t.borrow_mut().remove(id); }); }
+    done
+}
+
 fn on_row(row: &JsValue) {
     let s = mjs::store_ref(STORE);
     match js::get_str(row, "type").as_str() {
@@ -416,7 +495,7 @@ fn on_row(row: &JsValue) {
             let id = js::get_str(row, "sessionId");
             if !id.is_empty() {
                 add_open_id(&id);
-                js::set_str(&s, "activeId", &id);
+                set_active(&s, &id);
                 // Stop was pressed before the server said which session it
                 // was making. This row is the first moment the request can
                 // be addressed, so it goes out now rather than being lost.
@@ -1097,7 +1176,7 @@ fn delete_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     remove_open_id(&id);
     rebuild_tabs(&s);
     if js::get_str(&s, "activeId") == id {
-        js::set_str(&s, "activeId", "");
+        set_active(&s, "");
         js::set(&s, "messages", &js_sys::Array::new().into());
         clear_stream(&s);
     }
@@ -1121,6 +1200,19 @@ fn delete_session(_this: JsValue, args: js_sys::Array) -> JsValue {
 /// back empty after a clear.
 const OPEN_KEY: &str = "chat.openTabs";
 const PREVIEW_KEY: &str = "chat.previewTab";
+const ACTIVE_KEY: &str = "chat.activeTab";
+
+fn read_active_id() -> String {
+    let store = js::get(&js::global(), "sessionStorage");
+    js::call(&store, "getItem", &[JsValue::from_str(ACTIVE_KEY)]).as_string().unwrap_or_default()
+}
+
+fn set_active(store: &JsValue, id: &str) {
+    js::set_str(store, "activeId", id);
+    let storage = js::get(&js::global(), "sessionStorage");
+    js::call(&storage, "setItem", &[JsValue::from_str(ACTIVE_KEY), JsValue::from_str(id)]);
+}
+
 
 fn storage() -> JsValue {
     js::get(&js_sys::global(), "localStorage")
@@ -1266,7 +1358,7 @@ fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
             let next = js::get_str(&tabs.get(0), "id");
             crate::components::composer::reset_history(&s);
             js::set_bool(&s, "treeOpen", false);
-            js::set_str(&s, "activeId", &next);
+            set_active(&s, &next);
             js::set_bool(&s, "compacted", false);
             js::set(&s, "threads", &js_sys::Array::new().into());
             // Falling back to the next tab is still a selection: the
@@ -1274,7 +1366,7 @@ fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
             js::set_bool(&s, "openEditorOnSelect", true);
             open_session_by_id(&next);
         } else {
-            js::set_str(&s, "activeId", "");
+            set_active(&s, "");
             js::set(&s, "messages", &js_sys::Array::new().into());
             clear_stream(&s);
         }
