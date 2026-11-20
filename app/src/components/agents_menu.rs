@@ -26,13 +26,13 @@ pub const CSS: &str = r#"
   width: 100%; text-align: left;
   border: 0; border-radius: 8px;
   background: transparent; color: var(--gray);
-  padding: 6px 8px; cursor: pointer; font: inherit;
+  padding: 5px 8px; cursor: pointer; font: inherit; line-height: 18px;
 }
 :is(#sb, #home) .agent-row:hover { background: var(--panel-2); color: var(--fg); }
 :is(#sb, #home) .agent-row.is-selected { background: var(--panel-2); color: var(--fg); }
 :is(#sb, #home) .agent-row i { color: var(--agent-accent, #a78bfa); font-size: 14px; line-height: 18px; }
 :is(#sb, #home) .agent-row .nm {
-  flex: 1; min-width: 0; font-size: 13px;
+  flex: 1; min-width: 0; font-size: 12px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* How it engages, as a one-glyph tell rather than a word per row. */
@@ -41,6 +41,15 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .agent-empty {
   font-size: 12px; color: var(--gray-dim); padding: 6px 8px; line-height: 1.5;
+}
+/* Narrow shell (see home.rs breakpoints): the row is a centred glyph, which
+   is what tells agents apart — each one owns its icon. The `title` still
+   says how it engages. */
+@media (max-width: 900px) {
+  :is(#sb, #home) .agent-row { justify-content: center; padding-left: 0; padding-right: 0; }
+  :is(#sb, #home) .agent-row .nm,
+  :is(#sb, #home) .agent-row .eng,
+  :is(#sb, #home) .agent-empty { display: none; }
 }
 "#;
 

@@ -223,11 +223,27 @@ pub fn panel() -> Node {
                 .attr("title", "Save")
                 .on("click", &format!("{ST}.save()"))
                 .child(m("span").child(lit("Save"))),
-            m("span").class("spacer"),
             validation_info::live(
                 &format!("({ST}.messageTone ? ' ' + {ST}.messageTone : '')"),
                 &format!("{ST}.message"),
             ),
+            m("span").class("spacer"),
+            // Two presses rather than a dialog: the destructive press is a
+            // different press from the one that reveals it — same idiom as
+            // the agent editor's remove and the target form. A session is a
+            // conversation with a history; one stray click should not be the
+            // whole cost of a typo.
+            m("button")
+                .class("ae-btn danger")
+                .attr("type", "button")
+                .bind("class", &format!("({ST}.confirmDelete ? 'is-confirm' : '')"))
+                .on("click", &format!("{ST}.delete()"))
+                .kids(vec![
+                    Node::icon("trash").class("ph ph-trash"),
+                    m("span").text(&format!(
+                        "({ST}.confirmDelete ? 'Really delete?' : 'Delete')"
+                    )),
+                ]),
         ]),
     ])
 }
@@ -376,6 +392,39 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
 fn close(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     js::set_bool(&s, "open", false);
+    // Disarm: closing the panel is "I'm not deleting", whatever state it
+    // was in — same rule `target_form.close` follows for `confirming`.
+    js::set_bool(&s, "confirmDelete", false);
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+/// `delete()` — the trash button in the form, two presses rather than a
+/// dialog: the first arms it and says so, the second does it (see the
+/// agent editor and the target form, where a folder holding conversations
+/// is not a thing to lose to one click).
+///
+/// The target is `$store.live.activeId` — the session the draft was seeded
+/// from. `live.deleteSession` removes it from the list immediately, re-syncs
+/// with the server, and clears `activeId` if it was the one looked at; the
+/// form then closes, since the thing it edited is gone.
+fn delete(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let live = mjs::store_ref("live");
+    let id = js::get_str(&live, "activeId");
+    if id.is_empty() {
+        say(&s, "error", "No active session");
+        mjs::redraw();
+        return JsValue::UNDEFINED;
+    }
+    if !js::get_bool(&s, "confirmDelete") {
+        js::set_bool(&s, "confirmDelete", true);
+        mjs::redraw();
+        return JsValue::UNDEFINED;
+    }
+    js::set_bool(&s, "confirmDelete", false);
+    js::call(&live, "deleteSession", &[JsValue::from_str(&id)]);
+    js::set_bool(&s, "open", false);
     mjs::redraw();
     JsValue::UNDEFINED
 }
@@ -395,6 +444,7 @@ fn store_register() {
     }
     let mut d = Def::new().named("store sessionDraft");
     d.bool("open", false)
+        .bool("confirmDelete", false)
         .str("title", "iran war status")
         .str("purpose", "")
         .str("notes", "")
@@ -408,6 +458,7 @@ fn store_register() {
         .method("setRouting", set_routing)
         .method("routingNote", routing_note)
         .method("save", save)
+        .method("delete", delete)
         .method("close", close);
     mjs::store(STORE, &d.finish());
 }
