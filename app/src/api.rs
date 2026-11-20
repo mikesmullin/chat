@@ -29,6 +29,9 @@ thread_local! {
     static STREAM: RefCell<Option<JsValue>> = const { RefCell::new(None) };
 }
 
+/// Whether this wasm instance owns the original streaming POST.
+pub fn chat_stream_active() -> bool { STREAM.with(|c| c.borrow().is_some()) }
+
 /// `POST /api/abort` — ask the server to stop this session's turn.
 ///
 /// This is the half that actually cancels anything expensive. The turn is

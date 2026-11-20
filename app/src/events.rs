@@ -86,6 +86,8 @@ pub fn start() {
         "models",
         "approvals",
         "approvals-delta",
+        "turn-snapshot",
+        "turn-event",
     ] {
         let token = lifecycle::token();
         let callback = Closure::wrap(Box::new(move |event: JsValue| {
@@ -106,6 +108,8 @@ pub fn start() {
                         crate::components::live::apply_pending(value);
                     }
                     "approvals-delta" => approval_delta(&value),
+                    "turn-snapshot" => crate::components::live::receive_turn_snapshot(value),
+                    "turn-event" => crate::components::live::receive_turn_event(value),
                     _ => {}
                 }
             }
