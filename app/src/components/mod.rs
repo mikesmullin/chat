@@ -6,6 +6,7 @@ pub mod agents_menu;
 pub mod approval_card;
 pub mod assistant_card;
 pub mod automation_form;
+pub mod automations_menu;
 pub mod composer;
 pub mod decision_card;
 pub mod demo;
@@ -120,6 +121,7 @@ pub fn register() {
 
     css::inject("item-group", item_group::CSS);
     agents_menu::register();
+    automations_menu::register();
     css::inject("sandboxes-menu", sandboxes_menu::CSS);
     css::inject("nav-rail", nav_rail::CSS);
 }

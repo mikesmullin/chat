@@ -60,12 +60,15 @@ pub fn agents_menu_live() -> Node {
         .class("agents-menu")
         // Pull the list once the rail exists.
         .init(&format!("{st}.loadAgents()"))
+        .bind("class", "($store.home.agentsOpen ? '' : 'is-collapsed')")
         .kids(vec![
             rail_head::head(
                 "Agents",
+                "robot",
                 Some(("Define a new agent", &format!("{st}.newAgent()"))),
+                Some("agents"),
             ),
-            m("div").class("agent-list").kids(vec![
+            m("div").class("agent-list").show("$store.home.agentsOpen").kids(vec![
                 m("button")
                     .for_each(&format!("a in {st}.agents"))
                     .key("a.name")
@@ -99,12 +102,15 @@ pub fn agents_menu_live() -> Node {
         ])
 }
 
-/// the storybook's static composition (Done / Working / Idle).
+/// the storybook's static composition (Done / Working / Idle). The head
+/// collapses against the guide's own `home` store, like the live rail.
 pub fn agents_menu() -> Node {
     m("div")
         .class("agents-menu")
+        .bind("class", "($store.home.agentsOpen ? '' : 'is-collapsed')")
         .kids(vec![
-            rail_head::head("Agents", None),
+            rail_head::head("Agents", "robot", None, Some("agents")),
+            m("div").class("agent-list").show("$store.home.agentsOpen").kids(vec![
             item_group(
                 "done",
                 "Done",
@@ -132,6 +138,7 @@ pub fn agents_menu() -> Node {
                     ("Fay".into(), "Tidying the session store after the migration".into(), "45m".into()),
                 ],
             ),
+            ]),
         ])
 }
 

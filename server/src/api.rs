@@ -257,6 +257,57 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         return;
     }
 
+    // ── automations ──────────────────────────────────────────────────
+    // Named prompts on a cron schedule. Chat-app concept (angela knows
+    // sessions and turns, not schedules), so the registry and the firing
+    // live here; firing itself reuses angela's dispatch, so a run is a
+    // real turn in every consumer's eyes.
+    if req.path == "/api/automations" && req.method == "GET" {
+        let _ = out.json(200, &crate::automations::list(&project_root()));
+        return;
+    }
+    if req.path.starts_with("/api/automations/") && req.method == "POST" {
+        let root = project_root();
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let f = |k: &str| {
+            body.get(k)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let action = req.path.trim_start_matches("/api/automations/").trim_matches('/');
+        let result: Result<Value, String> = match action {
+            "automation-save" => crate::automations::upsert(&root, &body).map(|id| serde_json::json!({ "id": id })),
+            "automation-remove" => crate::automations::remove(&root, &f("id")).map(|_| serde_json::json!({})),
+            "automation-toggle" => crate::automations::set_enabled(
+                &root,
+                &f("id"),
+                body.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+            )
+            .map(|_| serde_json::json!({})),
+            other => Err(format!("unknown automation action: {other}")),
+        };
+        match result {
+            // Same contract as targets: every write answers with the fresh
+            // listing, so the caller never has to ask twice.
+            Ok(mut v) => {
+                if let Value::Object(map) = &mut v {
+                    map.insert("ok".into(), serde_json::json!(true));
+                    if let Value::Object(list) = crate::automations::list(&root) {
+                        for (k, val) in list {
+                            map.insert(k, val);
+                        }
+                    }
+                }
+                let _ = out.json(200, &v);
+            }
+            Err(e) => {
+                let _ = out.json(400, &serde_json::json!({"ok": false, "error": e}));
+            }
+        }
+        return;
+    }
+
     // ── projects ───────────────────────────────────────────────────────
     // The folders conversations are filed under. Served here rather than
     // from angela's router because they are a chat-app concept: angela

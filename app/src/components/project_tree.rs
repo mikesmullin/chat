@@ -171,9 +171,12 @@ pub const CSS: &str = r#"
 /// and the app's opens a real one.
 pub fn tree(st: &str, on_open: &str, on_new: &str) -> Node {
     let rows = format!("$store.{STORE}.rows({st}.projects, {st}.sessions)");
-    m("div").class("project-tree").kids(vec![
-        rail_head::head("Projects", Some(("New project", on_new))),
-        m("div").class("ptree-list").kids(vec![
+    m("div").class("project-tree").bind("class", "($store.home.projectsOpen ? '' : 'is-collapsed')").kids(vec![
+        rail_head::head("Projects", "folders", Some(("New project", on_new)), Some("projects")),
+        m("div")
+            .class("ptree-list")
+            .show("$store.home.projectsOpen")
+            .kids(vec![
             row(st, on_open),
             m("p")
                 .class("ptree-empty")
