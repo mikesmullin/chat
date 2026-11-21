@@ -299,6 +299,7 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_str(&s, "draft", "");
     js::set_bool(&s, "waiting", true);
     js::set_bool(&s, "stopping", false);
+    js::set_bool(&s, "stopUnconfirmed", false);
     js::set_bool(&s, "stopPending", false);
     js::set(&s, "approvals", &js_sys::Array::new().into());
     apply_cached_approvals();
@@ -335,7 +336,15 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
             // turn did exactly what it was told, and an error row saying
             // "The user aborted a request" would be the app reporting the
             // user's own button press back to them as a fault.
-            let stopped = js::get_bool(&s, "stopping");
+            let stopped = js::get_bool(&s, "stopping") || js::get_bool(&s, "stopUnconfirmed");
+            if stopped && js::get_bool(&s, "waiting") {
+                // The stream ended without a done row. Keep listening to the
+                // event feed; a closed connection does not stop the server.
+                js::set_bool(&s, "stopping", false);
+                js::set_bool(&s, "stopUnconfirmed", true);
+                mjs::redraw();
+                return;
+            }
             js::set_bool(&s, "waiting", false);
             js::set_bool(&s, "stopping", false);
             js::set_bool(&s, "stopPending", false);
@@ -363,13 +372,7 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
 /// still being generated and still being billed. So the first thing this
 /// does is tell the server, which drops that request where it stands.
 ///
-/// Our own stream is left to end on its own, which it does within
-/// milliseconds of the server letting go. That is worth waiting for: the
-/// server's last rows say what was actually kept — the partial answer, and
-/// a "Stopped." note on the record — and tearing the stream down first
-/// would trade all of that for a few milliseconds.
-///
-/// The grace period below is for the case where none of that happens.
+/// Keep the stream open for confirmation and the final persisted rows.
 fn stop(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     // Nothing in flight, or already stopping: a second press is not a
@@ -378,6 +381,9 @@ fn stop(_this: JsValue, _args: js_sys::Array) -> JsValue {
         return JsValue::UNDEFINED;
     }
     js::set_bool(&s, "stopping", true);
+    js::set_bool(&s, "stopUnconfirmed", false);
+    let attempt = js::get(&s, "stopAttempt").as_f64().unwrap_or(0.0) + 1.0;
+    js::set_num(&s, "stopAttempt", attempt);
     let id = js::get_str(&s, "activeId");
     if id.is_empty() {
         // The server has not named the session yet, so there is nothing to
@@ -389,30 +395,16 @@ fn stop(_this: JsValue, _args: js_sys::Array) -> JsValue {
     }
     mjs::redraw();
 
-    // The server should have ended the stream long before this. If it has
-    // not — it died, or it is wedged somewhere that never checks — drop our
-    // end anyway, because a composer stuck in `waiting` forever is a worse
-    // answer than an incomplete transcript.
-    rustex1_kit::lifecycle::after(2500.0, || {
+    // A timeout is not confirmation: keep the turn attached, offer a retry,
+    // and never replay it as if the user had not pressed Stop.
+    rustex1_kit::lifecycle::after(2500.0, move || {
         let s = mjs::store_ref(STORE);
-        if !js::get_bool(&s, "waiting") {
+        if !js::get_bool(&s, "waiting") || !js::get_bool(&s, "stopping")
+            || js::get(&s, "stopAttempt").as_f64() != Some(attempt) {
             return;
         }
-        crate::api::abort_chat_stream();
-        js::set_bool(&s, "waiting", false);
         js::set_bool(&s, "stopping", false);
-        js::set_bool(&s, "stopPending", false);
-        push_message(
-            &s,
-            "system",
-            "Stopped. The server did not confirm, so the turn may still be running there.",
-            "",
-        );
-        // Whatever it did manage to save is the truth about this turn.
-        let id = js::get_str(&s, "activeId");
-        if !id.is_empty() {
-            open_session_by_id(&id);
-        }
+        js::set_bool(&s, "stopUnconfirmed", true);
         mjs::redraw();
     });
     JsValue::UNDEFINED
@@ -506,6 +498,8 @@ fn on_row(row: &JsValue) {
             if !id.is_empty() {
                 add_open_id(&id);
                 set_active(&s, &id);
+                // A mention may have invited an agent as this turn began.
+                load_roster(&id);
                 // Stop was pressed before the server said which session it
                 // was making. This row is the first moment the request can
                 // be addressed, so it goes out now rather than being lost.
@@ -604,6 +598,7 @@ fn on_row(row: &JsValue) {
         "done" => {
             js::set_bool(&s, "waiting", false);
             js::set_bool(&s, "stopping", false);
+            js::set_bool(&s, "stopUnconfirmed", false);
             js::set_bool(&s, "stopPending", false);
             // A new message changes the tree's leaf set, so a threaded view
             // on screen is now one message short.
@@ -985,6 +980,8 @@ pub fn register() {
         // Separate from `waiting` because the composer must not accept a new
         // message yet — the old turn is still writing its last rows.
         .bool("stopping", false)
+        .bool("stopUnconfirmed", false)
+        .num("stopAttempt", 0.0)
         // A stop pressed before the server has even named the session it
         // made. There is nothing to address the stop to yet, so it is sent
         // the moment the `session` row arrives.

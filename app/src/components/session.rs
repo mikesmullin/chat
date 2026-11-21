@@ -319,8 +319,10 @@ pub fn messages_threaded(st: &str) -> Node {
                 ),
             m("div")
                 .class("msg-block thinking-block")
-                .show(&format!("{st}.waiting"))
+                .show(&format!("{st}.waiting && !{st}.stopping && !{st}.stopUnconfirmed"))
                 .child(thinking::thinking()),
+            m("div").class("thinking").show(&format!("{st}.waiting && ({st}.stopping || {st}.stopUnconfirmed)"))
+                .text(&format!("({st}.stopping ? 'Stopping…' : 'Stop not confirmed. Try again.')")),
         ])
 }
 
@@ -411,7 +413,9 @@ pub fn messages(st: &str) -> Node {
         // the list, so it always sits at the bottom of the transcript.
         m("div")
             .class("msg-block thinking-block")
-            .show(&format!("{st}.waiting"))
+            .show(&format!("{st}.waiting && !{st}.stopping && !{st}.stopUnconfirmed"))
             .child(thinking::thinking()),
+        m("div").class("thinking").show(&format!("{st}.waiting && ({st}.stopping || {st}.stopUnconfirmed)"))
+            .text(&format!("({st}.stopping ? 'Stopping…' : 'Stop not confirmed. Try again.')")),
     ])
 }

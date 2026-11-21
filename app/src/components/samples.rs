@@ -884,6 +884,7 @@ pub fn register() {
         .str("historyDraft", "")
         .bool("waiting", false)
         .bool("stopping", false)
+        .bool("stopUnconfirmed", false)
         .str("allowlist", "")
         .bool("allowlistOpen", false)
         .bool("allowlistOverridden", false)

@@ -54,21 +54,6 @@ pub fn approve<F: FnMut(JsValue) + 'static>(id: &str, decision: &str, then: F) {
     rustex1_kit::api::post_json("/api/approve", &payload.into(), then);
 }
 
-/// Drop the browser's end of the open chat stream, if one is open.
-///
-/// Returns whether there was one. The fallback for a server that has stopped
-/// answering altogether: without it a wedged turn leaves the composer stuck
-/// in `waiting` with no way out but a reload.
-pub fn abort_chat_stream() -> bool {
-    STREAM.with(|c| match c.borrow_mut().take() {
-        Some(ctl) => {
-            js::call(&ctl, "abort", &[]);
-            true
-        }
-        None => false,
-    })
-}
-
 /// `GET /api/sessions` — the project tree and the tab bar.
 pub fn sessions<F: FnMut(JsValue) + 'static>(then: F) {
     rustex1_kit::api::get("/api/sessions", None, then);
