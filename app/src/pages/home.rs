@@ -37,7 +37,7 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::components::{
-    agent_editor, agents_menu, perf_badge, project_tree, session_editor,
+    agent_editor, agents_menu, automations_menu, perf_badge, project_tree, session_editor,
     session_panel, tab, target_form,
 };
 use crate::css;
@@ -88,6 +88,7 @@ pub const CSS: &str = r#"
   margin-right: 10px;
 }
 .home-agents { padding: 0 14px 10px; }
+.home-automations { padding: 0 14px 10px; }
 
 /* ---- centre column ----------------------------------------------
    A plain flex column holding the tab strip and, beneath it, the card.
@@ -168,6 +169,7 @@ pub const CSS: &str = r#"
 /* The rail is a column so Settings can be pinned under everything else. */
 .home-rail { display: flex; flex-direction: column; }
 .home-rail .home-agents { flex: 0 0 auto; }
+.home-rail .home-automations { flex: 0 0 auto; }
 .home-settings { margin-top: auto; padding-top: 12px; }
 .rail-settings {
   display: inline-flex; align-items: center; gap: 8px;
@@ -215,6 +217,7 @@ pub const CSS: &str = r#"
   .home-rail { padding: 10px 0; margin-right: 8px; gap: 12px; }
   .home-projects { padding: 10px 6px 4px; }
   .home-agents { padding: 0 6px 10px; }
+  .home-automations { padding: 0 6px 10px; }
   /* Keep the center column's internal z-index layers beneath the overlay. */
   .home-col { margin-right: 8px; isolation: isolate; }
   .home-aside-toggle-row {
@@ -236,7 +239,7 @@ pub const CSS: &str = r#"
 fn rail() -> Node {
     m("aside")
         .class("home-rail")
-        .attr("aria-label", "Projects and agents")
+        .attr("aria-label", "Projects, agents and automations")
         .kids(vec![
             // The filing cabinet, first: conversations grouped by where they
             // are filed rather than by when they were touched, so the top of
@@ -247,6 +250,9 @@ fn rail() -> Node {
                 &format!("{LIVE}.createTarget('project')"),
             )),
             m("div").class("home-agents").child(agents_menu::agents_menu_live()),
+            // Schedules below the people: each row is a named prompt on a
+            // cron, and firing one opens a fresh session that runs it.
+            m("div").class("home-automations").child(automations_menu::automations_menu_live()),
             // Pinned to the bottom of the rail: it is not part of the
             // conversation, and it is the one item whose position should
             // never move as the lists above it grow.
@@ -341,7 +347,7 @@ pub fn shell() -> Node {
         // `x-init` runs from the deferred lifecycle queue, so the store is
         // safe to write here. `loadSessions` backs the project tree's
         // "(ungrouped)" group and the tab strip; the flat history rail is gone.
-        .init("$store.live.loadProjects(); $store.live.loadSessions(); $store.live.loadTargets()")
+        .init("$store.live.loadProjects(); $store.live.loadSessions(); $store.live.loadTargets(); $store.live.loadAutomations()")
         .bind(
             "class",
             &format!(
@@ -370,6 +376,25 @@ fn toggle_rail(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+/// `toggleSection(which)` — collapse/expand one left-rail section.
+///
+/// `which` is `"projects"`, `"agents"` or `"automations"`; anything else is ignored.
+/// Shell chrome, like the rail toggles above — the flag lives here rather
+/// than in the data stores because collapsing a section hides a view, it
+/// does not change what the view holds.
+fn toggle_section(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let key = match js::arg_str(&args, 0).as_str() {
+        "projects" => "projectsOpen",
+        "agents" => "agentsOpen",
+        "automations" => "automationsOpen",
+        _ => return JsValue::UNDEFINED,
+    };
+    js::set_bool(&s, key, !js::get_bool(&s, key));
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
 pub fn register() {
     css::inject("home", CSS);
     let mut d = Def::new().named("store home");
@@ -383,7 +408,11 @@ pub fn register() {
     // answer. Its toggle in the tab strip stays visible either way.
     d.bool("asideOpen", false)
         .bool("railOpen", true)
+        .bool("projectsOpen", true)
+        .bool("agentsOpen", true)
+        .bool("automationsOpen", true)
         .method("toggleAside", toggle_aside)
-        .method("toggleRail", toggle_rail);
+        .method("toggleRail", toggle_rail)
+        .method("toggleSection", toggle_section);
     mjs::store(STORE, &d.finish());
 }

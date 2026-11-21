@@ -26,6 +26,31 @@ pub const CSS: &str = r#"
   font-size: 13px; font-weight: 400;
   color: var(--gray-dim);
 }
+/* A collapsible title is a button wearing the label's clothes: no chrome
+   of its own, pointer on hover, and a caret that says which way the
+   section goes. */
+button.rail-title {
+  background: transparent; border: 0; padding: 0;
+  display: inline-flex; align-items: center; gap: 5px;
+  /* Family only: size/weight/ink stay on `.rail-title`, whose lower
+     specificity would otherwise lose to this button rule. */
+  font-family: inherit; text-align: left;
+  cursor: pointer;
+}
+button.rail-title:hover { color: var(--text); }
+button.rail-title .ph { font-size: 11px; line-height: 1; }
+button.rail-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* Collapsed: the section keeps only its head — nothing trails it. The head
+   sheds its own margin, and the section root pulls up by exactly what would
+   follow it (see `.home-rail` gap and section padding in `pages/home.rs`),
+   so stacked collapsed heads sit flush. Plain rules, no `:has()`, so the
+   Fire's older Chromium honours them. */
+.project-tree.is-collapsed > .rail-head,
+.agents-menu.is-collapsed > .rail-head { margin-bottom: 0; }
+/* 18px rail gap + 4px `.home-projects` padding-bottom */
+.project-tree.is-collapsed { margin-bottom: -22px; }
+/* 18px rail gap + 10px `.home-agents` padding-bottom */
+.agents-menu.is-collapsed { margin-bottom: -28px; }
 .rail-add {
   width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -38,9 +63,10 @@ pub const CSS: &str = r#"
 .rail-head-demo { display: flex; flex-direction: column; gap: 18px; width: 264px; }
 
 /* Narrow shell (see home.rs breakpoints): the rail is a 60px icon strip, so
-   the section title goes and the add button centres. */
+   the section label goes and the caret toggle stays — a collapsed section
+   with no visible toggle could never be expanded again. */
 @media (max-width: 900px) {
-  .rail-title { display: none; }
+  .rail-head .rail-title span { display: none; }
   .rail-head { justify-content: center; }
   .rail-head .rail-add { margin-left: 0; }
 }
@@ -77,10 +103,36 @@ pub fn edit(tip: &str, on: &str) -> Node {
 }
 
 /// `title` is what the section is called, written the way it is written in
-/// prose. `add` is `(tooltip, click expression)`; `None` draws the title
-/// alone.
-pub fn head(title: &str, add: Option<(&str, &str)>) -> Node {
-    let mut kids = vec![m("p").class("rail-title").child(lit(title))];
+/// prose. `icon` is the section's phosphor glyph (`"folders"`, `"robot"`),
+/// static because a section never changes what it is. `add` is `(tooltip,
+/// click expression)`; `None` draws the title alone. `section` is
+/// `Some("projects")` / `Some("agents")` when the title toggles its
+/// section in the shell: the title becomes a button with a caret, bound to
+/// `$store.home`, and the section body shows on the same flag. `None` keeps
+/// the plain label for heads with nothing to collapse.
+pub fn head(title: &str, icon: &str, add: Option<(&str, &str)>, section: Option<&str>) -> Node {
+    // The caret leads, tree-row style: it acts on what follows. Then the
+    // section's own glyph, then the name.
+    let title_node = match section {
+        // The heading is the toggle: caret says which way the section goes,
+        // `aria-expanded` says it to a reader. The `+` stays a sibling, so
+        // its click never reaches this button and needs no `.stop`.
+        Some(key) => m("button")
+            .class("rail-title")
+            .attr("type", "button")
+            .bind("title", &format!("($store.home.{key}Open ? 'Collapse section' : 'Expand section')"))
+            .bind("aria-expanded", &format!("($store.home.{key}Open ? 'true' : 'false')"))
+            .on("click", &format!("$store.home.toggleSection('{key}')"))
+            .kids(vec![
+                Node::icon_dyn(&format!("($store.home.{key}Open ? 'caret-down' : 'caret-right')")),
+                Node::icon(icon),
+                m("span").child(lit(title)),
+            ]),
+        None => m("p")
+            .class("rail-title")
+            .kids(vec![Node::icon(icon), m("span").child(lit(title))]),
+    };
+    let mut kids = vec![title_node];
     if let Some((tip, on)) = add {
         kids.push(self::add(tip, on));
     }
@@ -88,12 +140,13 @@ pub fn head(title: &str, add: Option<(&str, &str)>) -> Node {
 }
 
 /// standalone demo: the two sections that use it, plus a title with no
-/// button. The buttons are inert — the guide has nothing to create.
+/// button. The buttons are inert — the guide has nothing to create — but
+/// the section toggles are live, writing to the guide's own `home` store.
 pub fn demo() -> Node {
     m("div").class("rail-head-demo").kids(vec![
-        head("Projects", Some(("New project", "$store.samples.noop()"))),
-        head("Agents", Some(("Define a new agent", "$store.samples.noop()"))),
-        head("(ungrouped)", None),
+        head("Projects", "folders", Some(("New project", "$store.samples.noop()")), Some("projects")),
+        head("Agents", "robot", Some(("Define a new agent", "$store.samples.noop()")), Some("agents")),
+        head("(ungrouped)", "tray", None, None),
     ])
 }
 

@@ -324,6 +324,30 @@ const SANDBOXES: &[(&str, &str, &str, &str)] = &[
     ("sb-borealis", "borealis-replay", "desktop", "booting"),
 ];
 
+/// (id, name, cron, prompt, agent, model, timeoutMin, enabled)
+const AUTOMATIONS: &[(&str, &str, &str, &str, &str, &str, f64, bool)] = &[
+    ("a-triage", "issue-triage", "0 9 * * 1-5", "Triage new issues", "scout", "", 60.0, true),
+    ("a-sweep", "nightly-sweep", "0 2 * * *", "Sweep stale branches", "", "", 30.0, false),
+];
+
+fn sample_automations() -> JsValue {
+    let out = js_sys::Array::new();
+    for (id, name, cron, prompt, agent, model, timeout, enabled) in AUTOMATIONS {
+        let o = js::obj();
+        js::set_str(&o, "id", id);
+        js::set_str(&o, "name", name);
+        js::set_str(&o, "cron", cron);
+        js::set_str(&o, "prompt", prompt);
+        js::set_str(&o, "agent", agent);
+        js::set_str(&o, "model", model);
+        js::set(&o, "timeoutMin", &JsValue::from_f64(*timeout));
+        js::set(&o, "enabled", &JsValue::from_bool(*enabled));
+        js::set(&o, "nextRun", &JsValue::from_f64(0.0));
+        out.push(&o);
+    }
+    out.into()
+}
+
 /// The id **is** the name, as `/api/projects` returns it: a project has no
 /// identity apart from its label, and the hierarchy is the `/` in it.
 const PROJECTS: &[(&str, &str, &str, &str)] = &[
@@ -448,6 +472,50 @@ fn save_target_sample(_this: JsValue, args: js_sys::Array) -> JsValue {
         }
         js::set(&host, "sandboxes", &rows.into());
         js::set_bool(&mjs::store_ref("tform"), "open", false);
+    } else if action == "automation-save" {
+        // Mirror the server: an id replaces, no id mints one.
+        let id = js::get_str(&payload, "id");
+        let id = if id.trim().is_empty() { "a-sample-created" } else { &id };
+        let rows = js_sys::Array::from(&js::get(&host, "automations"));
+        let mut replaced = false;
+        for row in rows.iter() {
+            if js::get_str(&row, "id") == id {
+                for key in ["name", "cron", "prompt", "agent", "model", "timeoutMin"] {
+                    let v = js::get(&payload, key);
+                    if !v.is_undefined() { js::set(&row, key, &v); }
+                }
+                let enabled = js::get(&payload, "enabled");
+                if !enabled.is_undefined() { js::set_bool(&row, "enabled", enabled.as_bool().unwrap_or(true)); }
+                replaced = true;
+            }
+        }
+        if !replaced {
+            let o = js::obj();
+            js::set_str(&o, "id", id);
+            for key in ["name", "cron", "prompt", "agent", "model"] {
+                js::set_str(&o, key, &js::get_str(&payload, key));
+            }
+            let timeout = js::get(&payload, "timeoutMin");
+            js::set(&o, "timeoutMin", &if timeout.is_undefined() { JsValue::from_f64(60.0) } else { timeout });
+            js::set_bool(&o, "enabled", js::get(&payload, "enabled").as_bool().unwrap_or(true));
+            rows.push(&o.into());
+        }
+        js::set(&host, "automations", &rows.into());
+        js::set_bool(&mjs::store_ref("tform"), "open", false);
+    } else if action == "automation-remove" {
+        let id = js::get_str(&payload, "id");
+        let rows = js_sys::Array::new();
+        for row in js_sys::Array::from(&js::get(&host, "automations")).iter() {
+            if js::get_str(&row, "id") != id { rows.push(&row); }
+        }
+        js::set(&host, "automations", &rows.into());
+        js::set_bool(&mjs::store_ref("tform"), "open", false);
+    } else if action == "automation-toggle" {
+        let id = js::get_str(&payload, "id");
+        let enabled = js::get(&payload, "enabled").as_bool().unwrap_or(true);
+        for row in js_sys::Array::from(&js::get(&host, "automations")).iter() {
+            if js::get_str(&row, "id") == id { js::set_bool(&row, "enabled", enabled); }
+        }
     }
     JsValue::UNDEFINED
 }
@@ -778,6 +846,7 @@ pub fn register() {
         .val("icons", &icons.into())
         // ── the composer's target row ─────────────────────────────
         .val("sandboxes", &targets(SANDBOXES))
+        .val("automations", &sample_automations())
         .val("projects", &targets(PROJECTS))
         .val("worktrees", &targets(WORKTREES))
         .val("repos", &targets(REPOS))

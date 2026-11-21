@@ -274,6 +274,121 @@ pub fn panel() -> Node {
                 .class("tform-note")
                 .show(&format!("{ST}.kind === 'sandbox' && {ST}.mode !== 'edit'"))
                 .text(&format!("{ST}.mountNote")),
+            // ---- automation -------------------------------------------
+            // A named prompt on a cron: firing creates a fresh session and
+            // submits the prompt there. Every field here travels with the
+            // save; the schedule is validated for real on the server.
+            m("div")
+                .class("ae-field")
+                .show(&format!("{ST}.kind === 'automation'"))
+                .kids(vec![
+                    m("label").class("ae-label").kids(vec![
+                        m("span").child(lit("Name")),
+                        m("span").class("hint").child(lit("shown in the rail")),
+                    ]),
+                    m("input")
+                        .attr("type", "text")
+                        .attr("spellcheck", "false")
+                        .attr("placeholder", "issue-triage")
+                        .model(&format!("{ST}.name"))
+                        .on("keydown.enter", &format!("{ST}.save()")),
+                ]),
+            m("label")
+                .class("ae-label")
+                .show(&format!("{ST}.kind === 'automation'"))
+                .kids(vec![
+                    m("input")
+                        .attr("type", "checkbox")
+                        .model(&format!("{ST}.enabled")),
+                    m("span").child(lit("active")),
+                ]),
+            m("div")
+                .class("ae-field")
+                .show(&format!("{ST}.kind === 'automation'"))
+                .kids(vec![
+                    m("label").class("ae-label").kids(vec![
+                        m("span").child(lit("Schedule")),
+                        m("span").class("hint").child(lit("presets fill the cron")),
+                    ]),
+                    m("div").class("ae-modes").kids(vec![
+                        cron_preset("Hourly", "0 * * * *"),
+                        cron_preset("Every morning", "0 9 * * *"),
+                        cron_preset("Weekdays 9:00", "0 9 * * 1-5"),
+                        cron_preset("Mondays 9:00", "0 9 * * 1"),
+                        cron_preset("Fridays 17:00", "0 17 * * 5"),
+                        cron_custom(),
+                    ]),
+                    m("input")
+                        .class("tform-cron")
+                        .attr("type", "text")
+                        .attr("spellcheck", "false")
+                        .attr("placeholder", "0 9 * * 1-5")
+                        .model(&format!("{ST}.cron"))
+                        .on("keydown.enter", &format!("{ST}.save()")),
+                ]),
+            m("div")
+                .class("ae-field")
+                .show(&format!("{ST}.kind === 'automation'"))
+                .kids(vec![
+                    m("label").class("ae-label").kids(vec![
+                        m("span").child(lit("Agent")),
+                        m("span")
+                            .class("hint")
+                            .child(lit("seated before the prompt runs")),
+                    ]),
+                    m("select").model(&format!("{ST}.agent")).kids(vec![
+                        m("option").attr("value", "").child(lit("Default")),
+                        m("option")
+                            .for_each("a in $store.agents.agents")
+                            .key("a.name")
+                            .bind("value", "a.name")
+                            .text("a.name"),
+                    ]),
+                ]),
+            m("div")
+                .class("ae-field")
+                .show(&format!("{ST}.kind === 'automation'"))
+                .kids(vec![
+                    m("label").class("ae-label").kids(vec![
+                        m("span").child(lit("Model")),
+                        m("span").class("hint").child(lit("blank is the agent default")),
+                    ]),
+                    m("input")
+                        .attr("type", "text")
+                        .attr("spellcheck", "false")
+                        .attr("placeholder", "agent default")
+                        .model(&format!("{ST}.model"))
+                        .on("keydown.enter", &format!("{ST}.save()")),
+                ]),
+            m("div")
+                .class("ae-field")
+                .show(&format!("{ST}.kind === 'automation'"))
+                .kids(vec![
+                    m("label").class("ae-label").kids(vec![
+                        m("span").child(lit("Prompt")),
+                        m("span")
+                            .class("hint")
+                            .child(lit("submitted on every run")),
+                    ]),
+                    m("textarea")
+                        .attr("placeholder", "What should the agent do each time?")
+                        .model(&format!("{ST}.prompt")),
+                ]),
+            m("div")
+                .class("ae-field")
+                .show(&format!("{ST}.kind === 'automation'"))
+                .kids(vec![
+                    m("label").class("ae-label").kids(vec![
+                        m("span").child(lit("Timeout (minutes)")),
+                        m("span").class("hint").child(lit("the run is stopped after this")),
+                    ]),
+                    m("input")
+                        .attr("type", "text")
+                        .attr("spellcheck", "false")
+                        .attr("placeholder", "60")
+                        .model(&format!("{ST}.timeout"))
+                        .on("keydown.enter", &format!("{ST}.save()")),
+                ]),
             m("p")
                 .class("tform-note tform-warn")
                 .show(&format!("{ST}.note"))
@@ -289,15 +404,16 @@ pub fn panel() -> Node {
                 m("button")
                     .class("ae-btn primary")
                     .attr("type", "button")
-                    // Only a project and a sandbox have a renameable name. A
-                    // repo's identity is its path on disk and a worktree's is
-                    // its branch — none of those can be renamed from here, so
-                    // in edit mode the button is not disabled, it is absent.
-                    .show(&format!("({ST}.mode !== 'edit' || {ST}.kind === 'project' || {ST}.kind === 'sandbox')"))
+                    // Only a project, a sandbox and an automation have a
+                    // renameable name. A repo's identity is its path on disk
+                    // and a worktree's is its branch — neither of those can
+                    // be renamed from here, so in edit mode the button is
+                    // not disabled, it is absent.
+                    .show(&format!("({ST}.mode !== 'edit' || {ST}.kind === 'project' || {ST}.kind === 'sandbox' || {ST}.kind === 'automation')"))
                     .bind("disabled", &format!("({ST}.busy || !{ST}.ready())"))
                     .on("click", &format!("{ST}.save()"))
                     .text(&format!(
-                        "({ST}.busy ? 'Working…' : ({ST}.mode === 'edit' ? 'Rename' : 'Create'))"
+                        "({ST}.busy ? 'Working…' : ({ST}.mode === 'edit' ? ({ST}.kind === 'automation' ? 'Save' : 'Rename') : 'Create'))"
                     )),
                 m("span").class("spacer"),
                 // Two-step, like the agent editor's: the first press arms
@@ -325,6 +441,8 @@ pub fn demo() -> Node { demo_for("project") }
 
 pub fn demo_sandbox() -> Node { demo_for("sandbox") }
 
+pub fn demo_automation() -> Node { demo_for("automation") }
+
 fn demo_for(kind: &str) -> Node {
     m("div").class("tform-demo")
         .init(&format!("{ST}.openCreate('{kind}', 'samples')"))
@@ -338,6 +456,7 @@ fn kind_info(kind: &str) -> (&'static str, &'static str) {
     match kind {
         "project" => ("Project", "folder-plus"),
         "sandbox" => ("Sandbox", "desktop"),
+        "automation" => ("Automation", "timer"),
         "worktree" => ("Worktree", "tree-structure"),
         "branch" => ("Branch", "git-branch"),
         "repo" => ("Repo", "folder-open"),
@@ -361,6 +480,9 @@ fn danger_note(kind: &str) -> &'static str {
         "sandbox" => {
             "Destroying a sandbox removes the container. A worktree chat mounted into \
              it goes too; a repo you registered does not."
+        }
+        "automation" => {
+            "Deleting an automation stops its schedule. Sessions it already ran stay."
         }
         _ => "",
     }
@@ -387,6 +509,12 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     js::set_bool(&s, "create", true);
     js::set_str(&s, "image", "headless");
     js::set_bool(&s, "network", true);
+    js::set_str(&s, "cron", "");
+    js::set_str(&s, "prompt", "");
+    js::set_str(&s, "agent", "");
+    js::set_str(&s, "model", "");
+    js::set_str(&s, "timeout", "60");
+    js::set_bool(&s, "enabled", true);
     seed_from_host(&s, kind, mode, name);
     if kind == "sandbox" && store == "live" { sync_sandbox_status(&mjs::store_ref(store)); }
     js::set_str(
@@ -454,6 +582,35 @@ fn seed_from_host(s: &JsValue, kind: &str, mode: &str, name: &str) {
                 js::set_str(s, "name", branch);
             }
         }
+    }
+
+    if kind == "automation" {
+        if mode == "edit" {
+            // The id came in; the form opens on the stored schedule, not on
+            // blanks. A missing row (deleted elsewhere) leaves the seeds
+            // empty and the save round-trips the server's "no such" back.
+            let id = name;
+            let rows = js_sys::Array::from(&js::get(&host, "automations"));
+            for item in rows.iter() {
+                if js::get_str(&item, "id") == id {
+                    for key in ["name", "cron", "prompt", "agent", "model"] {
+                        let v = js::get_str(&item, key);
+                        if !v.is_empty() {
+                            js::set_str(s, key, &v);
+                        }
+                    }
+                    let timeout = js::get(&item, "timeoutMin");
+                    if !timeout.is_undefined() && !timeout.is_null() {
+                        if let Some(n) = timeout.as_f64() {
+                            js::set_str(s, "timeout", &format!("{n}"));
+                        }
+                    }
+                    js::set_bool(s, "enabled", js::get(&item, "enabled").as_bool().unwrap_or(true));
+                    break;
+                }
+            }
+        }
+        return;
     }
 
     if kind == "sandbox" {
@@ -530,9 +687,29 @@ fn ready(_this: JsValue, _args: js_sys::Array) -> JsValue {
                 && !js::get_str(&s, "repoId").trim().is_empty()
         }
         "sandbox" => !js::get_str(&s, "name").trim().is_empty(),
+        "automation" => {
+            !js::get_str(&s, "name").trim().is_empty()
+                && !js::get_str(&s, "prompt").trim().is_empty()
+                && cron_shape_ok(&js::get_str(&s, "cron"))
+        }
         _ => false,
     };
     JsValue::from_bool(ok)
+}
+
+/// The cron's shape, client-side: five to seven space-separated fields, or
+/// an `@`-shorthand. The server parses for real on save; this just gates
+/// the obvious empties so the button does not promise what it cannot do.
+fn cron_shape_ok(cron: &str) -> bool {
+    let c = cron.trim();
+    if c.is_empty() {
+        return false;
+    }
+    if let Some(word) = c.strip_prefix('@') {
+        return !word.is_empty() && !word.contains(char::is_whitespace);
+    }
+    let n = c.split_whitespace().count();
+    n == 5 || n == 6 || n == 7
 }
 
 /// `deletable()` — every kind can be removed except a branch.
@@ -544,7 +721,7 @@ fn deletable(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let kind = js::get_str(&mjs::store_ref(STORE), "kind");
     JsValue::from_bool(matches!(
         kind.as_str(),
-        "project" | "repo" | "worktree" | "sandbox"
+        "project" | "repo" | "worktree" | "sandbox" | "automation"
     ))
 }
 
@@ -654,6 +831,29 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
                     ("create", JsValue::from_bool(js::get_bool(&s, "create"))),
                 ],
             ),
+            "automation" => {
+                if !cron_shape_ok(&js::get_str(&s, "cron")) {
+                    js::set_str(&s, "error", "that cron does not parse — five fields, like 0 9 * * 1-5");
+                    mjs::redraw();
+                    return JsValue::UNDEFINED;
+                }
+                let mut fields = vec![
+                    ("name", JsValue::from_str(&name)),
+                    ("cron", JsValue::from_str(js::get_str(&s, "cron").trim())),
+                    ("prompt", JsValue::from_str(js::get_str(&s, "prompt").trim())),
+                    ("agent", JsValue::from_str(js::get_str(&s, "agent").trim())),
+                    ("model", JsValue::from_str(js::get_str(&s, "model").trim())),
+                    ("timeoutMin", JsValue::from_f64(js::get_str(&s, "timeout").trim().parse().unwrap_or(60.0))),
+                    ("enabled", JsValue::from_bool(js::get_bool(&s, "enabled"))),
+                ];
+                // An edit carries the id so the save replaces; a create
+                // omits it so the server mints one.
+                if js::get_str(&s, "mode") == "edit" {
+                    let original = js::get_str(&s, "original");
+                    fields.push(("id", JsValue::from_str(&original)));
+                }
+                send(&s, "automation-save", &fields)
+            }
             "sandbox" => {
                 let host = mjs::store_ref(&js::get_str(&s, "store"));
                 if name.is_empty() {
@@ -746,6 +946,7 @@ fn remove(_this: JsValue, _args: js_sys::Array) -> JsValue {
         "repo" => "repo-remove",
         "worktree" => "worktree-remove",
         "sandbox" => "sandbox-remove",
+        "automation" => "automation-remove",
         _ => return JsValue::UNDEFINED,
     };
     // These close on the response rather than now: a destroy that fails
@@ -778,6 +979,50 @@ fn status_class(_this: JsValue, args: js_sys::Array) -> JsValue {
 fn set_image(_this: JsValue, args: js_sys::Array) -> JsValue {
     let image = js::arg_str(&args, 0);
     if image == "headless" || image == "headed" { js::set_str(&mjs::store_ref(STORE), "image", &image); }
+    JsValue::UNDEFINED
+}
+
+/// One schedule preset chip: sets the cron field. Highlights when the field
+/// matches, reusing the agent editor's mode chips rather than growing a
+/// second chip style.
+fn cron_preset(label: &str, cron: &str) -> Node {
+    m("button")
+        .class("ae-mode")
+        .attr("type", "button")
+        .bind("class", &format!("({ST}.cron === '{cron}' ? 'is-on' : '')"))
+        .on("click", &format!("{ST}.setCron('{cron}')"))
+        .child(m("span").child(lit(label)))
+}
+
+/// The Custom chip: lit whenever the cron is hand-typed (non-empty and no
+/// preset matches); clicking it drops the cursor into the cron field.
+fn cron_custom() -> Node {
+    m("button")
+        .class("ae-mode")
+        .attr("type", "button")
+        .bind(
+            "class",
+            &format!(
+                "({ST}.cron !== '' && {ST}.cron !== '0 * * * *' && {ST}.cron !== '0 9 * * *' \
+                 && {ST}.cron !== '0 9 * * 1-5' && {ST}.cron !== '0 9 * * 1' && {ST}.cron !== '0 17 * * 5' \
+                 ? 'is-on' : '')"
+            ),
+        )
+        .on("click", &format!("{ST}.setCron('__custom')"))
+        .child(m("span").child(lit("Custom")))
+}
+
+fn set_cron(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let cron = js::arg_str(&args, 0);
+    if cron == "__custom" {
+        let document = js::get(&js::global(), "document");
+        let input = js::call(&document, "querySelector", &[JsValue::from_str(".tform-cron")]);
+        if !input.is_undefined() && !input.is_null() {
+            js::call(&input, "focus", &[]);
+        }
+        return JsValue::UNDEFINED;
+    }
+    js::set_str(&mjs::store_ref(STORE), "cron", &cron);
     JsValue::UNDEFINED
 }
 
@@ -825,6 +1070,12 @@ pub fn register() {
         .str("repoId", "")
         .str("image", "headless")
         .str("status", "Unknown")
+        .str("cron", "")
+        .str("prompt", "")
+        .str("agent", "")
+        .str("model", "")
+        .str("timeout", "60")
+        .bool("enabled", true)
         .num("requestId", 0.0)
         .bool("network", true)
         .bool("create", true)
@@ -833,6 +1084,7 @@ pub fn register() {
         .method("statusIcon", status_icon)
         .method("statusClass", status_class)
         .method("setImage", set_image)
+        .method("setCron", set_cron)
         .method("openCreate", open_create)
         .method("openEdit", open_edit)
         .method("close", close)

@@ -903,6 +903,9 @@ pub fn register() {
         .val("worktrees", &js_sys::Array::new().into())
         .val("repoBranches", &js_sys::Array::new().into())
         .val("repos", &js_sys::Array::new().into())
+        // The scheduled prompts. Same contract as the target lists: the
+        // rail renders, the form reads, and every write answers fresh.
+        .val("automations", &js_sys::Array::new().into())
         // Whether the sandbox service answered at all. An empty list and a
         // dead service look identical in a menu; this is what tells them
         // apart.
@@ -1020,6 +1023,7 @@ pub fn register() {
         // method is a silent template failure, not a visible one.
         .method("loadProjects", load_projects)
         .method("loadTargets", load_targets)
+        .method("loadAutomations", load_automations)
         .method("saveTarget", save_target)
         .method("dropSession", drop_session)
         .method("saveProject", save_project)
@@ -1502,13 +1506,39 @@ pub(crate) fn load_targets(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+/// `loadAutomations()` — the scheduled prompts.
+///
+/// Separate from `loadTargets` because automations live in chat's own
+/// registry (not the host registry), and the rail reads them on its own
+/// cadence: a schedule list that only refreshes with the repo list would
+/// go stale between target writes.
+fn load_automations(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    api::automations(|v| apply_automations(&v));
+    JsValue::UNDEFINED
+}
+
+/// Adopt an automations listing. Split out so the scheduler-independent
+/// refresh path (`loadAutomations`) and the write path (`saveTarget`)
+/// share it rather than re-typing the key.
+fn apply_automations(v: &JsValue) {
+    let s = mjs::store_ref(STORE);
+    let list = js::get(v, "automations");
+    if !list.is_undefined() && !list.is_null() && !same_json(&js::get(&s, "automations"), &list) {
+        js::set(&s, "automations", &list);
+        mjs::redraw();
+    }
+}
+
 /// Adopt whatever target lists a response carries.
 ///
 /// Every write answers with the fresh listing, so this runs after each one
 /// too and there is never a second request to find out what just happened.
 fn apply_targets(v: &JsValue) {
     let s = mjs::store_ref(STORE);
-    for key in ["sandboxes", "repos", "repoBranches", "worktrees"] {
+    // `automations` rides along because automation writes answer with the
+    // same fresh-listing contract; a plain targets response simply lacks
+    // the key and skips it.
+    for key in ["sandboxes", "repos", "repoBranches", "worktrees", "automations"] {
         // An unavailable service does not mean the existing sandboxes vanished.
         let list = js::get(v, key);
         if key == "sandboxes" && js::get(v, "sboxUp").as_bool() == Some(false)
@@ -1526,12 +1556,15 @@ fn apply_targets(v: &JsValue) {
 
 pub(crate) fn apply_sandboxes(value: &JsValue) { apply_targets(value); }
 
-/// `saveTarget(action, payload)` — every write behind the three remaining
-/// pickers' Create and Edit actions.
+/// `saveTarget(action, payload)` — every write behind the pickers' Create
+/// and Edit actions, plus the automation form's.
 ///
-/// The payload arrives as an object built by the form, because the five
-/// actions take five different shapes and a positional signature covering
-/// all of them would be unreadable.
+/// The payload arrives as an object built by the form, because the actions
+/// take different shapes and a positional signature covering all of them
+/// would be unreadable. `automation-*` actions post to the automations
+/// endpoint (chat's own registry, not the host's); everything else keeps
+/// the targets endpoint. Both answer the fresh listing, so one callback
+/// serves both.
 fn save_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     let action = js::arg_str(&args, 0);
     let payload = args.get(1);
@@ -1540,7 +1573,10 @@ fn save_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     let request_id = js::get_num(&form, "requestId");
     js::set_bool(&form, "busy", true);
     let callback_action = action.clone();
-    api::target_action(&action, &payload, move |v| {
+    // One callback serves both endpoints: each answers the fresh listing,
+    // and `apply_targets` adopts whichever keys are present. Moving the
+    // callback into either branch is legal because only one runs.
+    let callback = move |v: JsValue| {
         let action = &callback_action;
         let form = mjs::store_ref("tform");
         let same_form = js::get_bool(&form, "open") && js::get_num(&form, "requestId") == request_id;
@@ -1568,7 +1604,12 @@ fn save_target(_this: JsValue, args: js_sys::Array) -> JsValue {
             let msg = js::get_str(&v, "error");
             js::set_str(&form, "error", if msg.is_empty() { "that did not work" } else { &msg });
         }
-    });
+    };
+    if action.starts_with("automation-") {
+        api::automation_action(&action, &payload, callback);
+    } else {
+        api::target_action(&action, &payload, callback);
+    }
     JsValue::UNDEFINED
 }
 

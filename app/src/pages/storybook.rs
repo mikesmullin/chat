@@ -59,7 +59,7 @@ use rustex1_kit::{js, lifecycle, Runtime};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use crate::components::{
-    agents_menu, approval_card, assistant_card, automation_form, composer, decision_card,
+    agents_menu, approval_card, assistant_card, automation_form, automations_menu, composer, decision_card,
     samples,
     dropdown, error_card, fold_card, picker, project_tree, prompt_card, rail_head,
     target_form,
@@ -385,6 +385,14 @@ pub fn register(rt: &mut Runtime) {
 
     rt.route("/storybook/sandbox-form", "Sandbox Form", |_| {
         route_def("route /storybook/sandbox-form", "Sandbox Form", target_form::demo_sandbox())
+    });
+
+    rt.route("/storybook/automation-form", "Automation Form", |_| {
+        route_def("route /storybook/automation-form", "Automation Form", target_form::demo_automation())
+    });
+
+    rt.route("/storybook/automations", "Automations Menu", |_| {
+        route_def("route /storybook/automations", "Automations Menu", automations_menu::demo())
     });
 
     // one route per message card, each alone on screen.

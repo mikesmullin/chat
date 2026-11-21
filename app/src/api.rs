@@ -105,6 +105,17 @@ pub fn target_action<F: FnMut(JsValue) + 'static>(action: &str, payload: &JsValu
     rustex1_kit::api::post_json(&format!("/api/targets/{action}"), payload, then);
 }
 
+/// `GET /api/automations` — the scheduled prompts.
+pub fn automations<F: FnMut(JsValue) + 'static>(then: F) {
+    rustex1_kit::api::get("/api/automations", None, then);
+}
+
+/// `POST /api/automations/<action>` — `automation-save`, `automation-remove`,
+/// `automation-toggle`.
+pub fn automation_action<F: FnMut(JsValue) + 'static>(action: &str, payload: &JsValue, then: F) {
+    rustex1_kit::api::post_json(&format!("/api/automations/{action}"), payload, then);
+}
+
 /// `GET /api/models` — model choices from AGL's user config.
 pub fn models<F: FnMut(JsValue) + 'static>(then: F) {
     rustex1_kit::api::get("/api/models", None, then);
