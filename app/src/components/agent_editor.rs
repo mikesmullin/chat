@@ -309,6 +309,17 @@ pub fn agent_editor() -> Node {
                     .attr("placeholder", "5")
                     .model(&format!("{ST}.draft.maxTurns")),
             ]),
+            // Where the agent's file and shell tools believe the disk begins:
+            // an explicit root, or the project root if left blank. Blank is
+            // the placeholder of the field, not an error. Relative values
+            // resolve under the project root, as `${projectRoot}` expands.
+            field(
+                "Workspace root",
+                "file-io and the shell start here; blank = project root",
+                &format!("{ST}.draft.cwd"),
+                "/workspace/blz",
+                0,
+            ),
             field(
                 "MCP servers",
                 "one per line",

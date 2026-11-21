@@ -307,7 +307,7 @@ fn row_obj(kind: &str, key: &str, depth: usize) -> JsValue {
 /// `rows(projects, sessions)` — the tree, flattened, honouring collapse.
 ///
 /// Folders first in path order, each followed by the conversations filed
-/// directly in it, then `(ungrouped)` last. A collapsed folder suppresses its
+/// directly in it, newest event first, then `(ungrouped)` last. A collapsed folder suppresses its
 /// whole subtree, which is why this is one pass with a prefix check rather
 /// than a per-folder recursion.
 fn rows(_this: JsValue, args: js_sys::Array) -> JsValue {
@@ -324,8 +324,7 @@ fn rows(_this: JsValue, args: js_sys::Array) -> JsValue {
         .collect();
     sessions.sort_by(|a, b| {
         let time = |s: &JsValue| {
-            let updated = js::get_str(s, "updatedAt");
-            let iso = if updated.is_empty() { js::get_str(s, "createdAt") } else { updated };
+            let iso = session_event_time(s);
             let n = js_sys::Date::parse(&iso);
             if n.is_finite() { n } else { f64::NEG_INFINITY }
         };
@@ -414,6 +413,12 @@ fn rows(_this: JsValue, args: js_sys::Array) -> JsValue {
     out.into()
 }
 
+/// The displayed age and sort order share the same fallback for empty sessions.
+fn session_event_time(s: &JsValue) -> String {
+    let last = js::get_str(s, "lastEventAt");
+    if last.is_empty() { js::get_str(s, "createdAt") } else { last }
+}
+
 fn session_row(s: &JsValue, depth: usize) -> JsValue {
     let id = js::get_str(s, "id");
     let title = js::get_str(s, "title");
@@ -433,9 +438,7 @@ fn session_row(s: &JsValue, depth: usize) -> JsValue {
     js::set_str(&r, "drop", "");
     js::set_str(&r, "icon", "chat-circle");
     // Use the most recent event, falling back for a session with no events.
-    let last = js::get_str(s, "lastEventAt");
-    let last = if last.is_empty() { js::get_str(s, "createdAt") } else { last };
-    js::set_str(&r, "lastEventAt", &last);
+    js::set_str(&r, "lastEventAt", &session_event_time(s));
     // The state symbol reads these two. A row that carries neither renders
     // the widget's default tone, which looks like every conversation is done.
     js::set_str(&r, "status", &js::get_str(s, "status"));

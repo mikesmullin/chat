@@ -54,6 +54,10 @@ const TEXT_FIELDS: &[&str] = &[
     // Sent as a string and parsed server-side: an empty box means "use the
     // default", which is a different thing from the number 0.
     "maxTurns",
+    // The agent's workspace root: where file-io and the shell start. Blank
+    // means the project root. Trimmed on save so a pasted path with trailing
+    // spaces points where it was meant to.
+    "cwd",
 ];
 
 fn blank_draft() -> JsValue {
