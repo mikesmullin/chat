@@ -235,6 +235,10 @@ fn card_kids(st: &str, v: &str) -> Vec<Node> {
     out
 }
 
+fn visible_event(v: &str) -> String {
+    format!("($store.mode.advanced || !['system', 'system_prompt', 'agent_prompt', 'reasoning', 'tool_call', 'tool_result'].includes({v}.kind))")
+}
+
 /// One row of the transcript: the rail with its dot, and the message block
 /// beside it.
 ///
@@ -286,6 +290,7 @@ pub fn messages_threaded(st: &str) -> Node {
                 .class("thread-row")
                 .for_each(&format!("t in {st}.threads"))
                 .key("t.id")
+                .show(&format!("(!t.leaf || !t.message || {})", visible_event("t.message")))
                 // The indent is the depth you have descended to.
                 .bind("style", "('--d: ' + t.depth)")
                 .kids(vec![
@@ -337,7 +342,8 @@ pub fn messages(st: &str) -> Node {
         // --- the transcript ------------------------------------------------
         row(st, "m", card_kids(st, "m"))
             .for_each(&format!("m in {st}.messages"))
-            .key("m.id"),
+            .key("m.id")
+            .show(&visible_event("m")),
 
         // --- what the turn is waiting on -------------------------------------
         // A gated tool call, asking. Its own list rather than a row in
@@ -354,7 +360,7 @@ pub fn messages(st: &str) -> Node {
         // append never rebuilds the message list.
         m("div")
             .class("turn-row in-turn")
-            .show(&format!("{st}.streamReasoning"))
+            .show(&format!("$store.mode.advanced && {st}.streamReasoning"))
             .bind("style", &format!("('--agent-accent: ' + {st}.accentOf({st}.streamHandle))"))
             .kids(vec![
             m("div").class("turn-rail").child(m("span").class("turn-dot")),

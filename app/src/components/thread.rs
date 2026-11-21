@@ -83,7 +83,7 @@ pub const CSS: &str = r#"
 pub fn memory_bar(st: &str) -> Node {
     m("div")
         .class("memory-bar")
-        .show(&format!("{st}.activeId"))
+        .show(&format!("$store.mode.advanced && {st}.activeId"))
         .kids(vec![
             // Compaction spends model calls and re-shapes what the reader is
             // looking at, so it is asked for, never done underneath them.

@@ -60,7 +60,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use crate::components::{
     agents_menu, approval_card, assistant_card, automation_form, automations_menu, composer, decision_card,
-    samples,
+    samples, mode_toggle,
     dropdown, error_card, fold_card, picker, project_tree, prompt_card, rail_head,
     target_form,
     field, hint_text, history_tree, item_group, label, nav_rail, notification_toggle, perf_badge, radio_input, range_input,
@@ -372,6 +372,10 @@ pub fn register(rt: &mut Runtime) {
     // the rail's folders, with their conversations nested and draggable.
     rt.route("/storybook/project-tree", "Project Tree", |_| {
         route_def("route /storybook/project-tree", "Project Tree", project_tree::demo())
+    });
+
+    rt.route("/storybook/mode-toggle", "Mode Toggle", |_| {
+        route_def("route /storybook/mode-toggle", "Mode Toggle", mode_toggle::button())
     });
 
     rt.route("/storybook/history-tree", "History Tree", |_| {

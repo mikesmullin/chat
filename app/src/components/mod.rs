@@ -20,6 +20,7 @@ pub mod history_tree;
 pub mod item_group;
 pub mod live;
 pub mod markdown;
+pub mod mode_toggle;
 pub mod label;
 pub mod name_tag;
 pub mod nav_rail;
@@ -88,6 +89,7 @@ pub fn register() {
     history_tree::register();
     live::register();
     markdown::register();
+    mode_toggle::register();
     label::register();
     perf_badge::register();
     picker::register();

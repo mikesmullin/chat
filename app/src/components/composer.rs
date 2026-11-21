@@ -390,7 +390,7 @@ pub fn panel(st: &str) -> Node {
             // allowlist label below it, so the two stack on one margin.
             m("div")
                 .class("composer-metrics")
-                .show(&format!("{st}.lastMetrics"))
+                .show(&format!("$store.mode.advanced && {st}.lastMetrics"))
                 .inner_html(&format!("{st}.lastMetrics")),
             allowlist_panel(st),
             m("div").class("composer-box").kids(vec![
@@ -443,7 +443,7 @@ pub fn panel(st: &str) -> Node {
             ]),
             // Under the envelope, not in it: the standing context the next
             // message will be sent with.
-            picker::target_row(st),
+            picker::target_row(st).show("$store.mode.advanced"),
         ]),
     )
 }

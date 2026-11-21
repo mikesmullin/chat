@@ -37,7 +37,7 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::components::{
-    agent_editor, agents_menu, automations_menu, perf_badge, project_tree, session_editor,
+    agent_editor, agents_menu, automations_menu, mode_toggle, perf_badge, project_tree, session_editor,
     session_panel, tab, target_form,
 };
 use crate::css;
@@ -82,10 +82,18 @@ pub const CSS: &str = r#"
   display: flex;
   flex-direction: column;
   gap: 18px;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 10px 0 10px 4px;
   /* clears the rail's scrollbar from the content card beside it */
   margin-right: 10px;
+}
+.home-rail-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
 }
 .home-agents { padding: 0 14px 10px; }
 .home-automations { padding: 0 14px 10px; }
@@ -166,14 +174,12 @@ pub const CSS: &str = r#"
    agents list sits. */
 .home-projects { padding: 14px 14px 4px; }
 
-/* The rail is a column so Settings can be pinned under everything else. */
-.home-rail { display: flex; flex-direction: column; }
-.home-rail .home-agents { flex: 0 0 auto; }
-.home-rail .home-automations { flex: 0 0 auto; }
-.home-settings { margin-top: auto; padding-top: 12px; }
+/* Settings stays outside the scrolling content and keeps its intrinsic height. */
+.home-rail-content > div { flex: 0 0 auto; }
+.home-settings { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding-top: 12px; }
 .rail-settings {
   display: inline-flex; align-items: center; gap: 8px;
-  width: 100%; border: 0; border-radius: 8px;
+  flex: 1 1 auto; min-width: 0; border: 0; border-radius: 8px;
   background: transparent; color: var(--gray-dim);
   padding: 7px 8px; cursor: pointer; font: inherit; font-size: 13px;
   text-align: left;
@@ -215,6 +221,7 @@ pub const CSS: &str = r#"
   #home.rail-collapsed,
   #home.rail-collapsed.aside-collapsed { grid-template-columns: 0px minmax(0, 1fr); }
   .home-rail { padding: 10px 0; margin-right: 8px; gap: 12px; }
+  .home-rail-content { gap: 12px; }
   .home-projects { padding: 10px 6px 4px; }
   .home-agents { padding: 0 6px 10px; }
   .home-automations { padding: 0 6px 10px; }
@@ -244,19 +251,21 @@ fn rail() -> Node {
             // The filing cabinet, first: conversations grouped by where they
             // are filed rather than by when they were touched, so the top of
             // the rail always answers "what am I working in" at a glance.
-            m("div").class("home-projects").child(project_tree::tree(
-                LIVE,
-                &format!("{LIVE}.previewSession({{}})"),
-                &format!("{LIVE}.createTarget('project')"),
-            )),
-            m("div").class("home-agents").child(agents_menu::agents_menu_live()),
-            // Schedules below the people: each row is a named prompt on a
-            // cron, and firing one opens a fresh session that runs it.
-            m("div").class("home-automations").child(automations_menu::automations_menu_live()),
+            m("div").class("home-rail-content").kids(vec![
+                m("div").class("home-projects").child(project_tree::tree(
+                    LIVE,
+                    &format!("{LIVE}.previewSession({{}})"),
+                    &format!("{LIVE}.createTarget('project')"),
+                )),
+                m("div").class("home-agents").child(agents_menu::agents_menu_live()),
+                // Schedules below the people: each row is a named prompt on a
+                // cron, and firing one opens a fresh session that runs it.
+                m("div").class("home-automations").child(automations_menu::automations_menu_live()),
+            ]),
             // Pinned to the bottom of the rail: it is not part of the
             // conversation, and it is the one item whose position should
             // never move as the lists above it grow.
-            m("div").class("home-settings").child(
+            m("div").class("home-settings").kids(vec![
                 m("button")
                     .class("rail-settings")
                     .attr("type", "button")
@@ -266,7 +275,8 @@ fn rail() -> Node {
                         Node::icon("gear").class("ph ph-gear"),
                         m("span").child(lit("Settings")),
                     ]),
-            ),
+                mode_toggle::button(),
+            ]),
         ])
 }
 
@@ -302,7 +312,7 @@ fn main_col() -> Node {
                 // the runtime, not the store, so it is the same widget the
                 // guide mounts at /storybook/perf-badge — see that module for
                 // why it writes its own text instead of binding it.
-                perf_badge::badge(),
+                perf_badge::badge().show("$store.mode.advanced"),
                 aside_toggle(),
             ]),
         // With no tabs open there is nothing for the card to hold, so the
