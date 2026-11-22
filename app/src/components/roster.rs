@@ -42,9 +42,9 @@ pub fn roster(st: &str) -> Node {
             presence::row(
                 presence::seats(vec![
                     presence::seat(
-                        &format!("({st}.userName || 'You')"),
-                        "'user'",
-                        "'#6e717a'",
+                        &presence::user_name(st),
+                        &format!("'{}'", presence::USER_ICON),
+                        &format!("'{}'", presence::USER_ACCENT),
                         "false",
                         &format!("({st}.others.length + 100)"),
                     ),

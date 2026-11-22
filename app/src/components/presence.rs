@@ -49,6 +49,11 @@ use crate::css;
 /// `agents::DEFAULT_ACCENT` gives the rail and the byline.
 pub const DEFAULT_ACCENT: &str = "#a78bfa";
 
+/// The current user has the same identity in the roster and transcript.
+pub const USER_ICON: &str = "user";
+pub const USER_ACCENT: &str = "#aaaaaa";
+pub fn user_name(st: &str) -> String { format!("({st}.userName || 'You')") }
+
 pub const CSS: &str = r#"
 :is(#sb, #home) .presence { display: flex; align-items: center; gap: 8px; }
 :is(#sb, #home) .presence-seats {
@@ -175,7 +180,7 @@ pub fn row(cluster: Node, add: Option<(&str, &str)>) -> Node {
 /// indistinguishable from a component that failed to render, and the person
 /// reading an empty conversation is never nobody. All three are expressions,
 /// so the guide passes literals and the live roster will pass the settings
-/// name. The user wears gray - they own no agent accent.
+/// name. The user wears their own neutral accent.
 pub fn empty(handle: &str, icon: &str, accent: &str) -> Node {
     seats(vec![seat(handle, icon, accent, "false", "1")])
 }
@@ -196,7 +201,7 @@ pub fn demo() -> Node {
     let inert = "$store.samples.noop()";
     // You, first and on top in every row. Takes the row top z so the
     // agents descending numbers never have to know the count.
-    let you = |z: &str| seat("'Bob'", "'user'", "'#6e717a'", "false", z);
+    let you = |z: &str| seat("'Bob'", &format!("'{USER_ICON}'"), &format!("'{USER_ACCENT}'"), "false", z);
     let built = |n: usize| -> Vec<Node> {
         agents[..n]
             .iter()
@@ -231,7 +236,7 @@ pub fn demo() -> Node {
         row(seats(three), Some(("Edit session", inert))),
         row(seats(mixed), Some(("Edit session", inert))),
         row(
-            empty("'Bob'", "'user'", "'#6e717a'"),
+            empty("'Bob'", &format!("'{USER_ICON}'"), &format!("'{USER_ACCENT}'")),
             Some(("Edit session", inert)),
         ),
     ])

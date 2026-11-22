@@ -46,6 +46,7 @@ pub const CSS: &str = r#"
 }
 .mjs-chat .md-body pre code { background: transparent; border: 0; padding: 0; }
 .mjs-chat .md-body a { color: var(--mjs-accent); }
+.mjs-chat .md-body a:hover { text-decoration: underline; }
 "#;
 
 pub fn register() {

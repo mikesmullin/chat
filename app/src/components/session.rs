@@ -115,28 +115,27 @@ pub const CSS: &str = r#"
    `.turn-row` made it a child of a flex ROW instead, where `align-self`
    means vertical alignment and the block stretches — so the alignment and
    the shrink-to-fit are re-stated here in terms the new layout has.
-   `align-items: flex-end` on the column does both: it pushes the bubble to
-   the right edge AND stops it stretching, so it sizes to its text. */
+   The block shrinks to its contents and stays against the right edge. */
 :is(#sb, #home) .turn-row .msg-block.msg-user {
   align-items: flex-end;
+  flex: 0 1 auto;
   /* The skin caps the block at `min(720px, 85%)`. In a flex row that cap
      leaves free space which the block, sitting at the start, does not use —
      so the bubble right-aligned to 85% across rather than to the row's edge.
      `margin-left: auto` eats the free space and moves the block right. */
   margin-left: auto;
 }
-/* …but the skin sets `width: 100%` on the bubble itself, which would undo
-   the shrink-to-fit. `auto` restores it; the cap is the skin's. */
+/* Stretch the bubble to the block, so even a very short message shares
+   its left edge with the timestamp and action. */
 :is(#sb, #home) .turn-row .msg-block.msg-user .bubble-user {
   width: auto;
-  max-width: min(720px, 85%);
+  max-width: 100%;
+  align-self: stretch;
 }
 /* The byline hugs its text rather than stretching across the column, and
    sits the same distance below the answer as any two events sit apart. */
 :is(#sb, #home) .turn-row .name-tag { align-self: flex-start; margin-top: 4px; }
-/* The user's block is `align-items: flex-end`, so this lands on the same
-   right edge the bubble does. */
-:is(#sb, #home) .turn-row .msg-user .name-tag { align-self: flex-end; }
+
 /* Putting the answer in its own div (so the byline can be a sibling) moved
    the rendered markdown one level down, which put it out of reach of the
    skin's `.md-body > :first-child { margin-top: 0 }`. The first paragraph

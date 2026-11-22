@@ -1,10 +1,7 @@
 //! `name tag` — a byline: who said it, and when.
 //!
-//! Two forms, because two things are being said. Under an agent's answer the
-//! byline names them, in their own colour, with their own glyph — in a group
-//! that attribution is the only thing telling three bubbles apart, and even
-//! alone an agent has a name and a time. Under the user's own message there
-//! is only a time: a byline naming the human to the human is noise.
+//! Each byline names its author and shows when they spoke. User prompts also
+//! have an action alongside the time.
 //!
 //! No `@`: the sigil is command syntax (`/invite @name`), not part of
 //! anybody's name, and repeating it on every byline makes the transcript read
@@ -13,6 +10,7 @@
 
 use rustex1_kit::h::{m, Node};
 
+use crate::components::presence;
 use crate::css;
 
 pub const CSS: &str = r#"
@@ -32,6 +30,13 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .name-tag-when { color: var(--gray-dim); }
 "#;
 
+fn who(icon: &str, name: &str) -> Node {
+    m("span").class("name-tag-who").kids(vec![
+        Node::icon_dyn(icon),
+        m("span").text(name),
+    ])
+}
+
 /// The full byline: glyph, handle, and how long ago.
 ///
 /// `when` is the condition it shows under — usually "there is a handle".
@@ -40,12 +45,7 @@ pub fn byline(st: &str, handle_expr: &str, ts_expr: &str, when: &str) -> Node {
         .class("name-tag")
         .iff(when)
         .kids(vec![
-            m("span").class("name-tag-who").kids(vec![
-                // The author's own glyph, resolved from the roster by
-                // handle — the same route the byline's colour takes.
-                Node::icon_dyn(&format!("{st}.iconOf({handle_expr} || '')")),
-                m("span").text(handle_expr),
-            ]),
+            who(&format!("{st}.iconOf({handle_expr} || '')"), handle_expr),
             // Immediately after the name, reading as one phrase — not pushed
             // to the far edge, where it would read as a separate column.
             m("span")
@@ -55,16 +55,20 @@ pub fn byline(st: &str, handle_expr: &str, ts_expr: &str, when: &str) -> Node {
         ])
 }
 
-/// The time on its own, for the user's message.
-pub fn bare_time(st: &str, ts_expr: &str, when: &str) -> Node {
+/// The current user's byline, with the prompt action after the time.
+pub fn user_byline(st: &str, ts_expr: &str, when: &str, action: Node) -> Node {
     m("div")
-        .class("name-tag name-tag-bare")
+        .class("name-tag name-tag-user")
+        .attr("style", &format!("--agent-accent: {}", presence::USER_ACCENT))
         .iff(when)
-        .child(
+        .kids(vec![
+            who(&format!("'{}'", presence::USER_ICON), &presence::user_name(st)),
             m("span")
                 .class("name-tag-when")
-                .text(&format!("{st}.relAgo({ts_expr})")),
-        )
+                .show(ts_expr)
+                .text(&format!("'· ' + {st}.relAgo({ts_expr})")),
+            action,
+        ])
 }
 
 pub fn register() {
