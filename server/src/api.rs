@@ -34,7 +34,14 @@ pub(crate) fn angela(port: u16) -> &'static AngelaServer {
         let root = project_root();
         // The reported port is this server's: embedded angela has no port of
         // its own, and `/api/health` saying 0 would just be a lie.
-        let state = AppState::new(&root, port).expect("angela state");
+        let mut state = AppState::new(&root, port).expect("angela state");
+        // The chat-control tools (`chat__sessions_prompt`) enqueue turns
+        // through the host, so rows reach the live event feed exactly like
+        // a typed prompt. Wired here because the bridging (the event feed)
+        // is the host's, not angela's.
+        state.prompt_sender = Some(Arc::new(|session: &str, content: String, agent: String, model: String| {
+            crate::automations::submit_prompt(session, content, agent, model);
+        }));
         eprintln!(
             "angela embedded · conversations in {}/.angela/conversations.db",
             root.display()
@@ -73,12 +80,31 @@ struct DevSink<'s, 'a> {
     disconnected: bool,
     port: u16,
     assistant_filter: crate::assistant_text::StreamFilter,
+    /// When set, a session this request creates is owned by this user
+    /// (PLAN44: ownership is claimed at creation, never at first touch —
+    /// a stranger's first message must not make them the owner).
+    claim_owner: Option<i64>,
 }
 
 impl DevSink<'_, '_> {
     fn publish_row(&mut self, value: &Value) {
         if self.chat {
             if let Some(id) = self.turn_id { crate::events::turn_row(id, value); }
+        }
+        // A new session announces itself as `{"type":"session","sessionId"}`.
+        // Claim it for the creator exactly once.
+        if let (Some(owner), Some(sid)) = (
+            self.claim_owner,
+            value.get("sessionId").and_then(Value::as_str),
+        ) {
+            if value.get("type").and_then(Value::as_str) == Some("session") && !sid.is_empty() {
+                let _ = angela(self.port)
+                    .state
+                    .store
+                    .identity()
+                    .ensure_resource("session", sid, owner);
+                self.claim_owner = None;
+            }
         }
         if !self.disconnected {
             let mut line = serde_json::to_vec(value).unwrap_or_else(|_| b"{}".to_vec());
@@ -91,6 +117,19 @@ impl DevSink<'_, '_> {
 impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
     fn json(&mut self, status: u16, body: &Value) {
         let mut body = body.clone();
+        // A JSON answer that names a fresh session id claims it too
+        // (`/api/session/new`).
+        if let (Some(owner), Some(sid)) = (
+            self.claim_owner,
+            body.get("id").and_then(Value::as_str),
+        ) {
+            let _ = angela(self.port)
+                .state
+                .store
+                .identity()
+                .ensure_resource("session", sid, owner);
+            self.claim_owner = None;
+        }
         if body.get("messages").and_then(Value::as_array).is_some() {
             if let Some(id) = body.pointer("/session/id").and_then(Value::as_str).map(str::to_owned) {
                 body["messages"] = Value::Array(chat_messages(&angela(self.port).state.store, &id));
@@ -227,8 +266,477 @@ fn delete_empty_session(db: &rusqlite::Connection, id: &str) -> rusqlite::Result
     )? == 1)
 }
 
+/// The acting user's id, or 1 for the dev zone — the gate only lets
+/// loopback through without a cookie, and loopback is the developer on
+/// this machine (D12), acting with the admin's authority.
+fn actor_id(req: &Request) -> i64 {
+    crate::auth::current_user(req).map(|u| u.id).unwrap_or(1)
+}
+
+fn is_admin(req: &Request) -> bool {
+    crate::auth::current_user(req).map(|u| u.is_admin()).unwrap_or(true)
+}
+
+/// Layer 1 in one call: the dev zone and the admin hold everything.
+fn actor_may(req: &Request, cap: &str) -> bool {
+    match crate::auth::current_user(req) {
+        Some(u) => angela(0).state.store.identity().has_capability(u.id, cap),
+        None => true,
+    }
+}
+
+/// The capability a mutating request needs (PLAN44 catalog, Layer 1).
+/// Reads are per-resource (Layer 2) and checked where the resource is named.
+fn required_capability(req: &Request) -> Option<&'static str> {
+    if req.method == "GET" || req.method == "HEAD" {
+        return None;
+    }
+    let p = req.path.as_str();
+    if p == "/api/session/new" {
+        return Some("session.create");
+    }
+    if p == "/api/agents" || p.starts_with("/api/agents/") {
+        return Some("agent.create");
+    }
+    if p.starts_with("/api/automations/") {
+        return Some("automation.create");
+    }
+    if p.starts_with("/api/sessions/") && p.ends_with("/participants") {
+        return Some("session.invite");
+    }
+    if matches!(
+        p,
+        "/api/projects/project-add"
+            | "/api/projects/repo-add"
+            | "/api/projects/branch-add"
+            | "/api/projects/worktree-add"
+    ) {
+        return Some("project.create");
+    }
+    if p == "/api/targets/sandbox-add" || p == "/api/targets/sandbox-rename" {
+        return Some("sandbox.create");
+    }
+    None
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn query_str(req: &Request, key: &str) -> String {
+    let prefix = format!("{key}=");
+    for pair in req.query.split('&') {
+        if let Some(v) = pair.strip_prefix(&prefix) {
+            return percent_decode(v);
+        }
+    }
+    String::new()
+}
+
+fn query_int(req: &Request, key: &str) -> Option<i64> {
+    query_str(req, key).parse().ok()
+}
+
+/// The share dialog's data for one resource: `{grants, ownerId}`.
+fn acl_rows(
+    ident: &angela::identity::Identity<'_>,
+    kind: &str,
+    name: &str,
+) -> (Vec<Value>, Option<i64>) {
+    let (owner, rows) = ident.grants_on(kind, name);
+    (rows, owner)
+}
+
 /// The dev server's raw `/api/` handler.
 pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
+    // ---- identity, admin and ACL (PLAN44) -------------------------------
+    //
+    // The gate has already turned anonymous non-loopback traffic away; what
+    // arrives here is either a logged-in user or the dev zone (loopback, no
+    // cookie — the developer on this machine, D12). The dev zone passes
+    // every check below as the admin would.
+    if req.path == "/api/me" && req.method == "GET" {
+        let ident = angela(state.config.port).state.store.identity();
+        let body = match crate::auth::current_user(req) {
+            Some(u) => serde_json::json!({
+                "user": { "id": u.id, "name": u.name, "displayName": u.display_name,
+                          "admin": u.is_admin(), "disabled": u.disabled },
+                "capabilities": ident.capabilities(u.id),
+            }),
+            None => serde_json::json!({ "user": null, "dev": true }),
+        };
+        let _ = out.json(200, &body);
+        return;
+    }
+    if req.path == "/api/admin/audit" && req.method == "GET" {
+        if !is_admin(req) {
+            let _ = out.json(403, &serde_json::json!({"ok": false, "error": "admin only"}));
+            return;
+        }
+        let n = query_int(req, "n").filter(|n| *n > 0).unwrap_or(100).min(1000) as usize;
+        let entries = angela(state.config.port).state.store.identity().audit_tail(n);
+        let _ = out.json(200, &serde_json::json!({"ok": true, "audit": entries}));
+        return;
+    }
+    if req.path == "/api/admin/perimeter" && req.method == "GET" {
+        if !is_admin(req) {
+            let _ = out.json(403, &serde_json::json!({"ok": false, "error": "admin only"}));
+            return;
+        }
+        let p = crate::auth::instance();
+        let _ = out.json(200, &serde_json::json!({
+            "ok": true,
+            "shields": if p.shields_down() { "down" } else { "up" },
+            "bans": p.bans(),
+            "kernelFirewall": p.firewall_ok(),
+        }));
+        return;
+    }
+    if req.path == "/api/admin/shields" && req.method == "POST" {
+        if !is_admin(req) {
+            let _ = out.json(403, &serde_json::json!({"ok": false, "error": "admin only"}));
+            return;
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let down = body.get("down").and_then(Value::as_bool).unwrap_or(false);
+        crate::auth::instance().set_shields_down(down);
+        let _ = out.json(200, &serde_json::json!({
+            "ok": true,
+            "shields": if down { "down" } else { "up" },
+        }));
+        return;
+    }
+    if req.path == "/api/admin/bans" {
+        if !is_admin(req) {
+            let _ = out.json(403, &serde_json::json!({"ok": false, "error": "admin only"}));
+            return;
+        }
+        let p = crate::auth::instance();
+        if req.method == "GET" {
+            let _ = out.json(200, &serde_json::json!({"ok": true, "bans": p.bans()}));
+        } else {
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let ip = body.get("ip").and_then(Value::as_str).unwrap_or("");
+            p.unban(ip);
+            let _ = out.json(200, &serde_json::json!({"ok": true, "bans": p.bans()}));
+        }
+        return;
+    }
+    if req.path == "/api/users" && req.method == "GET" {
+        let ident = angela(state.config.port).state.store.identity();
+        let users: Vec<Value> = ident
+            .list_users()
+            .into_iter()
+            .map(|u| serde_json::json!({
+                "id": u.id, "name": u.name, "displayName": u.display_name,
+                "admin": u.is_admin(), "disabled": u.disabled,
+                "capabilities": ident.capabilities(u.id),
+            }))
+            .collect();
+        let _ = out.json(200, &serde_json::json!({"ok": true, "users": users}));
+        return;
+    }
+    if req.path == "/api/users/capabilities" && req.method == "POST" {
+        if !is_admin(req) {
+            let _ = out.json(403, &serde_json::json!({"ok": false, "error": "admin only"}));
+            return;
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let ident = angela(state.config.port).state.store.identity();
+        let user_id = body.get("userId").and_then(Value::as_i64).unwrap_or(0);
+        let cap = body.get("capability").and_then(Value::as_str).unwrap_or("");
+        let grant = body.get("grant").and_then(Value::as_bool).unwrap_or(true);
+        let r = if grant {
+            ident.grant_capability(user_id, cap).map(|_| true)
+        } else {
+            ident.revoke_capability(user_id, cap);
+            Ok(true)
+        };
+        let _ = out.json(
+            if r.is_ok() { 200 } else { 400 },
+            &serde_json::json!({"ok": r.is_ok(), "error": r.err().unwrap_or_default()}),
+        );
+        return;
+    }
+    if req.path == "/api/users/allowlist" && req.method == "POST" {
+        if !is_admin(req) {
+            let _ = out.json(403, &serde_json::json!({"ok": false, "error": "admin only"}));
+            return;
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let ident = angela(state.config.port).state.store.identity();
+        let user_id = body.get("userId").and_then(Value::as_i64).unwrap_or(0);
+        let kind = body.get("kind").and_then(Value::as_str).unwrap_or("");
+        let patterns: Vec<String> = body
+            .get("patterns")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let r = ident.set_allowlist(user_id, kind, &patterns);
+        let _ = out.json(
+            if r.is_ok() { 200 } else { 400 },
+            &serde_json::json!({"ok": r.is_ok(), "error": r.err().unwrap_or_default()}),
+        );
+        return;
+    }
+    if req.path == "/api/devices" && req.method == "GET" {
+        let ident = angela(state.config.port).state.store.identity();
+        // A user lists their own; the admin may pass ?userId=. The dev
+        // zone (no cookie) is the admin and defaults to the admin's own.
+        let target = query_int(req, "userId").or_else(|| {
+            Some(crate::auth::current_user(req).map(|u| u.id).unwrap_or(1))
+        });
+        let devices: Vec<Value> = target
+            .map(|uid| {
+                ident
+                    .list_devices(uid)
+                    .into_iter()
+                    .map(|d| serde_json::json!({
+                        "id": d.id, "tokenHint": d.token_hint, "fingerprint": d.fingerprint,
+                        "userAgent": d.user_agent, "ip": d.ip, "createdAt": d.created_at,
+                        "lastSeenAt": d.last_seen_at, "revoked": d.revoked,
+                    }))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let _ = out.json(200, &serde_json::json!({"ok": true, "devices": devices}));
+        return;
+    }
+    if req.path == "/api/devices/revoke" && req.method == "POST" {
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let ident = angela(state.config.port).state.store.identity();
+        let device_id = body.get("deviceId").and_then(Value::as_i64).unwrap_or(0);
+        // Scope: a user revokes their own devices (user_id filter), the
+        // admin any (0 = no filter).
+        let scope = if is_admin(req) { 0 } else {
+            crate::auth::current_user(req).map(|u| u.id).unwrap_or(-1)
+        };
+        let r = ident.revoke_device(scope, device_id);
+        let _ = out.json(
+            if r.is_ok() { 200 } else { 400 },
+            &serde_json::json!({"ok": r.is_ok(), "error": r.err().unwrap_or_default()}),
+        );
+        return;
+    }
+    if req.path == "/api/acl" && req.method == "GET" {
+        // The share dialog's data: the grants on one resource. Owners, the
+        // admin, and anyone with `grant` may look.
+        let ident = angela(state.config.port).state.store.identity();
+        let (kind, name) = (query_str(req, "kind"), query_str(req, "name"));
+        let actor_id = actor_id(req);
+        if !ident.can(actor_id, &kind, &name, "grant") && !ident.can(actor_id, &kind, &name, "read") {
+            let _ = out.json(403, &serde_json::json!({"ok": false, "error": "no such resource"}));
+            return;
+        }
+        let (grants, owner) = acl_rows(&ident, &kind, &name);
+        let _ = out.json(200, &serde_json::json!({
+            "ok": true, "kind": kind, "name": name, "ownerId": owner, "grants": grants,
+        }));
+        return;
+    }
+    if req.path == "/api/acl/grant" && req.method == "POST" {
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let ident = angela(state.config.port).state.store.identity();
+        let s = |k: &str| body.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        // The grantee may be an id or a login name — the share dialog
+        // speaks names, the table stores ids.
+        let grantee = body.get("grantee").and_then(Value::as_i64).unwrap_or(0);
+        let grantee = if grantee > 0 {
+            grantee
+        } else {
+            ident.user_by_name(&s("grantee")).map(|u| u.id).unwrap_or(0)
+        };
+        let with_grant = body.get("withGrant").and_then(Value::as_bool).unwrap_or(false);
+        // A resource older than the ACL has no row yet. The admin sharing
+        // it is what materialises one — owned by the admin, not by the
+        // first person to touch it.
+        if ident.resource(&s("kind"), &s("name")).is_none() && actor_id(req) == 1 {
+            let _ = ident.ensure_resource(&s("kind"), &s("name"), 1);
+        }
+        let r = ident.grant(grantee, &s("kind"), &s("name"), &s("privilege"), actor_id(req), with_grant);
+        if r.is_ok() && s("kind") == "session" && matches!(s("privilege").as_str(), "read" | "post" | "seat") {
+            // Sharing a conversation seats the person in it (PLAN44 A4):
+            // the roster says who is in the room, the grant is what lets
+            // them in — one action, one truth.
+            let name = s("grantee");
+            let handle = name.to_lowercase().replace(' ', "-");
+            let _ = angela(state.config.port).state.store.add_participant(
+                &s("name"),
+                "user",
+                &handle,
+                Some(&name),
+                None,
+                None,
+                "",
+                None,
+                None,
+            );
+        }
+        let _ = out.json(
+            if r.is_ok() { 200 } else { 403 },
+            &serde_json::json!({"ok": r.is_ok(), "error": r.err().unwrap_or_default()}),
+        );
+        return;
+    }
+    if req.path == "/api/acl/revoke" && req.method == "POST" {
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let ident = angela(state.config.port).state.store.identity();
+        let s = |k: &str| body.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        let grantee = body.get("grantee").and_then(Value::as_i64).unwrap_or(0);
+        let grantee = if grantee > 0 {
+            grantee
+        } else {
+            ident.user_by_name(&s("grantee")).map(|u| u.id).unwrap_or(0)
+        };
+        let r = ident.revoke_grant(actor_id(req), &s("kind"), &s("name"), grantee, &s("privilege"));
+        let _ = out.json(
+            if r.is_ok() { 200 } else { 403 },
+            &serde_json::json!({"ok": r.is_ok(), "error": r.err().unwrap_or_default()}),
+        );
+        return;
+    }
+
+    // ---- media (PLAN44 A5): text and images only -----------------------
+    if req.path == "/api/upload" && req.method == "POST" {
+        // Raw bytes, name in the query, kept under `.angela/media`. The
+        // extension allowlist is the whole content policy.
+        let name = query_str(req, "name");
+        let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+        if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp") || req.body.is_empty() {
+            let _ = out.json(
+                400,
+                &serde_json::json!({"ok": false, "error": "images only (png/jpg/gif/webp)"}),
+            );
+            return;
+        }
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let file = format!("{nanos:x}.{ext}");
+        let dir = project_root().join(".angela").join("media");
+        let _ = std::fs::create_dir_all(&dir);
+        match std::fs::write(dir.join(&file), &req.body) {
+            Ok(()) => {
+                let _ = out.json(200, &serde_json::json!({"ok": true, "url": format!("/media/{file}")}));
+            }
+            Err(e) => {
+                let _ = out.json(500, &serde_json::json!({"ok": false, "error": e.to_string()}));
+            }
+        }
+        return;
+    }
+    if req.method == "GET" && req.path.starts_with("/media/") {
+        let f = req.path.trim_start_matches("/media/");
+        let path = project_root().join(".angela").join("media").join(f);
+        // One directory, no separators: the name is ours, not the caller's.
+        let safe = !f.is_empty() && !f.contains('/') && !f.contains('\\') && !f.contains("..");
+        let bytes = if safe { std::fs::read(&path).ok() } else { None };
+        match bytes {
+            Some(data) => {
+                let ctype = match f.rsplit('.').next().unwrap_or("") {
+                    "png" => "image/png",
+                    "jpg" | "jpeg" => "image/jpeg",
+                    "gif" => "image/gif",
+                    "webp" => "image/webp",
+                    _ => "application/octet-stream",
+                };
+                let _ = out.start(200, &[("content-type", ctype), ("cache-control", "public, max-age=31536000, immutable")]);
+                let _ = out.chunk(&data);
+            }
+            None => {
+                let _ = out.start(404, &[("content-type", "text/plain")]);
+            }
+        }
+        return;
+    }
+
+    // ---- Layer 1: what this user may do at all --------------------------
+    //
+    // Capability checks on mutating routes, before angela sees anything.
+    // Reads are per-resource (Layer 2) and checked where the resource is
+    // named; creation verbs are global and checked here.
+    if let Some(cap) = required_capability(req) {
+        if !actor_may(req, cap) {
+            let _ = out.json(403, &serde_json::json!({
+                "ok": false,
+                "error": format!("your account may not use `{cap}` (ask the admin)"),
+            }));
+            return;
+        }
+    }
+
+    // ---- Layer 2: reads and posts on named resources --------------------
+    if req.method == "POST" && req.path == "/api/chat" {
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        if let Some(sid) = body.get("sessionId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            if let Some(u) = crate::auth::current_user(req) {
+                let ident = angela(state.config.port).state.store.identity();
+                if !ident.can(u.id, "session", sid, "post") {
+                    let _ = out.json(403, &serde_json::json!({
+                        "ok": false, "error": "you may not post in this conversation",
+                    }));
+                    return;
+                }
+            }
+        }
+    }
+    if req.method == "POST"
+        && req.path.starts_with("/api/sessions/")
+        && req.path.ends_with("/participants")
+    {
+        if let Some(u) = crate::auth::current_user(req) {
+            let id = req
+                .path
+                .trim_start_matches("/api/sessions/")
+                .split('/')
+                .next()
+                .unwrap_or("");
+            let ident = angela(state.config.port).state.store.identity();
+            if !id.is_empty() && !ident.can(u.id, "session", id, "seat") {
+                let _ = out.json(403, &serde_json::json!({
+                    "ok": false, "error": "you may not seat participants in this conversation",
+                }));
+                return;
+            }
+        }
+    }
+    if req.method == "GET" && req.path.starts_with("/api/sessions/") {
+        if let Some(u) = crate::auth::current_user(req) {
+            let id = req
+                .path
+                .trim_start_matches("/api/sessions/")
+                .split('/')
+                .next()
+                .unwrap_or("");
+            let ident = angela(state.config.port).state.store.identity();
+            if !id.is_empty() && id != "new" && !ident.can(u.id, "session", id, "read") {
+                let _ = out.json(403, &serde_json::json!({
+                    "ok": false, "error": "no such conversation",
+                }));
+                return;
+            }
+        }
+    }
+
     if req.path == "/api/session/status" && req.method == "POST" {
         let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
         let id = body.get("sessionId").and_then(Value::as_str).unwrap_or("");
@@ -273,7 +781,29 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         return;
     }
     if req.path == "/api/sessions" && req.method == "GET" {
-        let _ = out.json(200, &sessions(state.config.port));
+        let mut body = sessions(state.config.port);
+        // "Unshared resources are invisible" (PLAN44 C4): a real,
+        // non-admin user sees only conversations they may read. The dev
+        // zone and the admin see everything.
+        if let Some(u) = crate::auth::current_user(req) {
+            if !u.is_admin() {
+                let ident = angela(state.config.port).state.store.identity();
+                if let Some(rows) = body.get_mut("sessions").and_then(Value::as_array_mut) {
+                    let names: Vec<String> = rows
+                        .iter()
+                        .filter_map(|s| s.get("id").and_then(Value::as_str).map(str::to_string))
+                        .collect();
+                    let keep: std::collections::HashSet<String> =
+                        ident.readable(u.id, "session", &names).into_iter().collect();
+                    rows.retain(|s| {
+                        s.get("id")
+                            .and_then(Value::as_str)
+                            .is_some_and(|id| keep.contains(id))
+                    });
+                }
+            }
+        }
+        let _ = out.json(200, &body);
         return;
     }
     if req.path == "/api/events" && req.method == "GET" {
@@ -529,7 +1059,7 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         let _ = out.json(status, &body);
         return;
     }
-    let areq = ARequest {
+    let mut areq = ARequest {
         method: req.method.clone(),
         path: req.path.clone(),
         query: req.query.clone(),
@@ -541,7 +1071,18 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         body: req.body.clone(),
     };
     let chat = req.method == "POST" && req.path == "/api/chat";
-    let body: Value = if chat { serde_json::from_slice(&req.body).unwrap_or(Value::Null) } else { Value::Null };
+    let mut body: Value = if chat { serde_json::from_slice(&req.body).unwrap_or(Value::Null) } else { Value::Null };
+    // Who said it comes from the session, never from the client body
+    // (PLAN44 A6): a multi-human room's transcript is only truthful if the
+    // sender is the authenticated one. The dev zone renders as "You".
+    if chat {
+        if let Some(u) = crate::auth::current_user(req) {
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert("from".into(), Value::String(u.name));
+            }
+            areq.body = serde_json::to_vec(&body).unwrap_or_default();
+        }
+    }
     let session_id = body.get("sessionId").and_then(Value::as_str).unwrap_or_default().to_string();
     let prompt = body.get("content").and_then(Value::as_str).unwrap_or_default().to_string();
     let baseline = if chat && !session_id.is_empty() {
@@ -551,6 +1092,14 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         out, streaming: false, ended: false, chat, session_id, prompt, baseline,
         turn_id: None, disconnected: false, port: state.config.port,
         assistant_filter: crate::assistant_text::StreamFilter::default(),
+        // A session made by this request belongs to its maker (PLAN44).
+        claim_owner: if req.path == "/api/session/new"
+            || (chat && body.get("sessionId").and_then(Value::as_str).unwrap_or("").is_empty())
+        {
+            Some(actor_id(req))
+        } else {
+            None
+        },
     };
     angela(state.config.port).dispatch(&areq, &mut sink);
     sink.end();

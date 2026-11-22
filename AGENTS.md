@@ -111,6 +111,19 @@ Before calling UI work done:
 The build must be warning-free: an unused component function usually means a
 second definition was left behind, which is this document's whole subject.
 
+## The build
+
+`./dev.sh` uses **blaze** when it is on `PATH`, cargo otherwise
+(`CHAT_BUILD=cargo` forces cargo). Blaze links *incremental patch objects*,
+and across a big structural change — a new module, a new trait-object type,
+new parameters threaded through a call chain — those patches can go stale
+and link into a binary that **segfaults in perfectly safe code** (seen once:
+a new `Arc<dyn Fn>` hook crashed inside a tool closure chain; both cores
+shared a build-id that matched neither a clean cargo nor a clean blaze
+build, and `rm -rf target/blaze` fixed it). A wild SIGSEGV after a refactor
+is suspect stale blaze state first, your code second: wipe `target/blaze`,
+rebuild, and only then start reading stack traces.
+
 ## Where things live
 
 ```

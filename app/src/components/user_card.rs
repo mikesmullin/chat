@@ -23,20 +23,35 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .bubble-fork:hover { color: var(--accent); }
 :is(#sb, #home) .bubble-fork:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 
+/* Another human's message (PLAN44 A6): their bubble, not mine — a teal
+   voice beside the purple one, tail corner flipped to their side. The
+   base look is `session_panel`'s `.bubble-user`; this is only the variant. */
+:is(#sb, #home) .bubble-user.from-other {
+  background: color-mix(in srgb, #2dd4bf 14%, transparent);
+  border-color: color-mix(in srgb, #2dd4bf 35%, transparent);
+  border-radius: 14px 14px 14px 4px;
+}
+
 .user-demo { width: min(560px, 100%); }
 .user-demo .mjs-chat.mode-sidebar { border-left: 0; }
 "#;
 
 /// What this kind contributes to a message block.
 pub fn parts(st: &str, v: &str) -> Vec<Node> {
+    // Someone else's words in a shared room (PLAN44 A6): not my bubble.
+    // `from` is the sender's login name — no `from` is the local human.
+    let other = format!("({v}.from && {v}.from !== $store.ident.name)");
     vec![
         m("div")
             .class("bubble-user")
             .iff(&format!("{v}.kind === 'user'"))
+            .bind("class", &format!("({other} ? 'from-other' : '')"))
             .child(m("div").class("md-body").inner_html(&format!("{v}.html"))),
-        // The time and prompt action share a byline under the bubble.
-        name_tag::user_byline(
+        // The time and prompt action share a byline under the bubble —
+        // named for whoever sent it (PLAN44 A6), "You" when it was you.
+        name_tag::user_byline_as(
             st,
+            &format!("({v}.from ? {v}.from : {})", crate::components::presence::user_name(st)),
             &format!("{v}.ts"),
             &format!("{v}.kind === 'user'"),
             m("button")

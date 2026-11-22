@@ -271,8 +271,27 @@ fn links(s: &str) -> (String, Vec<String>) {
                         let label: String = b[i + 1..close].iter().collect();
                         let href: String = b[close + 2..end].iter().collect();
                         let lower = href.trim().to_ascii_lowercase();
-                        if lower.starts_with("http://") || lower.starts_with("https://")
-                            || lower.starts_with("mailto:") || lower.starts_with('#') || lower.starts_with('/') {
+                        // `![alt](src)` — an image is a link whose bracket
+                        // carries a `!`. Same URL rules; the `!` is eaten.
+                        let is_image = i > 0 && b[i - 1] == '!';
+                        let allowed = lower.starts_with("http://") || lower.starts_with("https://")
+                            || lower.starts_with("mailto:") || lower.starts_with('#') || lower.starts_with('/');
+                        if is_image {
+                            if out.ends_with('!') {
+                                out.pop();
+                            }
+                            if allowed && lower.starts_with("http") || lower.starts_with('/') {
+                                anchors.push(format!(
+                                    "<img src=\"{href}\" alt=\"{label}\" loading=\"lazy\">"
+                                ));
+                                out.push(LINK_MARK);
+                            } else {
+                                out.push_str(&label);
+                            }
+                            i = end + 1;
+                            continue;
+                        }
+                        if allowed {
                             anchors.push(format!("<a href=\"{href}\" target=\"_blank\" rel=\"noopener noreferrer\">{label}</a>"));
                             out.push(LINK_MARK);
                         } else {

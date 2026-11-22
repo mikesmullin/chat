@@ -50,6 +50,11 @@ struct Row {
     open: bool,
     /// Tool rows only.
     name: &'static str,
+    /// Queued rows only: the model being waited on, and the place in line.
+    spec: &'static str,
+    position: u32,
+    /// User rows only: who said it (PLAN44 A6) — blank is "you".
+    from: &'static str,
 }
 
 const BLANK: Row = Row {
@@ -62,6 +67,9 @@ const BLANK: Row = Row {
     last: false,
     open: false,
     name: "",
+    spec: "",
+    position: 0,
+    from: "",
 };
 
 /// One turn, start to finish: the question, the paperwork, the thinking, a
@@ -74,6 +82,15 @@ fn rows() -> Vec<Row> {
             id: "u1",
             kind: "user",
             text: "Read https://example.com/config and tell me which model it points at.",
+            ..BLANK
+        },
+        // The same kind, another voice: a shared room's other human wears
+        // the `from-other` variant (left, teal) rather than the me-bubble.
+        Row {
+            id: "u2",
+            kind: "user",
+            from: "Alice",
+            text: "While you are in there — what is the context window set to?",
             ..BLANK
         },
         Row {
@@ -101,6 +118,16 @@ fn rows() -> Vec<Row> {
             handle: "fish",
             turn: true,
             text: "",
+            ..BLANK
+        },
+        Row {
+            id: "q1",
+            kind: "queued",
+            handle: "fish",
+            turn: true,
+            text: "waiting for llama-server:default slot…",
+            spec: "llama-server:default",
+            position: 3,
             ..BLANK
         },
         Row {
@@ -198,6 +225,9 @@ fn messages() -> JsValue {
         js::set_bool(&o, "turnLast", r.last);
         js::set_bool(&o, "expanded", r.open);
         js::set_bool(&o, "ok", true);
+        js::set_str(&o, "spec", r.spec);
+        js::set_num(&o, "position", r.position as f64);
+        js::set_str(&o, "from", r.from);
         if !r.name.is_empty() {
             js::set_str(&o, "name", r.name);
         }

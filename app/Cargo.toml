@@ -13,4 +13,4 @@ rustex1-kit = { path = "../vendor/rustex1/kit" }
 wasm-bindgen = "=0.2.129"
 wasm-bindgen-futures = "=0.4.79"
 js-sys = "=0.3.106"
-web-sys = { version = "=0.3.106", features = ["Window", "Document", "Element"] }
+web-sys = { version = "=0.3.106", features = ["Window", "Document", "Element", "Location"] }

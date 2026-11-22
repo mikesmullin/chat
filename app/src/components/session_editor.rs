@@ -221,6 +221,16 @@ pub fn panel() -> Node {
                 &format!("({ST}.messageTone ? ' ' + {ST}.messageTone : '')"),
                 &format!("{ST}.message"),
             ),
+            // Who else can reach this conversation (PLAN44 C4): the share
+            // dialog owns the grants; this only opens it.
+            m("button")
+                .class("ae-btn")
+                .attr("type", "button")
+                .on("click", "$store.share.openForActive()")
+                .kids(vec![
+                    Node::icon("users-three").class("ph ph-users-three"),
+                    m("span").child(lit("Share…")),
+                ]),
             m("span").class("spacer"),
             // Two presses rather than a dialog: the destructive press is a
             // different press from the one that reveals it — same idiom as

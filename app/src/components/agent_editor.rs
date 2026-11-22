@@ -117,6 +117,33 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .ae-btn[disabled] { opacity: .5; cursor: default; }
 :is(#sb, #home) .ae-error { color: var(--danger, #d9534f); font-size: 11px; line-height: 1.5; }
 :is(#sb, #home) .ae-saved { color: var(--ok, #4f9d69); font-size: 11px; line-height: 1.5; }
+/* Recognized devices (PLAN44 A2): one row per issued session cookie. */
+:is(#sb, #home) .ae-devices {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 10px; border: 1px solid var(--line-soft, var(--line));
+  border-radius: 8px; min-height: 34px;
+}
+:is(#sb, #home) .ae-device {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+}
+:is(#sb, #home) .ae-device-token {
+  font: 500 11px/1.6 var(--mono); color: var(--text);
+}
+:is(#sb, #home) .ae-device-fp,
+:is(#sb, #home) .ae-device-ip {
+  font: 400 11px/1.6 var(--mono); color: var(--gray-dim);
+  overflow-wrap: anywhere;
+}
+:is(#sb, #home) .ae-device-del {
+  border: 0; background: transparent; color: var(--gray-dim);
+  cursor: pointer; padding: 2px; border-radius: 6px; font-size: 12px;
+  line-height: 1;
+}
+:is(#sb, #home) .ae-device-del:hover { color: var(--danger, #f87171); background: var(--panel-2); }
+:is(#sb, #home) .ae-bans {
+  display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center;
+  margin-top: 6px;
+}
 
 "#;
 
@@ -348,6 +375,17 @@ pub fn agent_editor() -> Node {
                         Node::icon("check").class("ph ph-check"),
                         m("span").text(&format!("({ST}.saving ? 'Saving…' : 'Save')")),
                     ]),
+                // Who else may reach this agent (PLAN44 C4) — the same
+                // share dialog sessions use; the dialog is kind-agnostic.
+                m("button")
+                    .class("ae-btn")
+                    .attr("type", "button")
+                    .show(&format!("!{ST}.creating"))
+                    .on("click", "$store.share.open('agent', $store.agents.draft.name)")
+                    .kids(vec![
+                        Node::icon("users-three").class("ph ph-users-three"),
+                        m("span").child(lit("Share…")),
+                    ]),
                 m("span").class("spacer"),
                 m("button")
                     .class("ae-btn danger")
@@ -411,6 +449,56 @@ pub fn settings_panel() -> Node {
                 .class("ae-saved")
                 .show(&format!("{st}.saved"))
                 .text(&format!("{st}.saved")),
+            // ---- identity: recognized devices (PLAN44 A2) --------------
+            // Every login this account owns. The cookie is shown masked —
+            // its value is never stored — and the trash force-expires it.
+            m("div").class("ae-field").kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Devices")),
+                    m("span").class("hint").child(lit("recognized logins · cookie shown masked")),
+                ]),
+                m("div")
+                    .class("ae-devices")
+                    .init("$store.ident.loadDevices()")
+                    .kids(vec![m("div")
+                        .class("ae-device")
+                        .for_each("d in $store.ident.devices")
+                        .kids(vec![
+                            m("span").class("ae-device-token").text("d.tokenHint"),
+                            m("span").class("ae-device-fp").text("d.fingerprint"),
+                            m("span").class("ae-device-ip").text("d.ip"),
+                            m("button")
+                                .class("ae-device-del")
+                                .attr("type", "button")
+                                .attr("title", "Force-expire this device")
+                                .on("click", "$store.ident.revoke(d.id)")
+                                .child(Node::icon("trash").class("ph ph-trash")),
+                        ])]),
+            ]),
+            // ---- admin: the perimeter (PLAN44 D12) --------------------
+            m("div").class("ae-field").show("$store.ident.admin").kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Shields")),
+                    m("span").class("hint").child(lit("up: strangers are firewalled · down: invite by name")),
+                ]),
+                m("button")
+                    .class("ae-btn")
+                    .attr("type", "button")
+                    .on("click", "$store.ident.toggleShields()")
+                    .text("('Shields ' + ($store.ident.shields === 'up' ? 'Up' : 'Down') + ' — toggle')"),
+                m("div")
+                    .class("ae-bans")
+                    .for_each("ip in $store.ident.bans")
+                    .kids(vec![
+                        m("span").class("ae-device-ip").text("ip"),
+                        m("button")
+                            .class("ae-device-del")
+                            .attr("type", "button")
+                            .attr("title", "Unban")
+                            .on("click", "$store.ident.unban(ip)")
+                            .child(Node::icon("x").class("ph ph-x")),
+                    ]),
+            ]),
             m("div").class("ae-actions").child(
                 m("button")
                     .class("ae-btn primary")

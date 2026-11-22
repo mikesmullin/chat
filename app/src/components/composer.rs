@@ -109,6 +109,30 @@ pub const CSS: &str = r#"
 .mjs-chat .btn-primary { background: var(--mjs-accent); color: #fff; border: 0; margin-left: auto; }
 .mjs-chat .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .mjs-chat .btn-stop { background: #7f1d1d; color: #fecaca; border: 1px solid #991b1b; }
+/* Attach an image (PLAN44 A5): an icon button in the policy cluster, and
+   the pending attachment's chip above the row. */
+.mjs-chat .composer-attach {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  width: 28px; height: 28px; border-radius: 8px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--mjs-dim, var(--muted));
+}
+.mjs-chat .composer-attach:hover { background: var(--panel-2); color: var(--text); }
+.mjs-chat .composer-attach-chip {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  margin-bottom: 6px; width: fit-content;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
+}
+.mjs-chat .composer-attach-chip img {
+  max-height: 64px; max-width: 160px; border-radius: 6px; display: block;
+}
+.mjs-chat .composer-attach-chip button {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  color: var(--mjs-dim, var(--muted)); width: 22px; height: 22px;
+  border-radius: 6px; display: inline-flex; align-items: center;
+  justify-content: center;
+}
+.mjs-chat .composer-attach-chip button:hover { background: var(--panel); color: var(--text); }
 .mjs-chat.mode-sidebar .btn-primary,
 .mjs-chat.mode-sidebar .btn-stop {
   height: 30px;
@@ -413,7 +437,31 @@ pub fn panel(st: &str) -> Node {
                     // Preserve normal cursor movement within multiline drafts.
                     .on("keydown.up", &format!("{st}.treeOpen ? ($event.preventDefault(), {st}.treeMove(-1)) : (!$event.shiftKey && !$event.ctrlKey && !$event.altKey && !$event.metaKey && $el.selectionStart === $el.selectionEnd && !$el.value.slice(0, $el.selectionStart).includes('\\n') && {st}.historyMove(-1, $event))"))
                     .on("keydown.down", &format!("{st}.treeOpen ? ($event.preventDefault(), {st}.treeMove(1)) : (!$event.shiftKey && !$event.ctrlKey && !$event.altKey && !$event.metaKey && $el.selectionStart === $el.selectionEnd && !$el.value.slice($el.selectionEnd).includes('\\n') && {st}.historyMove(1, $event))")),
+                m("div").class("composer-attach-chip").show(&format!("{st}.image")).kids(vec![
+                    m("img").attr("src", &format!("{st}.image")).attr("alt", "attached"),
+                    m("button")
+                        .attr("type", "button")
+                        .attr("title", "Remove image")
+                        .on("click", &format!("{st}.dropImage()"))
+                        .child(Node::icon("x")),
+                ]),
                 m("div").class("composer-row").kids(vec![
+                    // Attach an image (PLAN44 A5): left of the policy
+                    // dropdown, per the composer's cluster order. The
+                    // hidden input does the choosing.
+                    m("button")
+                        .class("composer-attach")
+                        .attr("type", "button")
+                        .attr("title", "Attach an image")
+                        .attr("aria-label", "Attach an image")
+                        .on("click", &format!("{st}.pickImage()"))
+                        .child(Node::icon("image-square")),
+                    m("input")
+                        .class("composer-image-input")
+                        .attr("type", "file")
+                        .attr("accept", "image/png,image/jpeg,image/gif,image/webp")
+                        .attr("style", "display:none")
+                        .on("change", &format!("{st}.imageChosen($event)")),
                     // Tool policy. Was a bare shield toggle; a dropdown makes
                     // the two states nameable, and "Unrestricted" visible
                     // rather than implied by an absent panel.

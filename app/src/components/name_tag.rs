@@ -66,13 +66,21 @@ pub fn byline(st: &str, handle_expr: &str, ts_expr: &str, when: &str) -> Node {
 }
 
 /// The current user's byline, with the prompt action after the time.
-pub fn user_byline(st: &str, ts_expr: &str, when: &str, action: Node) -> Node {
+/// The user's byline under a bubble — named for whoever sent it: a
+/// multi-human room shows who said it, not always "You" (PLAN44 A6).
+pub fn user_byline_as(
+    st: &str,
+    name_expr: &str,
+    ts_expr: &str,
+    when: &str,
+    action: Node,
+) -> Node {
     m("div")
         .class("name-tag name-tag-user")
         .attr("style", &format!("--agent-accent: {}", presence::USER_ACCENT))
         .iff(when)
         .kids(vec![
-            who(&format!("'{}'", presence::USER_ICON), &presence::user_name(st)),
+            who(&format!("'{}'", presence::USER_ICON), name_expr),
             m("span")
                 .class("name-tag-when")
                 .show(ts_expr)

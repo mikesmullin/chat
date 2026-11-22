@@ -269,11 +269,67 @@ fn history_move(_this: JsValue, args: js_sys::Array) -> JsValue {
     crate::components::composer::history_move(&mjs::store_ref(STORE), args)
 }
 
+/// Open the hidden file picker (A5). The input does the choosing; this
+/// button is just its visible face.
+fn pick_image(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let doc = js::get(&js::global(), "document");
+    let el = js::call(&doc, "querySelector", &[JsValue::from_str(".composer-image-input")]);
+    if !el.is_null() && !el.is_undefined() {
+        js::call(&el, "click", &[]);
+    }
+    JsValue::UNDEFINED
+}
+
+/// The picked file becomes a POST of its raw bytes; the answer's URL is the
+/// pending attachment. Images only, enforced server-side too.
+fn image_chosen(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let ev = js::arg(&args, 0);
+    let target = js::get(&ev, "target");
+    let files = js::get(&target, "files");
+    let file = js_sys::Array::from(&files).get(0);
+    if file.is_null() || file.is_undefined() {
+        return JsValue::UNDEFINED;
+    }
+    let name = js::get_str(&file, "name");
+    let global = js::global();
+    let opts = js::obj();
+    js::set_str(&opts, "method", "POST");
+    js::set(&opts, "body", &file);
+    let url = format!("/api/upload?name={}", name.replace(' ', "%20"));
+    let done = wasm_bindgen::closure::Closure::once_into_js(move |resp: JsValue| {
+        let parsed = wasm_bindgen::closure::Closure::once_into_js(move |v: JsValue| {
+            let s = mjs::store_ref(STORE);
+            js::set_str(&s, "image", &js::get_str(&v, "url"));
+            mjs::redraw();
+        });
+        let body = js::call(&resp, "json", &[]);
+        js::call(&body, "then", &[parsed]);
+    });
+    let resp = js::call(&global, "fetch", &[JsValue::from_str(&url), opts.into()]);
+    js::call(&resp, "then", &[done]);
+    JsValue::UNDEFINED
+}
+
+fn drop_image(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    js::set_str(&mjs::store_ref(STORE), "image", "");
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
 /// `send()` — the composer. Streams the turn into the store.
 fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let draft = js::get_str(&s, "draft");
-    let content = draft.trim().to_string();
+    // The pending attachment rides along as markdown — one content field,
+    // one renderer, one transcript (PLAN44 A5).
+    let image = js::get_str(&s, "image");
+    let mut content = draft.trim().to_string();
+    if !image.is_empty() {
+        if !content.is_empty() {
+            content.push_str("\n\n");
+        }
+        content.push_str(&format!("![image]({image})"));
+    }
     if content.is_empty() || js::get_bool(&s, "waiting") || api::chat_stream_active() || OWN_TURN.with(|t| t.borrow().is_some()) {
         return JsValue::UNDEFINED;
     }
@@ -302,6 +358,7 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     crate::components::composer::reset_history(&s);
     push_message(&s, "user", &content, "");
     js::set_str(&s, "draft", "");
+    js::set_str(&s, "image", "");
     js::set_bool(&s, "waiting", true);
     js::set_bool(&s, "stopping", false);
     js::set_bool(&s, "stopUnconfirmed", false);
@@ -632,6 +689,7 @@ fn on_row(row: &JsValue) {
                 // streaming turn and a reloaded one draw the same rail.
                 "tool_call" | "tool_result" | "system_prompt" | "agent_prompt"
                 | "decision" => push_card(&s, &card, &kind, None),
+                "queued" => push_card(&s, &card, "queued", None),
                 "error" => push_card(&s, &card, "error", None),
                 // The server explaining itself — e.g. that the conversation
                 // has no agents in it yet.
@@ -662,7 +720,7 @@ fn push_card(s: &JsValue, card: &JsValue, kind: &str, text_override: Option<&str
     let list = js_sys::Array::from(&js::get(s, "messages"));
     let m = js::obj();
     js::set_str(&m, "kind", kind);
-    for key in ["text", "handle", "turn", "eventId", "name", "model", "error", "ts"] {
+    for key in ["text", "handle", "turn", "eventId", "name", "model", "error", "ts", "spec"] {
         let v = js::get_str(card, key);
         if !v.is_empty() {
             js::set_str(&m, key, &v);
@@ -671,7 +729,7 @@ fn push_card(s: &JsValue, card: &JsValue, kind: &str, text_override: Option<&str
     if let Some(t) = text_override {
         js::set_str(&m, "text", t);
     }
-    for key in ["bytes", "historyTurns", "confidence", "round"] {
+    for key in ["bytes", "historyTurns", "confidence", "round", "position"] {
         if let Some(n) = js::get(card, key).as_f64() {
             js::set_num(&m, key, n);
         }
@@ -948,6 +1006,9 @@ pub fn register() {
         .str("worktreeId", "")
         .str("branchId", "")
         .str("draft", "")
+        // A pending attachment (PLAN44 A5): the uploaded image's URL, sent
+        // as the message's `![image](…)` line.
+        .str("image", "")
         .num("historyPosition", -1.0)
         .str("historyDraft", "")
         .str("streamText", "")
@@ -1042,6 +1103,9 @@ pub fn register() {
         .method("newSession", new_session)
         .method("closeTab", close_tab)
         .method("send", send)
+        .method("pickImage", pick_image)
+        .method("imageChosen", image_chosen)
+        .method("dropImage", drop_image)
         .method("historyMove", history_move)
         .method("statusParts", crate::components::system_card::status_parts)
         .method("turnEdges", crate::components::session::turn_edges)

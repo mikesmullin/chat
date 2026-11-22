@@ -37,8 +37,8 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::components::{
-    agent_editor, agents_menu, automations_menu, mode_toggle, perf_badge, project_tree, session_editor,
-    session_panel, tab, target_form,
+    agent_editor, agents_menu, automations_menu, identity_switcher, mode_toggle, perf_badge,
+    project_tree, session_editor, session_panel, share_dialog, tab, target_form,
 };
 use crate::css;
 
@@ -266,6 +266,10 @@ fn rail() -> Node {
             // conversation, and it is the one item whose position should
             // never move as the lists above it grow.
             m("div").class("home-settings").kids(vec![
+                // Who you are (PLAN44 D4): the account chip owns the bottom
+                // left — presence dot, name, and the menu to profile, switch
+                // and log out.
+                identity_switcher::widget(),
                 m("button")
                     .class("rail-settings")
                     .attr("type", "button")
@@ -344,6 +348,7 @@ fn aside() -> Node {
                 agent_editor::settings_panel(),
                 target_form::panel(),
                 session_editor::panel(),
+                share_dialog::panel(),
             ]),
         ])
 }

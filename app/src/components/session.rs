@@ -11,7 +11,8 @@ use rustex1_kit::js;
 use wasm_bindgen::JsValue;
 
 use crate::components::{
-    approval_card, assistant_card, decision_card, error_card, prompt_card, reasoning_card, system_card,
+    approval_card, assistant_card, decision_card, error_card, prompt_card, queued_card,
+    reasoning_card, system_card,
     thinking, thread, tool_call_card, tool_response_card, user_card,
 };
 use crate::css;
@@ -134,6 +135,13 @@ pub const CSS: &str = r#"
   max-width: 100%;
   align-self: stretch;
 }
+/* The same message from *someone else* in a shared room (PLAN44 A6): the
+   mirror of the rule above — left-aligned, hugging the rail's side. */
+:is(#sb, #home) .turn-row .msg-block.msg-user.msg-from-other {
+  margin-left: 0;
+  margin-right: auto;
+  align-items: flex-start;
+}
 /* The byline hugs its text rather than stretching across the column, and
    sits the same distance below the answer as any two events sit apart. */
 :is(#sb, #home) .turn-row .name-tag { align-self: flex-start; margin-top: 4px; }
@@ -222,6 +230,7 @@ fn card_kids(st: &str, v: &str) -> Vec<Node> {
     out.extend(assistant_card::parts(st, v));
     out.extend(error_card::parts(st, v));
     out.extend(system_card::parts(st, v));
+    out.extend(queued_card::parts(st, v));
     out.extend(reasoning_card::parts(st, v));
     // The turn's paperwork: what the model was handed, kept apart from what
     // the user typed. "Why did it answer that?" is unanswerable without
@@ -328,7 +337,7 @@ pub fn row(st: &str, v: &str, parts: Vec<Node>) -> Node {
             m("div").class("turn-rail").child(m("span").class("turn-dot")),
             m("div")
                 .class("msg-block")
-                .bind("class", &format!("({v}.kind === 'user' ? 'msg-user' : '')"))
+                .bind("class", &format!("(({v}.kind === 'user' ? 'msg-user' : '') + (({v}.from && {v}.from !== $store.ident.name) ? ' msg-from-other' : ''))"))
                 .kids(parts),
         ])
 }
@@ -368,7 +377,7 @@ pub fn messages_threaded(st: &str) -> Node {
                         .iff("t.leaf && t.message")
                         .bind(
                             "class",
-                            "('msg-block ' + (t.message.kind === 'user' ? 'msg-user' : ''))",
+                            "('msg-block ' + (t.message.kind === 'user' ? 'msg-user' : '') + ((t.message.from && t.message.from !== $store.ident.name) ? ' msg-from-other' : ''))",
                         )
                         .kids(card_kids(st, "t.message")),
                 ]),

@@ -302,6 +302,18 @@ pub fn panel() -> Node {
                         .model(&format!("{ST}.enabled")),
                     m("span").child(lit("active")),
                 ]),
+            // Catch-up (B3): the machine was off when the schedule came
+            // round — run it once at startup, or let it go. Off by default:
+            // a backfill nobody asked for is a surprise bill.
+            m("label")
+                .class("ae-label")
+                .show(&format!("{ST}.kind === 'automation'"))
+                .kids(vec![
+                    m("input")
+                        .attr("type", "checkbox")
+                        .model(&format!("{ST}.catchUp")),
+                    m("span").child(lit("catch up missed runs at startup")),
+                ]),
             m("div")
                 .class("ae-field")
                 .show(&format!("{ST}.kind === 'automation'"))
@@ -415,6 +427,17 @@ pub fn panel() -> Node {
                     .text(&format!(
                         "({ST}.busy ? 'Working…' : ({ST}.mode === 'edit' ? ({ST}.kind === 'automation' ? 'Save' : 'Rename') : 'Create'))"
                     )),
+                // The share dialog reaches projects, sandboxes and
+                // automations too (PLAN44 C2) — same dialog, same grants.
+                m("button")
+                    .class("ae-btn")
+                    .attr("type", "button")
+                    .show(&format!("({ST}.mode === 'edit' && ['project', 'sandbox', 'automation'].includes({ST}.kind))"))
+                    .on("click", "$store.share.open($store.tform.kind, $store.tform.name)")
+                    .kids(vec![
+                        Node::icon("users-three").class("ph ph-users-three"),
+                        m("span").child(lit("Share…")),
+                    ]),
                 m("span").class("spacer"),
                 // Two-step, like the agent editor's: the first press arms
                 // it and says so, the second does it. A folder holding
@@ -515,6 +538,7 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     js::set_str(&s, "model", "");
     js::set_str(&s, "timeout", "60");
     js::set_bool(&s, "enabled", true);
+    js::set_bool(&s, "catchUp", false);
     seed_from_host(&s, kind, mode, name);
     if kind == "sandbox" && store == "live" { sync_sandbox_status(&mjs::store_ref(store)); }
     js::set_str(
@@ -606,6 +630,7 @@ fn seed_from_host(s: &JsValue, kind: &str, mode: &str, name: &str) {
                         }
                     }
                     js::set_bool(s, "enabled", js::get(&item, "enabled").as_bool().unwrap_or(true));
+                    js::set_bool(s, "catchUp", js::get(&item, "catchUp").as_bool().unwrap_or(false));
                     break;
                 }
             }
@@ -845,6 +870,7 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
                     ("model", JsValue::from_str(js::get_str(&s, "model").trim())),
                     ("timeoutMin", JsValue::from_f64(js::get_str(&s, "timeout").trim().parse().unwrap_or(60.0))),
                     ("enabled", JsValue::from_bool(js::get_bool(&s, "enabled"))),
+                    ("catchUp", JsValue::from_bool(js::get_bool(&s, "catchUp"))),
                 ];
                 // An edit carries the id so the save replaces; a create
                 // omits it so the server mints one.
@@ -1076,6 +1102,7 @@ pub fn register() {
         .str("model", "")
         .str("timeout", "60")
         .bool("enabled", true)
+        .bool("catchUp", false)
         .num("requestId", 0.0)
         .bool("network", true)
         .bool("create", true)

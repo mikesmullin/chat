@@ -8,8 +8,10 @@
 
 mod api;
 mod assistant_text;
+mod auth;
 mod automations;
 mod events;
+mod firewall;
 mod hostgit;
 mod sbox;
 
@@ -34,10 +36,20 @@ fn main() {
     // automation scheduler below can never win the race to build it with a
     // placeholder port.
     let _ = api::angela(config.port);
-    let mut server = Server::new(config).raw("/api/", api::handle_api).on_start(|state| {
-        events::start(state);
-        automations::start();
-    });
+    // The perimeter gate runs in front of every route (PLAN44 D12): session
+    // cookies, the login form, Shields Up/Down and the ban list.
+    let perimeter = std::sync::Arc::new(auth::Perimeter::load(&root));
+    auth::init(std::sync::Arc::clone(&perimeter));
+    let mut server = Server::new(config)
+        .gate(perimeter.gate())
+        .raw("/api/", api::handle_api)
+        // Message images (PLAN44 A5) live outside /api/ but in the same
+        // handler — one choke point, one auth story.
+        .raw("/media/", api::handle_api)
+        .on_start(|state| {
+            events::start(state);
+            automations::start();
+        });
     if rebuild {
         server = server.rebuild_on_start();
     }

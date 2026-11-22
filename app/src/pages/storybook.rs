@@ -33,6 +33,9 @@
 //!   /storybook/project-tree -> Project Tree (folders + sessions, drag-drop)
 //!   /storybook/target-form  -> Target Form (create/edit in the inspector)
 //!   /storybook/system-card -> System Card (system prompt)
+//!   /storybook/queued-card -> Queued Card (waiting for a model slot)
+//!   /storybook/identity-switcher -> Identity Switcher (the account chip)
+//!   /storybook/share-dialog -> Share Dialog (who else can reach this)
 //!   /storybook/user-card -> User Card (user prompt bubble)
 //!   /storybook/assistant-card -> Assistant Card (response block)
 //!   /storybook/reasoning-card -> Reasoning Card (thinking block)
@@ -61,7 +64,8 @@ use wasm_bindgen::{JsCast, JsValue};
 use crate::components::{
     agents_menu, approval_card, assistant_card, automation_form, automations_menu, composer, decision_card,
     samples, mode_toggle,
-    dropdown, error_card, fold_card, picker, project_tree, prompt_card, rail_head,
+    dropdown, error_card, fold_card, identity_switcher, picker, project_tree, prompt_card, queued_card, rail_head,
+    share_dialog,
     target_form,
     field, hint_text, history_tree, item_group, label, nav_rail, notification_toggle, perf_badge, radio_input, range_input,
     presence, reasoning_card, relative_timestamp, sandboxes_menu, session, session_editor, session_panel,
@@ -403,6 +407,19 @@ pub fn register(rt: &mut Runtime) {
     // one route per message card, each alone on screen.
     rt.route("/storybook/system-card", "System Card", |_| {
         route_def("route /storybook/system-card", "System Card", system_card::demo())
+    });
+    rt.route("/storybook/queued-card", "Queued Card", |_| {
+        route_def("route /storybook/queued-card", "Queued Card", queued_card::demo())
+    });
+    rt.route("/storybook/identity-switcher", "Identity Switcher", |_| {
+        route_def(
+            "route /storybook/identity-switcher",
+            "Identity Switcher",
+            identity_switcher::demo(),
+        )
+    });
+    rt.route("/storybook/share-dialog", "Share Dialog", |_| {
+        route_def("route /storybook/share-dialog", "Share Dialog", share_dialog::demo())
     });
     rt.route("/storybook/user-card", "User Card", |_| {
         route_def("route /storybook/user-card", "User Card", user_card::demo())

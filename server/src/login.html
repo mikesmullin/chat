@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chat — sign in</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         background: #0b0e14; color: #e7ecf3;
+         font: 400 15px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  form { display: grid; gap: 12px; width: min(320px, 86vw); }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  p { margin: 0 0 8px; color: #8b9bb4; font-size: 13px; }
+  input { padding: 10px 12px; border: 1px solid #2d3a4f; border-radius: 8px;
+          background: #11161f; color: #e7ecf3; font-size: 15px; }
+  input:focus-visible { outline: 2px solid #3b82f6; }
+  button { padding: 10px 12px; border: 0; border-radius: 8px;
+           background: #3b82f6; color: #fff; font-size: 15px; cursor: pointer; }
+  .err { color: #f87171; font-size: 13px; min-height: 18px; }
+</style>
+</head>
+<body>
+<form id="f">
+  <h1>chat</h1>
+  <p>Type your name to sign in. First name on this server becomes the admin.</p>
+  <input id="name" name="name" placeholder="your name" autocomplete="username"
+         spellcheck="false" autofocus>
+  <div class="err" id="err"></div>
+  <button>Sign in</button>
+</form>
+<script>
+  // A light fingerprint — enough to tell one device from another in the
+  // profile's device list, never anything identifying.
+  const fp = [navigator.userAgent, screen.width + "x" + screen.height,
+              Intl.DateTimeFormat().resolvedOptions().timeZone,
+              navigator.language].join("|");
+  let hash = 0;
+  for (const ch of fp) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  const fingerprint = "fp-" + hash.toString(16);
+
+  document.getElementById("f").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("name").value.trim();
+    const err = document.getElementById("err");
+    if (!name) { err.textContent = "a name is required"; return; }
+    const r = await fetch("/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, fingerprint }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (r.ok && body.ok) {
+      location.reload();
+    } else {
+      err.textContent = body.error || "that did not work";
+    }
+  });
+</script>
+</body>
+</html>
