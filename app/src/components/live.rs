@@ -33,6 +33,9 @@ fn load_sessions(_this: JsValue, _args: js_sys::Array) -> JsValue {
 
 pub(crate) fn apply_sessions(v: JsValue) {
         let s = mjs::store_ref(STORE);
+        let rows = js::get(&v, "sessions");
+        if !js_sys::Array::is_array(&rows) { return; }
+        crate::components::notification_toggle::reconcile_unread(&s, &js_sys::Array::from(&rows));
         if same_json(&js::get(&s, "sessions"), &js::get(&v, "sessions")) && js::get_str(&s, "projectRoot") == js::get_str(&v, "projectRoot") { return; }
         js::set(&s, "sessions", &js::get(&v, "sessions"));
         js::set_str(&s, "projectRoot", &js::get_str(&v, "projectRoot"));
@@ -1127,7 +1130,7 @@ fn revert_allowlist(_this: JsValue, _args: js_sys::Array) -> JsValue {
 }
 
 
-/// Pre-render an assistant message's markdown.
+/// Pre-render a message's markdown.
 ///
 /// Done once when the message lands rather than in a template binding: a
 /// bound expression is re-evaluated on every redraw, so rendering there would
@@ -1136,7 +1139,7 @@ fn add_html(msg: &JsValue) {
     let kind = js::get_str(msg, "kind");
     // Reasoning is prose from the same model and arrives with the same
     // markdown in it, so it gets the same treatment as an answer.
-    if kind != "assistant" && kind != "reasoning" {
+    if kind != "user" && kind != "assistant" && kind != "reasoning" {
         return;
     }
     let text = js::get_str(msg, "text");
@@ -1179,6 +1182,7 @@ fn delete_session(_this: JsValue, args: js_sys::Array) -> JsValue {
         return JsValue::UNDEFINED;
     }
     let s = mjs::store_ref(STORE);
+    crate::components::notification_toggle::begin_delete(&id);
     // Drop it from the list immediately; the refetch below reconciles.
     let keep = js_sys::Array::new();
     for row in js_sys::Array::from(&js::get(&s, "sessions")).iter() {
@@ -1196,7 +1200,9 @@ fn delete_session(_this: JsValue, args: js_sys::Array) -> JsValue {
         clear_stream(&s);
     }
     mjs::redraw();
-    api::delete_session(&id, |_| {
+    api::delete_session(&id.clone(), move |v| {
+        let s = mjs::store_ref(STORE);
+        crate::components::notification_toggle::finish_delete(&s, &id, js::get_bool(&v, "ok"));
         load_sessions(JsValue::UNDEFINED, js_sys::Array::new());
     });
     JsValue::UNDEFINED

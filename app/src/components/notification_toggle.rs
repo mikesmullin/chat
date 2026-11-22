@@ -15,6 +15,7 @@ const REMINDER_MS: f64 = 60_000.0;
 
 thread_local! {
     static SEEN: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static DELETED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     static TIMER: Cell<u64> = const { Cell::new(0) };
 }
 
@@ -367,13 +368,71 @@ pub fn clear_session_unread(this: &JsValue, id: &str) {
     }
 }
 
+/// Prevent a late completion from reviving an unread deleted session.
+pub fn begin_delete(id: &str) {
+    DELETED.with(|ids| { ids.borrow_mut().insert(id.to_string()); });
+    let id = id.to_string();
+    // The API callback is not invoked on network errors. Avoid suppressing
+    // notifications forever if a deletion request never gets a response.
+    lifecycle::after(10_000.0, move || {
+        if DELETED.with(|ids| ids.borrow_mut().remove(&id)) {
+            crate::api::sessions(crate::components::live::apply_sessions);
+        }
+    });
+}
+
+pub fn finish_delete(this: &JsValue, id: &str, deleted: bool) {
+    if deleted {
+        clear_session_unread(this, id);
+    } else {
+        DELETED.with(|ids| { ids.borrow_mut().remove(id); });
+    }
+}
+
+fn retained_unread(unread: &[String], existing: &HashSet<String>) -> Vec<String> {
+    unread.iter().filter(|id| existing.contains(*id)).cloned().collect()
+}
+
+/// A complete session list is authoritative, including deletes made elsewhere.
+pub fn reconcile_unread(this: &JsValue, sessions: &js_sys::Array) {
+    let existing: HashSet<String> = sessions.iter().map(|s| js::get_str(&s, "id")).collect();
+    let old = js_sys::Array::from(&js::get(this, "unreadSessions"));
+    let ids: Vec<String> = old.iter().filter_map(|id| id.as_string()).collect();
+    let retained = retained_unread(&ids, &existing);
+    if retained.len() == old.length() as usize { return; }
+    let next = js_sys::Array::new();
+    for id in retained { next.push(&JsValue::from_str(&id)); }
+    js::set(this, "unreadSessions", &next.into());
+    save_unread(this);
+    sync_title();
+    schedule();
+}
+
 /// Exactly one alert per SSE turn, even when a snapshot and deltas overlap.
 pub fn completed(id: &str, turn_id: &str, completed_at: Option<f64>) {
     if id.is_empty() || turn_id.is_empty() {
         return;
     }
+    if DELETED.with(|ids| ids.borrow().contains(id)) { return; }
     let s = mjs::store_ref("live");
     if !js::get_bool(&s, "notifyEnabled") {
+        return;
+    }
+    // A turn can finish before its session-list update arrives. Verify an
+    // unknown id instead of reintroducing a deleted session as unread.
+    let sessions = js_sys::Array::from(&js::get(&s, "sessions"));
+    if !sessions.iter().any(|row| js::get_str(&row, "id") == id) {
+        let session_id = id.to_string();
+        let turn = turn_id.to_string();
+        crate::api::sessions(move |v| {
+            let rows = js::get(&v, "sessions");
+            if !js_sys::Array::is_array(&rows) { return; }
+            let rows = js_sys::Array::from(&rows);
+            if rows.iter().any(|row| js::get_str(&row, "id") == session_id) {
+                crate::components::live::apply_sessions(v);
+                completed(&session_id, &turn, completed_at);
+            }
+        });
         return;
     }
     if let Some(at) = completed_at {
@@ -430,4 +489,17 @@ pub fn completed(id: &str, turn_id: &str, completed_at: Option<f64>) {
     }
     chime();
     schedule();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconciliation_keeps_only_unread_sessions_that_still_exist() {
+        let unread = vec!["deleted".into(), "kept".into(), "also-deleted".into()];
+        let existing = HashSet::from(["kept".to_string(), "read".to_string()]);
+        assert_eq!(retained_unread(&unread, &existing), vec!["kept"]);
+        assert!(retained_unread(&unread, &HashSet::new()).is_empty());
+    }
 }

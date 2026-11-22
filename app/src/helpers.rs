@@ -30,7 +30,7 @@ pub fn format_elapsed(ms: f64) -> String {
 // Markdown → HTML, in Rust.
 // ===========================================================================
 
-/// Render assistant markdown to HTML.
+/// Render message markdown to HTML.
 ///
 /// **Escapes first, then emits tags.** Every `<`, `>` and `&` in the model's
 /// output becomes an entity before any markup is added, so the only HTML in
@@ -41,7 +41,8 @@ pub fn format_elapsed(ms: f64) -> String {
 /// Supported, because this is what models actually emit: fenced code blocks
 /// (``` with an optional language), ATX headings, unordered and ordered
 /// lists, blockquotes, horizontal rules, paragraphs, and the inline set
-/// `` `code` ``, `**bold**`, `*italic*`, `~~strike~~` and `[text](url)`.
+/// `` `code` ``, `**bold**`, `*italic*`, `~~strike~~`, `[text](url)` and
+/// bare HTTP(S) URLs.
 pub fn markdown_to_html(src: &str) -> String {
     let mut out = String::new();
     let lines: Vec<&str> = src.split('\n').collect();
@@ -191,7 +192,7 @@ fn ordered_item(line: &str) -> Option<&str> {
 fn inline(text: &str) -> String {
     let escaped = esc_html(text);
     let (masked, spans) = mask_code(&escaped);
-    let s = links(&masked);
+    let (s, anchors) = links(&masked);
     let s = wrap(&s, "**", "strong");
     // Any `**` left over is a half-typed bold marker still arriving. Hide it
     // from the single-`*` pass, which would otherwise split it into an empty
@@ -200,7 +201,8 @@ fn inline(text: &str) -> String {
     let s = wrap(&s, "~~", "del");
     let s = wrap(&s, "*", "em");
     let s = s.replace('\u{1}', "**");
-    unmask_code(&s, &spans)
+    let s = unmask(&s, LINK_MARK, &anchors);
+    unmask(&s, CODE_MARK, &spans)
 }
 
 /// A sentinel that cannot survive `esc_html`, so it can never come from input.
@@ -236,11 +238,11 @@ fn mask_code(s: &str) -> (String, Vec<String>) {
     (out, spans)
 }
 
-fn unmask_code(s: &str, spans: &[String]) -> String {
+fn unmask(s: &str, mark: char, spans: &[String]) -> String {
     let mut out = String::new();
     let mut n = 0;
     for ch in s.chars() {
-        if ch == CODE_MARK {
+        if ch == mark {
             if let Some(span) = spans.get(n) {
                 out.push_str(span);
             }
@@ -252,11 +254,14 @@ fn unmask_code(s: &str, spans: &[String]) -> String {
     out
 }
 
-/// `[text](url)`. Only http/https/mailto survive: a `javascript:` href would
-/// be script execution by another name.
-fn links(s: &str) -> String {
+/// Render explicit Markdown links and bare HTTP(S) URLs. Anchor markup is
+/// masked until after emphasis parsing, so punctuation in an href stays data.
+const LINK_MARK: char = '\u{2}';
+
+fn links(s: &str) -> (String, Vec<String>) {
     let b: Vec<char> = s.chars().collect();
     let mut out = String::new();
+    let mut anchors = Vec::new();
     let mut i = 0;
     while i < b.len() {
         if b[i] == '[' {
@@ -265,18 +270,11 @@ fn links(s: &str) -> String {
                     if let Some(end) = (close + 2..b.len()).find(|&j| b[j] == ')') {
                         let label: String = b[i + 1..close].iter().collect();
                         let href: String = b[close + 2..end].iter().collect();
-                        let safe = {
-                            let l = href.trim().to_ascii_lowercase();
-                            l.starts_with("http://")
-                                || l.starts_with("https://")
-                                || l.starts_with("mailto:")
-                                || l.starts_with('#')
-                                || l.starts_with('/')
-                        };
-                        if safe {
-                            out.push_str(&format!(
-                                "<a href=\"{href}\" target=\"_blank\" rel=\"noopener noreferrer\">{label}</a>"
-                            ));
+                        let lower = href.trim().to_ascii_lowercase();
+                        if lower.starts_with("http://") || lower.starts_with("https://")
+                            || lower.starts_with("mailto:") || lower.starts_with('#') || lower.starts_with('/') {
+                            anchors.push(format!("<a href=\"{href}\" target=\"_blank\" rel=\"noopener noreferrer\">{label}</a>"));
+                            out.push(LINK_MARK);
                         } else {
                             out.push_str(&label);
                         }
@@ -286,10 +284,52 @@ fn links(s: &str) -> String {
                 }
             }
         }
+        let starts = |pat: &str| {
+            let mut end = i;
+            for expected in pat.chars() {
+                if end >= b.len() || !b[end].eq_ignore_ascii_case(&expected) { return false; }
+                end += 1;
+            }
+            true
+        };
+        let scheme = if starts("https://") { 8 } else if starts("http://") { 7 } else { 0 };
+        let boundary = i == 0 || !(b[i - 1].is_alphanumeric() || matches!(b[i - 1], '_' | '@'));
+        // An incomplete [label](URL is kept literal until its closing ')'.
+        let unfinished_link = i >= 2 && b[i - 1] == '(' && b[i - 2] == ']';
+        if scheme > 0 && boundary && !unfinished_link && i + scheme < b.len()
+            && (b[i + scheme].is_ascii_alphanumeric() || b[i + scheme] == '[')
+        {
+            let mut end = i + scheme;
+            while end < b.len() {
+                if b[end].is_whitespace() || matches!(b[end], '<' | '>' | '"' | '\'' | '`' | '*') { break; }
+                // Escaped HTML delimiters are text boundaries, not part of a URL.
+                if b[end] == '&' && ["&quot;", "&lt;", "&gt;"].iter().any(|entity| {
+                    let tail: String = b[end..].iter().take(entity.len()).collect();
+                    tail == *entity
+                }) { break; }
+                end += 1;
+            }
+            while end > i + scheme {
+                let last = b[end - 1];
+                let unbalanced = match last {
+                    ')' => b[i..end].iter().filter(|&&c| c == ')').count() > b[i..end].iter().filter(|&&c| c == '(').count(),
+                    ']' => b[i..end].iter().filter(|&&c| c == ']').count() > b[i..end].iter().filter(|&&c| c == '[').count(),
+                    '}' => b[i..end].iter().filter(|&&c| c == '}').count() > b[i..end].iter().filter(|&&c| c == '{').count(),
+                    _ => false,
+                };
+                if matches!(last, '.' | ',' | '!' | '?' | ';' | ':') || unbalanced { end -= 1; }
+                else { break; }
+            }
+            let url: String = b[i..end].iter().collect();
+            anchors.push(format!("<a href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\">{url}</a>"));
+            out.push(LINK_MARK);
+            i = end;
+            continue;
+        }
         out.push(b[i]);
         i += 1;
     }
-    out
+    (out, anchors)
 }
 
 /// Paired delimiters → a tag. Unpaired markers are left as text.
@@ -346,6 +386,32 @@ mod md_tests {
         let h = markdown_to_html("[a](https://example.com)");
         assert!(h.contains(r#"<a href="https://example.com""#), "{h}");
         assert!(h.contains("noopener"), "{h}");
+    }
+
+    #[test]
+    fn bare_urls_are_links_and_keep_surrounding_punctuation() {
+        let h = markdown_to_html("See (https://example.com/a_(b)?x=1&y=2), or http://localhost:3020/test.");
+        assert!(h.contains(r#"href="https://example.com/a_(b)?x=1&amp;y=2""#), "{h}");
+        assert!(h.contains("</a>), or "), "{h}");
+        assert!(h.contains(r#"href="http://localhost:3020/test""#), "{h}");
+        assert!(h.contains("</a>."), "{h}");
+    }
+
+    #[test]
+    fn urls_in_code_are_literal_and_existing_links_do_not_nest() {
+        let h = markdown_to_html("`https://example.com` [docs](https://example.com)\n```\nhttps://example.org\n```");
+        assert!(h.contains("<code>https://example.com</code>"), "{h}");
+        assert!(h.contains("<pre><code>https://example.org</code></pre>"), "{h}");
+        assert_eq!(h.matches("<a href=").count(), 1, "{h}");
+        assert!(!h.contains("<a href=\"<a"), "{h}");
+    }
+
+    #[test]
+    fn autolinks_are_safe_and_work_inside_emphasis() {
+        let h = markdown_to_html("**https://example.com/?a=1&b=2** https://example.com/\" onclick=\"alert(1)");
+        assert!(h.contains(r#"<strong><a href="https://example.com/?a=1&amp;b=2""#), "{h}");
+        assert!(!h.contains("\" onclick=\""), "{h}");
+        assert_eq!(h.matches("<a href=").count(), 2, "{h}");
     }
 
     #[test]
@@ -470,6 +536,7 @@ mod streaming_md_tests {
     #[test]
     fn a_link_arriving_token_by_token_never_breaks() {
         every_prefix_is_sane("see [the docs](https://example.com) now");
+        every_prefix_is_sane("see https://example.com/a?x=1&y=2 now");
     }
 
     #[test]

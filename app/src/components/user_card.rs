@@ -34,7 +34,7 @@ pub fn parts(st: &str, v: &str) -> Vec<Node> {
             .class("bubble-user")
             .iff(&format!("{v}.kind === 'user'"))
             .kids(vec![
-                m("div").text(&format!("{v}.text")),
+                m("div").class("md-body").inner_html(&format!("{v}.html")),
                 // Edit the prompt on a new branch, preserving the old path.
                 m("button")
                     .class("bubble-fork")

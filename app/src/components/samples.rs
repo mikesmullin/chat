@@ -73,7 +73,7 @@ fn rows() -> Vec<Row> {
         Row {
             id: "u1",
             kind: "user",
-            text: "Read the config and tell me which model it points at.",
+            text: "Read https://example.com/config and tell me which model it points at.",
             ..BLANK
         },
         Row {
@@ -139,7 +139,7 @@ fn rows() -> Vec<Row> {
             last: true,
             text: "It points at `muse:opus`, with a **200k** context window.\n\n\
                    Nothing in the session overrides it, so that is what the \
-                   next turn will use.",
+                   next turn will use. See https://example.com/models for details.",
             ..BLANK
         },
         Row {
@@ -224,9 +224,8 @@ fn messages() -> JsValue {
             js::set_str(&o, "reason", "addressed by name");
             js::set_num(&o, "confidence", 0.92);
         }
-        // Assistant and reasoning bodies are pre-rendered in the live store
-        // too — the cards read `html || text`.
-        if matches!(r.kind, "assistant" | "reasoning") {
+        // Message bodies use the same renderer as the live store.
+        if matches!(r.kind, "user" | "assistant" | "reasoning") {
             js::set_str(&o, "html", &crate::helpers::markdown_to_html(r.text));
         }
         out.push(&o);
