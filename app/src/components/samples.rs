@@ -915,6 +915,8 @@ pub fn register() {
         .method("toggleCard", toggle_card)
         .method("accentOf", accent_of)
         .method("iconOf", icon_of)
+        .method("turnEdges", crate::components::session::turn_edges)
+        .method("streamEdges", crate::components::session::stream_edges)
         .method("relAgo", crate::components::live::rel_ago)
         .method("keepPinned", inert)
         .method("onScroll", inert)

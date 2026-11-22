@@ -7,6 +7,8 @@
 //! tool call + tool response + thinking.
 
 use rustex1_kit::h::{lit, m, Node};
+use rustex1_kit::js;
+use wasm_bindgen::JsValue;
 
 use crate::components::{
     approval_card, assistant_card, decision_card, error_card, prompt_card, reasoning_card, system_card,
@@ -234,8 +236,71 @@ fn card_kids(st: &str, v: &str) -> Vec<Node> {
     out
 }
 
+const SIMPLE_HIDDEN: &[&str] = &["system", "system_prompt", "agent_prompt", "reasoning", "tool_call", "tool_result"];
+
 fn visible_event(v: &str) -> String {
-    format!("($store.mode.advanced || !['system', 'system_prompt', 'agent_prompt', 'reasoning', 'tool_call', 'tool_result'].includes({v}.kind))")
+    let kinds = SIMPLE_HIDDEN.iter().map(|kind| format!("'{kind}'")).collect::<Vec<_>>().join(", ");
+    format!("($store.mode.advanced || ![{kinds}].includes({v}.kind))")
+}
+
+thread_local! {
+    static SIMPLE_EDGES: std::cell::RefCell<Option<(JsValue, std::collections::HashMap<String, (bool, bool)>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Compute the first and last visible event of each turn. Cache by the
+/// transcript array so token redraws do not rescan the whole conversation.
+pub(crate) fn turn_edges(this: JsValue, args: js_sys::Array) -> JsValue {
+    let row = js::arg(&args, 0);
+    if js::arg(&args, 1).as_bool().unwrap_or(false) {
+        return JsValue::from_str(&format!("{}{}", if js::get_bool(&row, "turnFirst") { " turn-first" } else { "" }, if js::get_bool(&row, "turnLast") { " turn-last" } else { "" }));
+    }
+    let messages = js::get(&this, "messages");
+    let id = js::get_str(&row, "id");
+    SIMPLE_EDGES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.as_ref().is_none_or(|(old, _)| !js_sys::Object::is(old, &messages)) {
+            let mut edges = std::collections::HashMap::new();
+            let mut group: Vec<String> = Vec::new();
+            let flush = |group: &mut Vec<String>, edges: &mut std::collections::HashMap<String, (bool, bool)>| {
+                let n = group.len();
+                for (i, id) in group.drain(..).enumerate() { edges.insert(id, (i == 0, i + 1 == n)); }
+            };
+            for item in js_sys::Array::from(&messages).iter() {
+                if !js::get(&item, "turn").is_truthy() { flush(&mut group, &mut edges); continue; }
+                if js::get_bool(&item, "turnFirst") { flush(&mut group, &mut edges); }
+                if !SIMPLE_HIDDEN.contains(&js::get_str(&item, "kind").as_str()) {
+                    group.push(js::get_str(&item, "id"));
+                }
+                if js::get_bool(&item, "turnLast") { flush(&mut group, &mut edges); }
+            }
+            flush(&mut group, &mut edges);
+            *cache = Some((messages, edges));
+        }
+        let (first, last) = cache.as_ref().and_then(|(_, edges)| edges.get(&id)).copied()
+            .unwrap_or((js::get_bool(&row, "turnFirst"), js::get_bool(&row, "turnLast")));
+        JsValue::from_str(&format!("{}{}", if first { " turn-first" } else { "" }, if last { " turn-last" } else { "" }))
+    })
+}
+
+/// Streamed rows are not in `messages` yet. Count the visible rows in the
+/// current turn so an answer arriving on its own has no dangling segment.
+pub(crate) fn stream_edges(this: JsValue, args: js_sys::Array) -> JsValue {
+    let reasoning = js::arg_str(&args, 0) == "reasoning";
+    let advanced = js::arg(&args, 1).as_bool().unwrap_or(false);
+    let rows = js_sys::Array::from(&js::get(&this, "messages"));
+    let mut preceding = false;
+    for row in rows.iter().collect::<Vec<_>>().into_iter().rev() {
+        let kind = js::get_str(&row, "kind");
+        if kind == "user" { break; }
+        if js::get(&row, "turn").is_truthy() && (advanced || !SIMPLE_HIDDEN.contains(&kind.as_str())) {
+            preceding = true;
+            break;
+        }
+    }
+    if js_sys::Array::from(&js::get(&this, "approvals")).length() > 0 { preceding = true; }
+    if !reasoning && advanced && !js::get_str(&this, "streamReasoning").is_empty() { preceding = true; }
+    let last = !reasoning || js::get_str(&this, "streamText").is_empty();
+    JsValue::from_str(&format!("{}{}", if preceding { "" } else { " turn-first" }, if last { " turn-last" } else { "" }))
 }
 
 /// One row of the transcript: the rail with its dot, and the message block
@@ -254,7 +319,7 @@ pub fn row(st: &str, v: &str, parts: Vec<Node>) -> Node {
         .bind(
             "class",
             &format!(
-                "('' + ({v}.turn ? 'in-turn' : 'no-turn')                   + ({v}.turnFirst ? ' turn-first' : '')                   + ({v}.turnLast ? ' turn-last' : ''))"
+                "(({v}.turn ? 'in-turn' : 'no-turn') + {st}.turnEdges({v}, $store.mode.advanced))"
             ),
         )
         // Everything in an agent's turn is drawn in that agent's colour.
@@ -361,6 +426,7 @@ pub fn messages(st: &str) -> Node {
         // append never rebuilds the message list.
         m("div")
             .class("turn-row in-turn")
+            .bind("class", &format!("{st}.streamEdges('reasoning', $store.mode.advanced)"))
             .show(&format!("$store.mode.advanced && {st}.streamReasoning"))
             .bind("style", &format!("('--agent-accent: ' + {st}.accentOf({st}.streamHandle))"))
             .kids(vec![
@@ -395,7 +461,8 @@ pub fn messages(st: &str) -> Node {
         // is prefix-safe, so an unterminated fence, a half-typed `**` or a
         // partial link render as themselves instead of leaking broken tags.
         m("div")
-            .class("turn-row in-turn turn-last")
+            .class("turn-row in-turn")
+            .bind("class", &format!("{st}.streamEdges('answer', $store.mode.advanced)"))
             .show(&format!("{st}.streamText"))
             .bind("style", &format!("('--agent-accent: ' + {st}.accentOf({st}.streamHandle))"))
             .kids(vec![

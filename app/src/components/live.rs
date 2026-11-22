@@ -1041,6 +1041,8 @@ pub fn register() {
         .method("closeTab", close_tab)
         .method("send", send)
         .method("historyMove", history_move)
+        .method("turnEdges", crate::components::session::turn_edges)
+        .method("streamEdges", crate::components::session::stream_edges)
         .method("relAgo", rel_ago)
         .method("onScroll", on_scroll)
         .method("keepPinned", keep_pinned)
