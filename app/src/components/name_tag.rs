@@ -37,6 +37,16 @@ fn who(icon: &str, name: &str) -> Node {
     ])
 }
 
+/// The same author mark used on a byline, for a mention in a status line.
+pub fn mention(st: &str, handle: &str) -> Node {
+    let user = format!("({handle} === 'user' || ({st}.userName && {handle} === {st}.userName))");
+    let icon = format!("({user} ? '{}' : {st}.iconOf({handle}))", presence::USER_ICON);
+    m("span")
+        .class("name-tag")
+        .bind("style", &format!("('--agent-accent: ' + ({user} ? '{}' : {st}.accentOf({handle})))", presence::USER_ACCENT))
+        .child(who(&icon, handle))
+}
+
 /// The full byline: glyph, handle, and how long ago.
 ///
 /// `when` is the condition it shows under — usually "there is a handle".

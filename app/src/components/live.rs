@@ -140,6 +140,7 @@ fn open_session_by_id(id: &str) {
 fn clear_roster(s: &JsValue) {
     js::set(s, "participants", &js_sys::Array::new().into());
     js::set(s, "others", &js_sys::Array::new().into());
+    js::set(s, "activeOthers", &js_sys::Array::new().into());
     js::set(s, "handles", &js::obj().into());
     js::set(s, "accents", &js::obj().into());
     js::set(s, "icons", &js::obj().into());
@@ -998,6 +999,7 @@ pub fn register() {
         .val("participants", &js_sys::Array::new().into())
         // The roster bar's list: everyone except the reader.
         .val("others", &js_sys::Array::new().into())
+        .val("activeOthers", &js_sys::Array::new().into())
         // participant id -> handle, so a message can be attributed without
         // searching the roster on every row.
         .val("handles", &js::obj().into())
@@ -1041,6 +1043,7 @@ pub fn register() {
         .method("closeTab", close_tab)
         .method("send", send)
         .method("historyMove", history_move)
+        .method("statusParts", crate::components::system_card::status_parts)
         .method("turnEdges", crate::components::session::turn_edges)
         .method("streamEdges", crate::components::session::stream_edges)
         .method("relAgo", rel_ago)
@@ -2245,6 +2248,7 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
     // humans can share a conversation this becomes "the viewer", and the
     // other humans start appearing here, which is the intended shape.
     let others = js_sys::Array::new();
+    let active_others = js_sys::Array::new();
     // handle -> colour, so a row can be tinted without searching the roster
     // on every redraw. Keyed by handle rather than by participant id because
     // a streamed card names its speaker by handle.
@@ -2272,11 +2276,13 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
         if kind == "agent" {
             if js::get_bool(&p, "active") {
                 agents += 1.0;
+                active_others.push(&p);
             }
             others.push(&p);
         }
     }
     js::set(s, "others", &others.into());
+    js::set(s, "activeOthers", &active_others.into());
     js::set(s, "accents", &accents);
     js::set(s, "icons", &icons);
     js::set(s, "handles", &by_id);
@@ -2544,8 +2550,36 @@ fn handle_of(_this: JsValue, args: js_sys::Array) -> JsValue {
 /// anyone said, and a reload should not replay it.
 fn notice(s: &JsValue, text: &str) {
     push_message(s, "system", text, "");
+    let rows = js_sys::Array::from(&js::get(s, "messages"));
+    if rows.length() > 0 { js::set_bool(&rows.get(rows.length() - 1), "commandNotice", true); }
     pin_to_bottom();
     mjs::redraw();
+}
+
+/// Save a roster change before showing it, so transcript reloads retain it.
+fn record_notice(session: &str, text: &str) {
+    let payload = js::obj();
+    js::set_str(&payload, "sessionId", session);
+    js::set_str(&payload, "text", text);
+    let session = session.to_string();
+    let text = text.to_string();
+    rustex1_kit::api::post_json("/api/session/status", &payload.into(), move |result| {
+        let s = mjs::store_ref(STORE);
+        if js::get_str(&s, "activeId") != session { return; }
+        if !js::get_bool(&result, "ok") {
+            notice(&s, "Could not save the session status.");
+            return;
+        }
+        notice(&s, &text);
+        let rows = js_sys::Array::from(&js::get(&s, "messages"));
+        if rows.length() > 0 {
+            let row = rows.get(rows.length() - 1);
+            js::set_str(&row, "id", &js::get_str(&result, "eventId"));
+            js::set_str(&row, "eventId", &js::get_str(&result, "eventId"));
+            js::set_str(&row, "ts", &js::get_str(&result, "ts"));
+        }
+        mjs::redraw();
+    });
 }
 
 /// Run a `/command` from the composer.
@@ -2561,7 +2595,7 @@ fn run_command(s: &JsValue, line: &str) {
             notice(
                 s,
                 "/invite @name — add an agent to this conversation\n\
-                 /uninvite @name — remove one\n\
+                 /kick @name — remove an agent (/uninvite also works)\n\
                  /help — this list",
             );
         }
@@ -2588,8 +2622,8 @@ fn invite_command(s: &JsValue, names: &[String]) {
     // here is a better answer than a seat pointing at nothing.
     let defined = js_sys::Array::from(&js::get(&mjs::store_ref("agents"), "agents"));
     let known: Vec<String> = defined.iter().map(|a| js::get_str(&a, "name")).collect();
-    let seated: Vec<String> = js_sys::Array::from(&js::get(s, "others"))
-        .iter()
+    let seats = js_sys::Array::from(&js::get(s, "others"));
+    let seated: Vec<String> = seats.iter().filter(|p| js::get_bool(p, "active"))
         .map(|p| js::get_str(&p, "handle"))
         .collect();
 
@@ -2597,7 +2631,7 @@ fn invite_command(s: &JsValue, names: &[String]) {
     let mut unknown: Vec<String> = Vec::new();
     let mut already: Vec<String> = Vec::new();
     for name in names {
-        if seated.contains(name) {
+        if invited.contains(name) || seated.contains(name) {
             already.push(name.clone());
         } else if known.contains(name) {
             invited.push(name.clone());
@@ -2628,66 +2662,95 @@ fn invite_command(s: &JsValue, names: &[String]) {
     // than after each, so the bar does not flicker through intermediate
     // states on a multi-agent invite.
     let total = invited.len();
-    let done = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let results = std::rc::Rc::new(std::cell::RefCell::new((Vec::<String>::new(), Vec::<String>::new())));
     for name in invited.clone() {
         let payload = js::obj();
         js::set_str(&payload, "kind", "agent");
         js::set_str(&payload, "agentName", &name);
         js::set_str(&payload, "handle", &name);
+        let inactive_id = seats.iter().find(|p| js::get_str(p, "handle") == name && !js::get_bool(p, "active"))
+            .and_then(|p| js::get(&p, "id").as_f64());
+        let path = if let Some(pid) = inactive_id {
+            js::set_bool(&payload, "active", true);
+            format!("/api/participants/{pid}")
+        } else {
+            format!("/api/sessions/{session}/participants")
+        };
         let session = session.clone();
-        let done = std::rc::Rc::clone(&done);
-        let invited = invited.clone();
+        let results = std::rc::Rc::clone(&results);
         let said = said.clone();
-        api::add_participant(&session.clone(), &payload.into(), move |v| {
-            done.set(done.get() + 1);
-            let s = mjs::store_ref(STORE);
-            let err = js::get_str(&v, "error");
-            if !err.is_empty() {
-                notice(&s, &err);
-            }
-            if done.get() < total {
-                return;
-            }
+        rustex1_kit::api::post_json(&path, &payload.into(), move |v| {
+            let mut results = results.borrow_mut();
+            if js::get_bool(&v, "ok") { results.0.push(name.clone()); }
+            else { results.1.push(name.clone()); }
+            if results.0.len() + results.1.len() < total { return; }
             load_roster(&session);
-            let mut msg = format!("Invited @{}", invited.join(", @"));
-            if !said.is_empty() {
-                msg.push_str(&format!(" ({})", said.join("; ")));
+            let mut messages = Vec::new();
+            if !results.0.is_empty() { messages.push(format!("Invited @{}", results.0.join(", @"))); }
+            if !results.1.is_empty() { messages.push(format!("Could not invite @{}", results.1.join(", @"))); }
+            messages.extend(said.clone());
+            let message = messages.join("; ");
+            if !results.0.is_empty() { record_notice(&session, &message); }
+            else {
+                let s = mjs::store_ref(STORE);
+                if js::get_str(&s, "activeId") == session { notice(&s, &message); }
             }
-            notice(&s, &msg);
         });
     }
 }
 
-/// `/uninvite @a` — the counterpart, so a mistaken invite is fixable from
-/// the same place it was made.
+/// Remove active agents by handle, retaining their existing message authorship.
 fn uninvite_command(s: &JsValue, names: &[String]) {
     let session = js::get_str(s, "activeId");
-    if session.is_empty() || names.is_empty() {
-        notice(s, "Usage: /uninvite @name");
+    if session.is_empty() {
+        notice(s, "Open a conversation first, then /kick an agent from it.");
         return;
     }
-    let seats = js_sys::Array::from(&js::get(s, "others"));
-    let mut removed: Vec<String> = Vec::new();
+    if names.is_empty() {
+        notice(s, "Usage: /kick @name");
+        return;
+    }
+    let seats = js_sys::Array::from(&js::get(s, "activeOthers"));
+    let mut targets = Vec::new();
+    let mut missing = Vec::new();
     for name in names {
-        let found = seats.iter().find(|p| &js::get_str(p, "handle") == name);
-        let Some(p) = found else { continue };
-        let pid = js::get(&p, "id").as_f64().unwrap_or(0.0);
-        let session = session.clone();
-        api::remove_participant(pid, move |_| {
-            load_roster(&session);
-            mjs::redraw();
-        });
-        removed.push(name.clone());
+        if targets.iter().any(|(handle, _)| handle == name) || missing.contains(name) { continue; }
+        if let Some(p) = seats.iter().find(|p| js::get_str(p, "handle") == *name) {
+            if let Some(pid) = js::get(&p, "id").as_f64().filter(|id| *id > 0.0) {
+                targets.push((name.clone(), pid));
+                continue;
+            }
+        }
+        missing.push(name.clone());
+    }
+    if targets.is_empty() {
+        notice(s, &format!("@{} is not in this conversation.", missing.join(", @")));
+        return;
     }
     js::set_str(s, "draft", "");
-    if removed.is_empty() {
-        notice(s, &format!("@{} is not in this conversation.", names.join(", @")));
-    } else {
-        // An agent that has spoken keeps its seat, greyed: its messages are
-        // in the transcript and have to keep an author.
-        notice(s, &format!("Removed @{}", removed.join(", @")));
+    let total = targets.len();
+    let results = std::rc::Rc::new(std::cell::RefCell::new((Vec::<String>::new(), Vec::<String>::new())));
+    for (name, pid) in targets {
+        let session = session.clone();
+        let results = std::rc::Rc::clone(&results);
+        let missing = missing.clone();
+        api::remove_participant(pid, move |v| {
+            let mut results = results.borrow_mut();
+            if js::get_bool(&v, "ok") { results.0.push(name.clone()); }
+            else { results.1.push(name.clone()); }
+            if results.0.len() + results.1.len() != total { return; }
+            load_roster(&session);
+            let s = mjs::store_ref(STORE);
+            let mut messages = Vec::new();
+            if !results.0.is_empty() { messages.push(format!("Removed @{}", results.0.join(", @"))); }
+            if !results.1.is_empty() { messages.push(format!("Could not remove @{}", results.1.join(", @"))); }
+            if !missing.is_empty() { messages.push(format!("not in this conversation: @{}", missing.join(", @"))); }
+            if !results.0.is_empty() { record_notice(&session, &messages.join("; ")); }
+            else if js::get_str(&s, "activeId") == session { notice(&s, &messages.join("; ")); }
+        });
     }
 }
+
 
 
 /// `toggleReasoning(id)` — open or shut one reasoning card.
@@ -2741,6 +2804,15 @@ fn has_selection() -> bool {
 }
 
 
+/// A removed, never-speaking agent no longer has a seat, but its definition
+/// still supplies the same icon and colour to mentions in earlier notices.
+fn defined_agent_field(handle: &str, field: &str) -> String {
+    js_sys::Array::from(&js::get(&mjs::store_ref("agents"), "agents")).iter()
+        .find(|agent| js::get_str(agent, "name") == handle)
+        .map(|agent| js::get_str(&agent, field))
+        .unwrap_or_default()
+}
+
 /// `accentOf(handle)` — the colour a row is drawn in.
 ///
 /// Always a concrete colour, never empty: an empty custom property makes the
@@ -2750,7 +2822,8 @@ fn has_selection() -> bool {
 fn accent_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     let handle = js::arg_str(&args, 0);
     let s = mjs::store_ref(STORE);
-    let found = js::get_str(&js::get(&s, "accents"), &handle);
+    let mut found = js::get_str(&js::get(&s, "accents"), &handle);
+    if found.is_empty() { found = defined_agent_field(&handle, "accentColor"); }
     JsValue::from_str(if found.is_empty() {
         crate::components::agents::DEFAULT_ACCENT
     } else {
@@ -2767,7 +2840,8 @@ fn accent_of(_this: JsValue, args: js_sys::Array) -> JsValue {
 fn icon_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     let handle = js::arg_str(&args, 0);
     let s = mjs::store_ref(STORE);
-    let found = js::get_str(&js::get(&s, "icons"), &handle);
+    let mut found = js::get_str(&js::get(&s, "icons"), &handle);
+    if found.is_empty() { found = defined_agent_field(&handle, "icon"); }
     JsValue::from_str(if found.is_empty() {
         crate::components::agents::DEFAULT_ICON
     } else {

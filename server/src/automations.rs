@@ -248,6 +248,7 @@ pub fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<(), String> {
 /// so `row` always answers true — answering false would abort a turn
 /// nobody asked to stop.
 struct RecordingSink {
+    assistant_filter: crate::assistant_text::StreamFilter,
     session_id: String,
     prompt: String,
     turn_id: Option<u64>,
@@ -264,12 +265,13 @@ impl ResponseSink for RecordingSink {
     }
     fn row(&mut self, value: &Value) -> bool {
         if let Some(id) = self.turn_id {
-            crate::events::turn_row(id, value);
+            for row in self.assistant_filter.process(value) { crate::events::turn_row(id, &row); }
         }
         true
     }
     fn end(&mut self) {
         if let Some(id) = self.turn_id.take() {
+            if let Some(row) = self.assistant_filter.finish() { crate::events::turn_row(id, &row); }
             crate::events::end_turn(id);
         }
     }
@@ -378,7 +380,7 @@ fn fire(server: &'static AngelaServer, automation: Value) {
         cancels.stop(&watchdog_id);
     });
 
-    let mut sink = RecordingSink { session_id: session_id.clone(), prompt, turn_id: None };
+    let mut sink = RecordingSink { session_id: session_id.clone(), prompt, turn_id: None, assistant_filter: crate::assistant_text::StreamFilter::default() };
     let req = ARequest {
         method: "POST".to_string(),
         path: "/api/chat".to_string(),

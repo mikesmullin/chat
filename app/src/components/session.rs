@@ -240,7 +240,7 @@ const SIMPLE_HIDDEN: &[&str] = &["system", "system_prompt", "agent_prompt", "rea
 
 fn visible_event(v: &str) -> String {
     let kinds = SIMPLE_HIDDEN.iter().map(|kind| format!("'{kind}'")).collect::<Vec<_>>().join(", ");
-    format!("($store.mode.advanced || ![{kinds}].includes({v}.kind))")
+    format!("($store.mode.advanced || {v}.commandNotice || ![{kinds}].includes({v}.kind))")
 }
 
 thread_local! {

@@ -152,11 +152,6 @@ pub fn zoom<F: FnMut(JsValue) + 'static>(session: &str, from: f64, n: f64, then:
     );
 }
 
-/// `POST /api/sessions/:id/participants` — seat another agent.
-pub fn add_participant<F: FnMut(JsValue) + 'static>(id: &str, payload: &JsValue, then: F) {
-    rustex1_kit::api::post_json(&format!("/api/sessions/{id}/participants"), payload, then);
-}
-
 /// `DELETE /api/participants/:id` — unseat one (deactivated if it has spoken).
 pub fn remove_participant<F: FnMut(JsValue) + 'static>(pid: f64, then: F) {
     rustex1_kit::api::get(&format!("/api/participants/{pid}"), Some("DELETE"), then);

@@ -170,7 +170,7 @@ fn rows() -> Vec<Row> {
         Row {
             id: "s1",
             kind: "system",
-            text: "joker joined the conversation.",
+            text: "Invited @joker",
             ..BLANK
         },
     ]
@@ -187,6 +187,7 @@ fn messages() -> JsValue {
         js::set_str(&o, "id", r.id);
         js::set_str(&o, "eventId", r.id);
         js::set_str(&o, "kind", r.kind);
+        if r.kind == "system" { js::set_bool(&o, "commandNotice", true); }
         js::set_str(&o, "text", r.text);
         js::set_str(&o, "handle", r.handle);
         // The byline's time runs through the same formatter the app uses, so
@@ -793,6 +794,7 @@ fn inert(_this: JsValue, _args: js_sys::Array) -> JsValue {
 pub fn register() {
     let accents = js::obj();
     js::set_str(&accents, "fish", "#38bdf8");
+    js::set_str(&accents, "joker", "#be5cff");
     let icons = js::obj();
     js::set_str(&icons, "fish", "fish");
     js::set_str(&icons, "joker", "mask-happy");
@@ -872,7 +874,8 @@ pub fn register() {
         .val("treeRows", &sample_tree())
         .str("cursor", "four")
         // ── the room ───────────────────────────────────────────────
-        .val("others", &others.into())
+        .val("others", &others.clone().into())
+        .val("activeOthers", &others.into())
         .str("userName", "Bob")
         .num("agentCount", 2.0)
         .bool("isGroup", true)
@@ -915,6 +918,7 @@ pub fn register() {
         .method("toggleCard", toggle_card)
         .method("accentOf", accent_of)
         .method("iconOf", icon_of)
+        .method("statusParts", crate::components::system_card::status_parts)
         .method("turnEdges", crate::components::session::turn_edges)
         .method("streamEdges", crate::components::session::stream_edges)
         .method("relAgo", crate::components::live::rel_ago)

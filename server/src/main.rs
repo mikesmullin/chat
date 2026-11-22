@@ -7,6 +7,7 @@
 //! Sessions live under `<cwd>/.angela/sessions`, or `ANGELA_ROOT` if set.
 
 mod api;
+mod assistant_text;
 mod automations;
 mod events;
 mod hostgit;

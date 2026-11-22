@@ -46,16 +46,16 @@ pub fn roster(st: &str) -> Node {
                         &format!("'{}'", presence::USER_ICON),
                         &format!("'{}'", presence::USER_ACCENT),
                         "false",
-                        &format!("({st}.others.length + 100)"),
+                        &format!("({st}.activeOthers.length + 100)"),
                     ),
                     // The room, newest invite last. Truncation is the CSS
                     // `nth-child` rule above, not `x-show` on this row.
                     presence::seat("p.handle", "p.icon", "p.accentColor", "!p.active", "(100 - i)")
-                        .for_each(&format!("(p, i) in {st}.others"))
+                        .for_each(&format!("(p, i) in {st}.activeOthers"))
                         .key("p.id"),
                     // Everyone past the first five lives behind this, in the
                     // session editor — which is what `+N` opens.
-                    presence::more(&format!("{st}.others.length - 5")),
+                    presence::more(&format!("{st}.activeOthers.length - 5")),
                 ]),
                 Some(("Edit session", &format!("{st}.openSessionEditor()"))),
             ),

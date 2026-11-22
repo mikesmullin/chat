@@ -16,6 +16,7 @@ rustex1-devserver = { path = "../vendor/rustex1/devserver" }
 angela = { path = "../../../angela-rs" }
 agl = { path = "../../../agl-rs" }
 serde_json = "1"
+regex = "1"
 rusqlite = "0.42"
 # Automation schedules are cron expressions; `cron` parses them and finds the
 # next fire time. `chrono` comes with it but is named so local times work.

@@ -43,6 +43,23 @@ pub(crate) fn angela(port: u16) -> &'static AngelaServer {
     })
 }
 
+/// Add chat-owned status events to angela's reconstructed transcript in
+/// branch order. They are not model messages and are not sent as prompts.
+fn chat_messages(store: &angela::conv_store::ConvStore, id: &str) -> Vec<Value> {
+    let mut messages = angela::serve::reconstruct_messages(store, id);
+    let path = store.path(id);
+    let order: std::collections::HashMap<_, _> = path.iter().enumerate().map(|(i, node)| (node.id.as_str(), i)).collect();
+    for (index, node) in path.iter().enumerate() {
+        if node.kind != "chat_status" { continue; }
+        let Some(text) = node.payload.get("text").and_then(Value::as_str) else { continue; };
+        let row = serde_json::json!({"id": node.id, "eventId": node.id, "kind": "system", "text": text, "ts": node.ts, "commandNotice": true, "visible": node.visible});
+        let position = messages.iter().position(|row| row.get("eventId").and_then(Value::as_str).and_then(|id| order.get(id)).is_some_and(|next| *next > index)).unwrap_or(messages.len());
+        messages.insert(position, row);
+    }
+    for message in &mut messages { crate::assistant_text::normalize_assistant_messages(message); }
+    messages
+}
+
 /// Bridges angela's `ResponseSink` onto the dev server's `Stream`.
 struct DevSink<'s, 'a> {
     out: &'s mut Stream<'a>,
@@ -55,11 +72,32 @@ struct DevSink<'s, 'a> {
     turn_id: Option<u64>,
     disconnected: bool,
     port: u16,
+    assistant_filter: crate::assistant_text::StreamFilter,
+}
+
+impl DevSink<'_, '_> {
+    fn publish_row(&mut self, value: &Value) {
+        if self.chat {
+            if let Some(id) = self.turn_id { crate::events::turn_row(id, value); }
+        }
+        if !self.disconnected {
+            let mut line = serde_json::to_vec(value).unwrap_or_else(|_| b"{}".to_vec());
+            line.push(b'\n');
+            self.disconnected = self.out.chunk(&line).is_err();
+        }
+    }
 }
 
 impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
     fn json(&mut self, status: u16, body: &Value) {
-        let _ = self.out.json(status, body);
+        let mut body = body.clone();
+        if body.get("messages").and_then(Value::as_array).is_some() {
+            if let Some(id) = body.pointer("/session/id").and_then(Value::as_str).map(str::to_owned) {
+                body["messages"] = Value::Array(chat_messages(&angela(self.port).state.store, &id));
+            }
+        }
+        crate::assistant_text::normalize_assistant_messages(&mut body);
+        let _ = self.out.json(status, &body);
         self.ended = true;
     }
 
@@ -85,18 +123,14 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
             if self.turn_id.is_none() && value.get("type").and_then(Value::as_str) == Some("session") {
                 if let Some(id) = value.get("sessionId").and_then(Value::as_str) {
                     self.session_id = id.to_string();
-                    let mut baseline = angela::serve::reconstruct_messages(&angela(self.port).state.store, id);
+                    let mut baseline = chat_messages(&angela(self.port).state.store, id);
                     if baseline.last().is_some_and(|v| v.get("kind").and_then(Value::as_str) == Some("user") && v.get("text").and_then(Value::as_str) == Some(self.prompt.as_str())) { baseline.pop(); }
                     self.turn_id = Some(crate::events::begin_turn(id, baseline, self.prompt.clone()));
                 }
             }
-            if let Some(id) = self.turn_id { crate::events::turn_row(id, value); }
         }
-        if !self.disconnected {
-            let mut line = serde_json::to_vec(value).unwrap_or_else(|_| b"{}".to_vec());
-            line.push(b'\n');
-            self.disconnected = self.out.chunk(&line).is_err();
-        }
+        let rows = if self.chat { self.assistant_filter.process(value) } else { vec![value.clone()] };
+        for row in rows { self.publish_row(&row); }
         // A browser reload closes its POST socket; the turn still belongs to
         // the server and its SSE subscribers, so do not cancel inference.
         self.chat || !self.disconnected
@@ -107,6 +141,7 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
             return;
         }
         self.ended = true;
+        if let Some(row) = self.assistant_filter.finish() { self.publish_row(&row); }
         if let Some(id) = self.turn_id { crate::events::end_turn(id); }
         if !self.disconnected { let _ = self.out.finish(); }
     }
@@ -169,6 +204,21 @@ fn delete_empty_session(db: &rusqlite::Connection, id: &str) -> rusqlite::Result
 
 /// The dev server's raw `/api/` handler.
 pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
+    if req.path == "/api/session/status" && req.method == "POST" {
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("sessionId").and_then(Value::as_str).unwrap_or("");
+        let text = body.get("text").and_then(Value::as_str).unwrap_or("");
+        let store = &angela(state.config.port).state.store;
+        if id.is_empty() || text.trim().is_empty() || store.load(id).is_none() {
+            let _ = out.json(400, &serde_json::json!({"ok": false, "error": "Invalid session or status"}));
+            return;
+        }
+        match store.append_event(id, angela::session_store::NewEvent::new("chat_status", serde_json::json!({"text": text}))) {
+            Ok(event) => { let _ = out.json(200, &serde_json::json!({"ok": true, "eventId": event.event_id, "ts": event.ts})); }
+            Err(_) => { let _ = out.json(500, &serde_json::json!({"ok": false, "error": "Could not save status"})); }
+        }
+        return;
+    }
     if req.path == "/api/session/delete-if-empty" && req.method == "POST" {
         let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
         let id = body.get("id").and_then(Value::as_str).unwrap_or_default();
@@ -470,11 +520,12 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     let session_id = body.get("sessionId").and_then(Value::as_str).unwrap_or_default().to_string();
     let prompt = body.get("content").and_then(Value::as_str).unwrap_or_default().to_string();
     let baseline = if chat && !session_id.is_empty() {
-        angela::serve::reconstruct_messages(&angela(state.config.port).state.store, &session_id)
+        chat_messages(&angela(state.config.port).state.store, &session_id)
     } else { Vec::new() };
     let mut sink = DevSink {
         out, streaming: false, ended: false, chat, session_id, prompt, baseline,
         turn_id: None, disconnected: false, port: state.config.port,
+        assistant_filter: crate::assistant_text::StreamFilter::default(),
     };
     angela(state.config.port).dispatch(&areq, &mut sink);
     sink.end();
@@ -483,6 +534,22 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
 #[cfg(test)]
 mod latest_event_tests {
     use super::*;
+
+    #[test]
+    fn roster_statuses_survive_reconstruction_in_branch_order() {
+        use angela::session_store::{NewEvent, NewSession};
+        let store = angela::conv_store::ConvStore::memory("/tmp/chat-status-test").unwrap();
+        let id = store.create(NewSession::default()).unwrap()["id"].as_str().unwrap().to_string();
+        let status = store.append_event(&id, NewEvent::new("chat_status", serde_json::json!({"text":"Invited @agent"}))).unwrap();
+        store.append_event(&id, NewEvent::new("context_window", serde_json::json!({"role":"user", "content":"hi"}))).unwrap();
+        store.append_event(&id, NewEvent::new("context_window", serde_json::json!({"role":"assistant", "content":"hello"}))).unwrap();
+        store.append_event(&id, NewEvent::new("chat_status", serde_json::json!({"text":"Removed @agent"}))).unwrap();
+        let rows = chat_messages(&store, &id);
+        assert_eq!(rows.iter().map(|r| r["text"].as_str().unwrap_or("")).collect::<Vec<_>>(), ["Invited @agent", "hi", "hello", "Removed @agent"]);
+        assert_eq!(rows[0]["eventId"], status.event_id);
+        assert_eq!(rows[0]["ts"], status.ts);
+        assert_eq!(rows[0]["commandNotice"], true);
+    }
 
     #[test]
     fn only_sessions_without_events_are_deleted() {
