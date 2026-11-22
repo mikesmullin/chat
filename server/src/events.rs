@@ -59,6 +59,15 @@ pub fn begin_turn(session_id: &str, baseline: Vec<Value>, prompt: String) -> u64
     id
 }
 
+/// Keep a turn from starting while an empty session is being removed.
+pub(crate) fn if_session_idle<T>(id: &str, f: impl FnOnce() -> T) -> Option<T> {
+    let snapshot = feed().snapshot.lock().unwrap();
+    if snapshot.turns.values().any(|turn| turn.session_id == id && turn.completed.is_none()) {
+        return None;
+    }
+    Some(f())
+}
+
 pub fn turn_row(id: u64, row: &Value) {
     let f = feed();
     let mut s = f.snapshot.lock().unwrap();

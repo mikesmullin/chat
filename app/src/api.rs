@@ -121,6 +121,13 @@ pub fn delete_session<F: FnMut(JsValue) + 'static>(id: &str, then: F) {
     rustex1_kit::api::get(&format!("/api/sessions/{id}"), Some("DELETE"), then);
 }
 
+/// Delete a session only if it has no events on any branch.
+pub fn delete_session_if_empty<F: FnMut(JsValue) + 'static>(id: &str, then: F) {
+    let body = js::obj();
+    js::set_str(&body, "id", id);
+    rustex1_kit::api::post_json("/api/session/delete-if-empty", &body.into(), then);
+}
+
 /// `GET /api/sessions/:id/view` — the memory tree's view: the threads and
 /// messages covering the whole conversation, oldest first.
 pub fn memory_view<F: FnMut(JsValue) + 'static>(id: &str, then: F) {

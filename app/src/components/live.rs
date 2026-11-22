@@ -118,13 +118,6 @@ fn open_session_by_id(id: &str) {
         // attribution map is ready before the first row renders.
         store_roster(&s, &js_sys::Array::from(&js::get(&v, "participants")));
         js::set_str(&s, "cursor", &js::get_str(&v, "cursor"));
-        // A user's selection now lands: seed and open the Edit Session form
-        // — only now, since `session` and `others` are the ones that match
-        // the session being looked at.
-        if js::get_bool(&s, "openEditorOnSelect") {
-            js::set_bool(&s, "openEditorOnSelect", false);
-            open_session_editor(JsValue::UNDEFINED, js_sys::Array::new());
-        }
         SESSION_LOADING.with(|v| v.borrow_mut().clear());
         let turn_done = replay_active_turn(&want);
         mjs::redraw();
@@ -247,9 +240,8 @@ fn new_session(_this: JsValue, _args: js_sys::Array) -> JsValue {
             clear_roster(&s);
             // …and then read the real one back, so the new session's state
             // comes from the server rather than from what we assumed.
-            // A newly created conversation deserves its form: the plus is
-            // what just opened it, so the inspector does too.
-            js::set_bool(&s, "openEditorOnSelect", true);
+            // Do not carry the previous session's editor into the new one.
+            js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
             open_session_by_id(&id);
         }
         mjs::redraw();
@@ -281,7 +273,7 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let draft = js::get_str(&s, "draft");
     let content = draft.trim().to_string();
-    if content.is_empty() || js::get_bool(&s, "waiting") {
+    if content.is_empty() || js::get_bool(&s, "waiting") || api::chat_stream_active() || OWN_TURN.with(|t| t.borrow().is_some()) {
         return JsValue::UNDEFINED;
     }
     // A slash command is an instruction to the app, not a message to the
@@ -294,6 +286,15 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
         }
         return JsValue::UNDEFINED;
     }
+
+    let baseline = js_sys::Array::from(&js::get(&s, "messages"));
+    let original_id = js::get_str(&s, "activeId");
+    let turn = js::obj();
+    js::set_str(&turn, "sessionId", &original_id);
+    js::set(&turn, "baseline", &baseline.into());
+    js::set_str(&turn, "prompt", &content);
+    js::set(&turn, "rows", &js_sys::Array::new().into());
+    OWN_TURN.with(|t| *t.borrow_mut() = Some(turn.into()));
 
     // Echo the prompt immediately: the turn is already durable server-side,
     // and waiting for the round trip would make the UI feel dead.
@@ -331,9 +332,16 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
 
     api::chat_stream(
         &payload.into(),
-        |row| on_row(&row),
+        |row| on_owned_row(&row),
         |err| {
             let s = mjs::store_ref(STORE);
+            let id = OWN_TURN.with(|t| t.borrow_mut().take())
+                .map(|turn| js::get_str(&turn, "sessionId"))
+                .unwrap_or_default();
+            if js::get_str(&s, "activeId") != id {
+                load_sessions(JsValue::UNDEFINED, js_sys::Array::new());
+                return;
+            }
             // A stop we asked for ends the stream by aborting it, and the
             // abort surfaces here as a failed request. It is not one: the
             // turn did exactly what it was told, and an error row saying
@@ -415,6 +423,7 @@ fn stop(_this: JsValue, _args: js_sys::Array) -> JsValue {
 
 thread_local! {
     static SESSION_LOADING: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    static OWN_TURN: std::cell::RefCell<Option<JsValue>> = const { std::cell::RefCell::new(None) };
     static TURNS: std::cell::RefCell<std::collections::HashMap<String, JsValue>> = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -431,7 +440,7 @@ pub(crate) fn receive_turn_snapshot(snapshot: JsValue) {
     }
     TURNS.with(|t| { t.borrow_mut().insert(id.clone(), snapshot); });
     let s = mjs::store_ref(STORE);
-    if js::get_str(&s, "activeId") == id && !api::chat_stream_active()
+    if js::get_str(&s, "activeId") == id && !owns_turn(&id)
         && SESSION_LOADING.with(|v| *v.borrow() != id) {
         if replay_active_turn(&id) { open_session_by_id(&id); }
     }
@@ -457,13 +466,13 @@ pub(crate) fn receive_turn_event(event: JsValue) {
     let done = js::get_str(&row, "type") == "done";
     let active = js::get_str(&mjs::store_ref(STORE), "activeId") == id;
     let loading = SESSION_LOADING.with(|v| *v.borrow() == id);
-    if active && !loading && !api::chat_stream_active() {
+    if active && !loading && !owns_turn(&id) {
         on_row(&row);
         if done {
             TURNS.with(|t| { t.borrow_mut().remove(&id); });
             open_session_by_id(&id);
         }
-    } else if done && (!active || api::chat_stream_active()) {
+    } else if done && (!active || owns_turn(&id)) {
         TURNS.with(|t| { t.borrow_mut().remove(&id); });
     }
 }
@@ -471,8 +480,8 @@ pub(crate) fn receive_turn_event(event: JsValue) {
 /// Returns true if replay included the end of a turn and a fresh transcript
 /// should be loaded once more (the first read may have raced finalization).
 fn replay_active_turn(id: &str) -> bool {
-    if api::chat_stream_active() { return false; }
-    let turn = TURNS.with(|t| t.borrow().get(id).cloned());
+    let turn = OWN_TURN.with(|t| t.borrow().as_ref().filter(|turn| js::get_str(turn, "sessionId") == id).cloned())
+        .or_else(|| TURNS.with(|t| t.borrow().get(id).cloned()));
     let Some(turn) = turn else { return false; };
     let s = mjs::store_ref(STORE);
     let baseline = js_sys::Array::from(&js::get(&turn, "baseline"));
@@ -491,6 +500,37 @@ fn replay_active_turn(id: &str) -> bool {
     done
 }
 
+fn owns_turn(id: &str) -> bool {
+    OWN_TURN.with(|t| t.borrow().as_ref().is_some_and(|turn| js::get_str(turn, "sessionId") == id))
+}
+
+/// Record the POST stream independently of the currently selected session.
+fn on_owned_row(row: &JsValue) {
+    let s = mjs::store_ref(STORE);
+    let active = js::get_str(&s, "activeId");
+    let kind = js::get_str(row, "type");
+    let (id, was_active) = OWN_TURN.with(|t| {
+        let turn = t.borrow();
+        let Some(turn) = turn.as_ref() else { return (String::new(), false); };
+        let previous = js::get_str(turn, "sessionId");
+        let was_active = active == previous;
+        if kind == "session" {
+            let id = js::get_str(row, "sessionId");
+            if !id.is_empty() { js::set_str(turn, "sessionId", &id); }
+        }
+        let rows = js_sys::Array::from(&js::get(turn, "rows"));
+        rows.push(row);
+        js::set(turn, "rows", &rows.into());
+        (js::get_str(turn, "sessionId"), was_active)
+    });
+    if kind == "session" && !id.is_empty() && !was_active {
+        add_open_id(&id);
+        rebuild_tabs(&s);
+    }
+    let loading = SESSION_LOADING.with(|v| *v.borrow() == id);
+    if was_active && !loading { on_row(row); }
+}
+
 fn on_row(row: &JsValue) {
     let s = mjs::store_ref(STORE);
     match js::get_str(row, "type").as_str() {
@@ -501,6 +541,7 @@ fn on_row(row: &JsValue) {
             if !id.is_empty() {
                 add_open_id(&id);
                 set_active(&s, &id);
+                js::set_bool(&s, "waiting", true);
                 // A mention may have invited an agent as this turn began.
                 load_roster(&id);
                 // Stop was pressed before the server said which session it
@@ -883,13 +924,6 @@ pub fn register() {
         .str("activeId", "")
         .bool("notifyEnabled", crate::components::notification_toggle::enabled())
         .val("unreadSessions", &crate::components::notification_toggle::unread())
-        // Set when a *user* just picked a session (tree row, tab, the new-
-        // session plus, or the next tab after one closes), and consumed by
-        // `open_session_by_id` so the inspector follows the selection only
-        // after that session's meta has arrived. Reconcile reloads (a turn
-        // finishing, an allowlist save) take the same fetch path but never
-        // set it, and must not re-open the editor mid-reading.
-        .bool("openEditorOnSelect", false)
         // ── the composer's target row ─────────────────────────────────
         // Where this session works: which sandbox, which folder it is filed
         // under, which checkout gets mounted. Empty lists until the pickers
@@ -1229,6 +1263,12 @@ fn read_active_id() -> String {
 }
 
 fn set_active(store: &JsValue, id: &str) {
+    if js::get_str(store, "activeId") != id {
+        js::set_bool(store, "waiting", false);
+        js::set_bool(store, "stopping", false);
+        js::set_bool(store, "stopUnconfirmed", false);
+        js::set_bool(store, "stopPending", false);
+    }
     js::set_str(store, "activeId", id);
     let storage = js::get(&js::global(), "sessionStorage");
     js::call(&storage, "setItem", &[JsValue::from_str(ACTIVE_KEY), JsValue::from_str(id)]);
@@ -1367,7 +1407,7 @@ fn close_preview_on_leave(s: &JsValue, next: &str) {
 }
 
 /// `closeTab(id)` — take it off the strip. The session stays on disk in
-/// `sessions`; only a direct `deleteSession` call removes it.
+/// `sessions`; an empty session is deleted when its tab closes.
 fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     if id.is_empty() {
@@ -1376,6 +1416,17 @@ fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
     remove_open_id(&id);
     let s = mjs::store_ref(STORE);
     rebuild_tabs(&s);
+    if !owns_turn(&id) {
+        let closed_id = id.clone();
+        api::delete_session_if_empty(&id, move |result| {
+            if js::get_bool(&result, "deleted") {
+                let store = mjs::store_ref(STORE);
+                crate::components::notification_toggle::begin_delete(&closed_id);
+                crate::components::notification_toggle::finish_delete(&store, &closed_id, true);
+                load_sessions(JsValue::UNDEFINED, js_sys::Array::new());
+            }
+        });
+    }
 
     if js::get_str(&s, "activeId") == id {
         // Fall back to whatever tab is left, so closing the active one does
@@ -1386,6 +1437,8 @@ fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
             crate::components::composer::reset_history(&s);
             js::set_bool(&s, "treeOpen", false);
             set_active(&s, &next);
+            js::set(&s, "messages", &js_sys::Array::new().into());
+            clear_stream(&s);
             js::set_bool(&s, "compacted", false);
             js::set(&s, "threads", &js_sys::Array::new().into());
             // Falling back to the next tab is a selection, but like every

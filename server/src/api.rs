@@ -156,8 +156,47 @@ fn add_latest_events(data: &mut Value, db: &rusqlite::Connection) {
     }
 }
 
+/// The existence check and deletion are one SQLite statement, so events on
+/// any branch protect the conversation even if the client has stale data.
+fn delete_empty_session(db: &rusqlite::Connection, id: &str) -> rusqlite::Result<bool> {
+    db.execute_batch("PRAGMA foreign_keys = ON")?;
+    Ok(db.execute(
+        "DELETE FROM conversation WHERE id = ?1 AND NOT EXISTS \
+         (SELECT 1 FROM nodes WHERE conversation_id = ?1 AND NOT \
+          (kind = 'session' AND COALESCE(json_extract(payload, '$.kind'), '') = 'created'))", [id]
+    )? == 1)
+}
+
 /// The dev server's raw `/api/` handler.
 pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
+    if req.path == "/api/session/delete-if-empty" && req.method == "POST" {
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").and_then(Value::as_str).unwrap_or_default();
+        if id.is_empty() || id.contains("..") || id.contains('/') || id.contains('\\') {
+            let _ = out.json(400, &serde_json::json!({"ok": false}));
+            return;
+        }
+        let result = crate::events::if_session_idle(id, || {
+            let path = project_root().join(".angela").join("conversations.db");
+            let db = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+            db.busy_timeout(std::time::Duration::from_secs(2))?;
+            delete_empty_session(&db, id)
+        });
+        match result {
+            Some(Ok(true)) => {
+                let server = angela(state.config.port);
+                // Finish the ordinary deletion cleanup, including legacy files.
+                server.state.store.delete(id);
+                server.state.tabs.forget_session(id);
+                server.state.cancels.forget(id);
+                server.state.approvals.forget(id);
+                let _ = out.json(200, &serde_json::json!({"ok": true, "deleted": true}));
+            }
+            Some(Err(_)) => { let _ = out.json(500, &serde_json::json!({"ok": false})); }
+            _ => { let _ = out.json(200, &serde_json::json!({"ok": true, "deleted": false})); }
+        }
+        return;
+    }
     if req.path == "/api/sessions" && req.method == "GET" {
         let _ = out.json(200, &sessions(state.config.port));
         return;
@@ -444,6 +483,20 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
 #[cfg(test)]
 mod latest_event_tests {
     use super::*;
+
+    #[test]
+    fn only_sessions_without_events_are_deleted() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE conversation (id TEXT PRIMARY KEY); \
+            CREATE TABLE nodes (conversation_id TEXT REFERENCES conversation(id) ON DELETE CASCADE, seq INTEGER, kind TEXT, payload TEXT); \
+            INSERT INTO conversation VALUES ('empty'), ('with-events'); \
+            INSERT INTO nodes VALUES ('empty', 1, 'session', '{\"kind\":\"created\"}'), \
+            ('with-events', 1, 'session', '{}');").unwrap();
+        assert!(delete_empty_session(&db, "empty").unwrap());
+        assert!(!delete_empty_session(&db, "with-events").unwrap());
+        assert!(!delete_empty_session(&db, "missing").unwrap());
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM conversation", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    }
 
     #[test]
     fn latest_event_is_taken_from_the_latest_sequence_not_metadata() {

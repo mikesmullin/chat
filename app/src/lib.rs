@@ -20,6 +20,7 @@ mod api;
 mod events;
 mod helpers;
 mod pages;
+mod shortcuts;
 mod components;
 mod css;
 
@@ -41,6 +42,7 @@ impl App for Chat {
     fn kit_dev_telemetry(&self) -> bool { false }
 
     fn started(&self, _rt: &mut Runtime) {
+        shortcuts::start();
         components::tab::start();
         components::notification_toggle::start();
         components::live::load_models();

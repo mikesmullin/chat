@@ -386,6 +386,13 @@ fn toggle_rail(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+/// Section visibility is a per-browser preference, independent of sessions.
+fn section_open(key: &str) -> bool {
+    let storage = js::get(&js::global(), "localStorage");
+    let value = js::call(&storage, "getItem", &[JsValue::from_str(&format!("chat.rail.{key}"))]);
+    value.as_string().as_deref() != Some("false")
+}
+
 /// `toggleSection(which)` — collapse/expand one left-rail section.
 ///
 /// `which` is `"projects"`, `"agents"` or `"automations"`; anything else is ignored.
@@ -400,7 +407,10 @@ fn toggle_section(_this: JsValue, args: js_sys::Array) -> JsValue {
         "automations" => "automationsOpen",
         _ => return JsValue::UNDEFINED,
     };
-    js::set_bool(&s, key, !js::get_bool(&s, key));
+    let open = !js::get_bool(&s, key);
+    js::set_bool(&s, key, open);
+    let storage = js::get(&js::global(), "localStorage");
+    js::call(&storage, "setItem", &[JsValue::from_str(&format!("chat.rail.{key}")), JsValue::from_str(if open { "true" } else { "false" })]);
     mjs::redraw();
     JsValue::UNDEFINED
 }
@@ -418,9 +428,9 @@ pub fn register() {
     // answer. Its toggle in the tab strip stays visible either way.
     d.bool("asideOpen", false)
         .bool("railOpen", true)
-        .bool("projectsOpen", true)
-        .bool("agentsOpen", true)
-        .bool("automationsOpen", true)
+        .bool("projectsOpen", section_open("projectsOpen"))
+        .bool("agentsOpen", section_open("agentsOpen"))
+        .bool("automationsOpen", section_open("automationsOpen"))
         .method("toggleAside", toggle_aside)
         .method("toggleRail", toggle_rail)
         .method("toggleSection", toggle_section);
