@@ -23,15 +23,16 @@
 //! ```text
 //!   ▾ psicom                       <- implied: nothing is filed here directly
 //!     ▾ chat
-//!         iran war status     ◐ 3m   <- a conversation, draggable
-//!         set lights blue      ● 1d
+//!         iran war status      3m   <- a conversation, draggable
+//!         set lights blue      1d
 //!     ▸ sbox                       <- collapsed: its children are skipped
 //!   ▾ (ungrouped)                  <- not a project; the drop target for "none"
 //! ```
 //!
-//! Each conversation carries the shared `uiSessionState` symbol — `◐` working
-//! (a turn is in flight), `●` done (an answer to review), `○` idle (nothing
-//! said yet) — the same symbol the tab strip wears, then its age.
+//! Each conversation carries the shared `uiSessionState` symbol — the same
+//! ring the tab strip wears, tinted by state (amber working: a turn is in
+//! flight; accent done: an answer to review; gray idle: nothing said yet)
+//! and filled with the conversation's context usage — then its age.
 //!
 //! ## Drag and drop
 //!
@@ -241,8 +242,11 @@ fn row(st: &str, on_open: &str) -> Node {
         .kids(vec![
             m("i").class("ph ph-caret-right ptree-caret"),
             Node::icon_dyn("r.icon").class("ph ptree-icon"),
+            // The tooltip is the untruncated name: the label ellipsises on
+            // screen, the hover shows all of it.
             m("span").class("ptree-name")
                 .show(&format!("$store.{STORE}.editing !== r.key"))
+                .bind("title", "r.name")
                 .text("r.label"),
             m("input")
                 .class("ptree-edit")
@@ -259,14 +263,20 @@ fn row(st: &str, on_open: &str) -> Node {
             // The conversation's state, immediately left of its age: the
             // shared `uiSessionState` unit, so a tree row wears the same
             // symbol the tab strip and the agents rail wear. Folders have no
-            // state of their own, so they render none.
+            // state of their own, so they render none. The ring fills with
+            // this conversation's context window, and its tooltip names the
+            // status and the counts behind the fill.
             Node::host("uiSessionState", &[])
                 .bind("tone", &session_state::tone_of("r"))
+                .bind("fraction", &session_state::fraction_of("r"))
+                .bind("title", &session_state::hint_of("r"))
                 .iff("r.kind === 'session'"),
-            // Sessions only; folders have no event timestamp.
+            // Sessions only; folders have no event timestamp. The tooltip is
+            // the two instants behind the age, in long form.
             Node::host("uiRelTime", &[])
                 .class("ptree-time relative-timestamp")
                 .bind("at", "r.lastEventAt")
+                .bind("title", &stamp_hint("r"))
                 .iff("r.lastEventAt"),
         ])
 }
@@ -419,6 +429,29 @@ fn session_event_time(s: &JsValue) -> String {
     if last.is_empty() { js::get_str(s, "createdAt") } else { last }
 }
 
+/// The age's tooltip: `created {long} modified {long}`.
+fn stamp_hint(row: &str) -> String {
+    format!(
+        "'created ' + {created} + ' modified ' + {modified}",
+        created = long_stamp(&format!("{row}.createdAt")),
+        modified = long_stamp(&format!("{row}.updatedAt")),
+    )
+}
+
+/// Long form for one ISO timestamp expression: `Sun, Nov 22 1:04PM MST` —
+/// weekday, month and day, then 12-hour time with the zone, minus the space
+/// before the meridiem, in the viewer's own locale and zone. An empty
+/// timestamp is an em dash rather than the browser's "Invalid Date".
+fn long_stamp(iso: &str) -> String {
+    format!(
+        "(({iso}) ? (new Date({iso}).toLocaleDateString('en-US', \
+         {{weekday: 'short', month: 'short', day: 'numeric'}}) + ' ' + \
+         new Date({iso}).toLocaleTimeString('en-US', \
+         {{hour: 'numeric', minute: '2-digit', timeZoneName: 'short'}}) \
+         .replace(' ', '')) : '—')"
+    )
+}
+
 fn session_row(s: &JsValue, depth: usize) -> JsValue {
     let id = js::get_str(s, "id");
     let title = js::get_str(s, "title");
@@ -446,6 +479,14 @@ fn session_row(s: &JsValue, depth: usize) -> JsValue {
     if !turns.is_undefined() && !turns.is_null() {
         js::set_num(&r, "turns", turns.as_f64().unwrap_or(0.0));
     }
+    // The working ring's fill: how full this conversation's context window
+    // is. `totalTokens` is the last generation's total — the row contract's
+    // copy of what the `usage` row streams to the composer's context pie.
+    js::set(&r, "contextWindow", &js::get(s, "contextWindow"));
+    js::set(&r, "totalTokens", &js::get(s, "totalTokens"));
+    // The age's tooltip names the two instants behind it.
+    js::set(&r, "createdAt", &js::get(s, "createdAt"));
+    js::set(&r, "updatedAt", &js::get(s, "updatedAt"));
     js::set_bool(&r, "open", false);
     js::set_bool(&r, "leaf", true);
     r

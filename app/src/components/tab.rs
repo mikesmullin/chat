@@ -106,8 +106,8 @@ const CSS: &str = r#"
 }
 /* the display unit: icon + title + state symbol. A true flex row — the
    title stretches, the icon and symbol are fixed-size, so the ring (14x14
-   square, flex 0 0 auto via the global .pie-ring/.state-* rules) never
-   squishes in a tight row. */
+   square, flex 0 0 auto via the global .pie-ring rules) never squishes in
+   a tight row. */
 .ui-tab {
   display: flex; align-items: center;
   gap: 6px;
@@ -172,11 +172,11 @@ const CSS: &str = r#"
 
 /// One tab DISPLAY host for the STATIC feature demo. Strings are wrapped in
 /// single quotes so m-js reads a JS string literal.
-pub fn tab_display(icon: &str, title: &str, tone: &str) -> Node {
+pub fn tab_display(icon: &str, label: &str, tone: &str) -> Node {
     Node::host_bound("uiTab", &[
         ("class", "ui-tab"),
         ("icon", &format!("'{}'", icon)),
-        ("title", &format!("'{}'", title)),
+        ("label", &format!("'{}'", label)),
         ("tone", &format!("'{}'", tone)),
     ])
 }
@@ -241,15 +241,26 @@ pub fn start() {
     js::set(&global, "__chatTabFocusListener", &callback);
 }
 
-/// Props (host-provided, with defaults):
+/// Props (host-provided, with defaults). Prop names are HTML attributes,
+/// so they are single lowercase words — a camelCase name like `titleHint`
+/// is lowercased by the parser and silently never reaches the component.
 /// - `icon`  — phosphor glyph name; empty string means the robot icon (default "")
-/// - `title` — tab title; a number or text (default "")
+/// - `label` — the tab's short text; a number or text (default "")
+/// - `title` — the label's tooltip: the full session title behind the
+///   short label (default "")
 /// - `tone`  — `done` / `working` / `idle` (default `done`)
+/// - `fraction` — passed to the state symbol: the ring's context-window
+///   fill (default 0.68, the symbol's showcase fill)
+/// - `hint`  — passed to the state symbol as its tooltip: the status and
+///   context counts of `session_state::hint_of` (default "")
 fn def() -> Def {
     let mut d = Def::new().named(NAME);
     d.prop_str("icon", "")
+        .prop_str("label", "")
         .prop_str("title", "")
         .prop_str("tone", "done")
+        .prop_num("fraction", 0.68)
+        .prop_str("hint", "")
         .tree(
             m("span")
                 .class("ui-tab")
@@ -259,15 +270,19 @@ fn def() -> Def {
                     // than `+`/`===` and m-js evaluates it to just the glyph.
                     Node::icon_dyn("(icon === '' ? 'robot' : icon)")
                         .class("ui-tab-icon"),
-                    // title: number or text, ellipsised when it overflows.
+                    // label: number or text, ellipsised when it overflows;
+                    // its tooltip is the full title it cannot show.
                     m("span")
                         .class("ui-tab-title")
-                        .text("title"),
+                        .text("label")
+                        .bind("title", "title"),
                     // state symbol: the shared `uiSessionState` unit, so a tab's
                     // symbol is literally the same markup featured alone at
                     // /storybook/session-state.
                     Node::host("uiSessionState", &[])
-                        .bind("tone", "tone"),
+                        .bind("tone", "tone")
+                        .bind("fraction", "fraction")
+                        .bind("title", "hint"),
                 ]),
         );
     d
@@ -301,10 +316,19 @@ pub fn tab_bar(st: &str) -> Node {
                         // The tab shows its session's stable 1-based number,
                         // not the prompt: a title is far too long for a tab,
                         // and the number is what the user counts by.
-                        ("title", "(s.ordinal || '?') + ''"),
+                        ("label", "(s.ordinal || '?') + ''"),
+                        // …and its tooltip is the full session title the
+                        // short label cannot show.
+                        ("title", "(s.title || s.id)"),
                         // The conversation's state, by the one rule the
                         // project tree uses too.
                         ("tone", &session_state::tone_of("s")),
+                        // The ring fills with the conversation's context
+                        // window, by the one rule as well.
+                        ("fraction", &session_state::fraction_of("s")),
+                        // The symbol's tooltip is the status and context
+                        // counts, by the one rule the tree uses.
+                        ("hint", &session_state::hint_of("s")),
                     ],
                 ),
                 m("button")

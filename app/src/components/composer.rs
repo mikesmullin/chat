@@ -23,6 +23,7 @@ use wasm_bindgen::JsValue;
 use crate::components::dropdown;
 use crate::components::picker;
 use crate::components::samples;
+use crate::components::session_state;
 use crate::css;
 
 pub const CSS: &str = r#"
@@ -398,6 +399,12 @@ pub fn panel(st: &str) -> Node {
                     .class("draft-ta")
                     .model(&format!("{st}.draft"))
                     .attr("placeholder", "Message… (Enter send, Shift+Enter newline)")
+                    // Clicking into the composer is "I am looking at this
+                    // session": its unread mark goes — the same rule the tab
+                    // click applies, to the store this composer writes to. A
+                    // repeat click counts as well; focus alone cannot say
+                    // that, so this listens for click, not focus.
+                    .on("click", &format!("{st}.markSessionRead({st}.activeId)"))
                     .on("keydown", &format!("$event.key !== 'Escape' && {st}.treeResetEscape()"))
                     // Enter sends, Shift+Enter is a newline — the placeholder
                     // promises it, so the binding has to honour it.
@@ -454,9 +461,11 @@ pub fn panel(st: &str) -> Node {
 /// turn, which is a low-frequency change the diff handles fine.
 fn ctx_pie(st: &str) -> Node {
     // r=15.5 → circumference ≈ 97.4, as in the app.
-    let frac = format!(
-        "Math.min(1, ({st}.totalTokens || 0) / \
-         Math.max(1, ({st}.session.contextWindow || 128000)))"
+    // The fill is context-window fullness — the one formula the state
+    // symbol's ring fills by, so the two gauges cannot disagree.
+    let frac = session_state::ctx_fraction(
+        &format!("{st}.totalTokens"),
+        &format!("{st}.session.contextWindow"),
     );
     m("div")
         .class("ctx-pie")

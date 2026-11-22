@@ -86,12 +86,15 @@ pub fn register() {
 
 fn def(id: &str) -> Def {
     let mut d = Def::new().named(NAME);
-    d.prop_str("at", "").str("tag", id).tree(
+    d.prop_str("at", "").prop_str("title", "").str("tag", id).tree(
         m("span")
             .class("ui-reltime")
             .attr(ATTR, id)
             // no x-text on the node: the tick is the sole writer of the label.
-            .attr("title", ""),
+            // The tooltip is the host's to supply (the tree row sends the
+            // `created … modified …` instants); the default stays the empty
+            // title, which keeps the row's own hover text off the age.
+            .bind("title", "title"),
     );
     d.method("init", |this, _args| {
         let tag = js::get_str(&this, "tag");

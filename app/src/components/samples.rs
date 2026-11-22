@@ -246,9 +246,14 @@ fn messages() -> JsValue {
 ///
 /// `turns` and the age are here because the project tree renders both: a
 /// sample missing a field the tree reads is a guide that shows less than the
-/// app does, which is how the two versions of one component drift.
-const SESSIONS: &[(f64, &str, &str, &str, &str, f64, f64)] = &[
-    // ordinal, id, title, status, project, turns, minutes since it started
+/// app does, which is how the two versions of one component drift. The same
+/// goes for `contextWindow` and `totalTokens` — the pair the state symbol's
+/// ring (and the composer's context pie) fills by. The open
+/// conversation's numbers match the store's own `totalTokens` /
+/// `session.contextWindow`, so the guide's pie and its rings agree.
+const SESSIONS: &[(f64, &str, &str, &str, &str, f64, f64, f64, f64)] = &[
+    // ordinal, id, title, status, project, turns, minutes since it started,
+    // context window, tokens used
     (
         1.0,
         "samples",
@@ -257,10 +262,42 @@ const SESSIONS: &[(f64, &str, &str, &str, &str, f64, f64)] = &[
         "psicom/chat",
         6.0,
         12.0,
+        200000.0,
+        1975.0,
     ),
-    (2.0, "s-2", "Migrate the auth service", "running", "psicom/chat", 3.0, 4.0),
-    (3.0, "s-3", "Retry logic refactor", "ready", "psicom/sbox", 9.0, 45.0),
-    (4.0, "s-4", "Scratch: regex for the log parser", "ready", "", 0.0, 130.0),
+    (
+        2.0,
+        "s-2",
+        "Migrate the auth service",
+        "running",
+        "psicom/chat",
+        3.0,
+        4.0,
+        200000.0,
+        82400.0,
+    ),
+    (
+        3.0,
+        "s-3",
+        "Retry logic refactor",
+        "ready",
+        "psicom/sbox",
+        9.0,
+        45.0,
+        200000.0,
+        168000.0,
+    ),
+    (
+        4.0,
+        "s-4",
+        "Scratch: regex for the log parser",
+        "ready",
+        "",
+        0.0,
+        130.0,
+        200000.0,
+        0.0,
+    ),
 ];
 
 /// The models the guide's picker offers.
@@ -276,7 +313,7 @@ fn sessions() -> JsValue {
     let out = js_sys::Array::new();
     let now = js_sys::Date::new_0();
     let iso = |d: &js_sys::Date| d.to_iso_string().as_string().unwrap_or_default();
-    for (ordinal, id, title, status, project, turns, minutes) in SESSIONS {
+    for (ordinal, id, title, status, project, turns, minutes, context_window, total_tokens) in SESSIONS {
         let o = js::obj();
         js::set_num(&o, "ordinal", *ordinal);
         js::set_str(&o, "id", id);
@@ -286,6 +323,8 @@ fn sessions() -> JsValue {
         js::set_str(&o, "agent", "fish");
         js::set_str(&o, "model", "muse:opus");
         js::set_num(&o, "turns", *turns);
+        js::set_num(&o, "contextWindow", *context_window);
+        js::set_num(&o, "totalTokens", *total_tokens);
         // Started `minutes` ago, so the tree's age reads the way a real one
         // does rather than every row saying "just now".
         let created = js_sys::Date::new_0();

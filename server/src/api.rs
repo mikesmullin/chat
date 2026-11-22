@@ -166,13 +166,17 @@ pub fn models() -> Value {
     serde_json::json!({"default_model": default, "models": models})
 }
 
-/// Session metadata plus the timestamp of the newest event on any branch.
-/// `updatedAt` also changes for settings edits, so it is not an event timestamp.
+/// Session metadata plus the newest event's timestamp on any branch, and the
+/// last generation's token counts. `updatedAt` also changes for settings
+/// edits, so it is not an event timestamp; `totalTokens` is what the context
+/// gauges (the composer's pie, the state symbol's ring) divide by the row's
+/// `contextWindow`.
 pub(crate) fn sessions(port: u16) -> Value {
     let mut data = angela(port).sessions_list_for_test();
     let path = project_root().join(".angela").join("conversations.db");
     if let Ok(conn) = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
         add_latest_events(&mut data, &conn);
+        add_token_counts(&mut data, &conn);
     }
     data
 }
@@ -187,6 +191,27 @@ fn add_latest_events(data: &mut Value, db: &rusqlite::Connection) {
         let time: Option<String> = rusqlite::OptionalExtension::optional(query.query_row([id], |r| r.get(0))).ok().flatten();
         if let (Some(time), Some(row)) = (time, row.as_object_mut()) {
             row.insert("lastEventAt".into(), Value::String(time));
+        }
+    }
+}
+
+/// The row contract's `totalTokens`: the newest `gen_info` node's generation
+/// total — the same number the `usage` rows stream and the full session meta
+/// carries as `lastTotalTokens`. Derived here for the same reason as
+/// `lastEventAt` above: the sessions list is a projection for the sidebar,
+/// and this is what its state symbols fill their ring with.
+fn add_token_counts(data: &mut Value, db: &rusqlite::Connection) {
+    let Some(rows) = data.get_mut("sessions").and_then(Value::as_array_mut) else { return; };
+    let Ok(mut query) = db.prepare_cached(
+        "SELECT gen_total_tokens FROM nodes WHERE conversation_id = ?1 \
+         AND kind = 'gen_info' AND gen_total_tokens IS NOT NULL \
+         ORDER BY seq DESC LIMIT 1"
+    ) else { return; };
+    for row in rows {
+        let Some(id) = row.get("id").and_then(Value::as_str) else { continue; };
+        let total: Option<i64> = rusqlite::OptionalExtension::optional(query.query_row([id], |r| r.get(0))).ok().flatten();
+        if let (Some(total), Some(row)) = (total, row.as_object_mut()) {
+            row.insert("totalTokens".into(), Value::from(total));
         }
     }
 }
@@ -580,5 +605,19 @@ mod latest_event_tests {
         assert_eq!(sessions["sessions"][0]["lastEventAt"], "2020-02-01T00:00:00Z");
         assert_eq!(sessions["sessions"][1]["lastEventAt"], "2020-03-01T00:00:00Z");
         assert!(sessions["sessions"][2].get("lastEventAt").is_none());
+    }
+
+    #[test]
+    fn token_counts_are_taken_from_the_newest_generation() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE nodes (conversation_id TEXT, seq INTEGER, kind TEXT, gen_total_tokens INTEGER);
+            INSERT INTO nodes VALUES ('a', 1, 'gen_info', 1200);
+            INSERT INTO nodes VALUES ('a', 2, 'gen_info', 4800);
+            INSERT INTO nodes VALUES ('a', 3, 'tool_result', NULL);
+            INSERT INTO nodes VALUES ('b', 1, 'session', NULL);").unwrap();
+        let mut sessions = serde_json::json!({"sessions": [{"id":"a"}, {"id":"b"}]});
+        add_token_counts(&mut sessions, &db);
+        assert_eq!(sessions["sessions"][0]["totalTokens"], 4800);
+        assert!(sessions["sessions"][1].get("totalTokens").is_none());
     }
 }

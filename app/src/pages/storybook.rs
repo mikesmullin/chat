@@ -65,6 +65,7 @@ use crate::components::{
     target_form,
     field, hint_text, history_tree, item_group, label, nav_rail, notification_toggle, perf_badge, radio_input, range_input,
     presence, reasoning_card, relative_timestamp, sandboxes_menu, session, session_editor, session_panel,
+    session_state,
     system_card, tab, tag_input, task_list, text_area, text_input, thinking, toggle_button, tool_call_card, tool_response_card,
     user_card, validation_info,
 };
@@ -459,10 +460,41 @@ pub fn register(rt: &mut Runtime) {
             m("div")
                 .class("state-demo")
                 .kids(vec![
-                    // default `tone = "done"`.
-                    Node::host("uiSessionState", &[]),
-                    Node::host("uiSessionState", &[]).bind("tone", "'working'"),
-                    Node::host("uiSessionState", &[]).bind("tone", "'idle'"),
+                    // One shape in every state — the ring — and the state is
+                    // the colour. The fill is the conversation's context
+                    // window in every state, here three of the samples'
+                    // conversations: a done one nearly full, the running one
+                    // mid-way, an idle one with nothing in it yet. The
+                    // tooltip is the status with the counts behind the fill.
+                    Node::host("uiSessionState", &[])
+                        .bind(
+                            "fraction",
+                            &session_state::fraction_of("$store.samples.sessions[2]"),
+                        )
+                        .bind(
+                            "title",
+                            &session_state::hint_of("$store.samples.sessions[2]"),
+                        ),
+                    Node::host("uiSessionState", &[])
+                        .bind("tone", "'working'")
+                        .bind(
+                            "fraction",
+                            &session_state::fraction_of("$store.samples.sessions[1]"),
+                        )
+                        .bind(
+                            "title",
+                            &session_state::hint_of("$store.samples.sessions[1]"),
+                        ),
+                    Node::host("uiSessionState", &[])
+                        .bind("tone", "'idle'")
+                        .bind(
+                            "fraction",
+                            &session_state::fraction_of("$store.samples.sessions[3]"),
+                        )
+                        .bind(
+                            "title",
+                            &session_state::hint_of("$store.samples.sessions[3]"),
+                        ),
                 ]),
         )
     });

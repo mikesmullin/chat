@@ -2,8 +2,8 @@
 //! then a list of rows.
 //!
 //! Each row = robot icon + bold name + truncated summary + relative time + a
-//! per-state symbol (done = solid indigo dot, working = amber pie ring, idle =
-//! hollow dim ring).
+//! per-state symbol — the shared ring of `session_state`: the state is its
+//! colour, the session's context usage is its fill.
 //!
 //! `tone` is `done` / `working` / `idle`; it drives both the group's colour and
 //! every row's symbol (a group is homogenous in the storybook).
