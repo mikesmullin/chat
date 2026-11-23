@@ -358,6 +358,12 @@ pub fn messages_threaded(st: &str) -> Node {
             "({st}.streamText, {st}.waiting, {st}.keepPinned($el))"
         ))
         .on("scroll", &format!("{st}.onScroll($event)"))
+        // A markdown image is markup inside innerHTML — the click is
+        // delegated here so any attachment opens the lightbox.
+        .on(
+            "click",
+            "$event.target.tagName === 'IMG' && $store.lightbox.open($event.target.src)",
+        )
         .kids(vec![
             m("div")
                 .class("thread-row")
@@ -413,6 +419,12 @@ pub fn messages(st: &str) -> Node {
               {st}.waiting, {st}.keepPinned($el))"
         ))
         .on("scroll", &format!("{st}.onScroll($event)"))
+        // A markdown image is markup inside innerHTML — the click is
+        // delegated here so any attachment opens the lightbox.
+        .on(
+            "click",
+            "$event.target.tagName === 'IMG' && $store.lightbox.open($event.target.src)",
+        )
         .kids(vec![
         // --- the transcript ------------------------------------------------
         row(st, "m", card_kids(st, "m"))

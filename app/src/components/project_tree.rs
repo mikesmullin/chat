@@ -195,7 +195,7 @@ pub fn tree(st: &str, on_open: &str, on_new: &str) -> Node {
 fn row(st: &str, on_open: &str) -> Node {
     let rows = format!("$store.{STORE}.rows({st}.projects, {st}.sessions)");
     let click = format!(
-        "(r.kind === 'session' ? {} : $store.{STORE}.toggle(r.name))",
+        "(r.kind === 'session' ? {} : $store.{STORE}.toggle(r.drop))",
         on_open.replace("{}", "r.id")
     );
     m("div")

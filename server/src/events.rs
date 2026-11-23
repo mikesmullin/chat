@@ -37,6 +37,15 @@ fn feed() -> &'static Feed {
         changed: Condvar::new(),
     })
 }
+/// A roster changed: re-publish the sessions snapshot **now**. Seating
+/// rewrites no session row by itself, so the snapshot's `seats` fingerprint
+/// is what makes this publish differ — and the moment it does, every open
+/// stream re-diffs per viewer, so the person just invited sees the session
+/// appear in their sidebar without waiting for a row edit or the poll.
+pub fn bump_sessions() {
+    publish(0, crate::api::sessions(0));
+}
+
 pub(crate) fn publish_models(value: Value) {
     publish(1, value);
 }
@@ -109,6 +118,30 @@ fn sandbox_delta(previous: &Value, current: &Value) -> Value {
     patch
 }
 
+/// The sandboxes topic as one viewer may see it (PLAN55 listing gate): rows
+/// whose agent the viewer may not edit are invisible — dropped before the
+/// diff, so a delta can never name one either. Admins and the dev zone see
+/// everything.
+fn sandboxes_visible_to(viewer: Option<i64>, value: &Value) -> Value {
+    let mut out = value.clone();
+    let Some(rows) = out.get("sandboxes").and_then(Value::as_array).cloned() else {
+        return out;
+    };
+    let keep: Vec<Value> = rows
+        .into_iter()
+        .filter(|r| {
+            crate::api::sandbox_visible(
+                viewer,
+                r.get("agent").and_then(Value::as_str).unwrap_or_default(),
+            )
+        })
+        .collect();
+    if let Some(map) = out.as_object_mut() {
+        map.insert("sandboxes".into(), Value::Array(keep));
+    }
+    out
+}
+
 /// The sessions topic as one viewer may see it: unshared conversations are
 /// invisible (PLAN44 C4) — dropped before the diff, so a delta can never
 /// mention one either.
@@ -123,11 +156,9 @@ fn visible_to(viewer: Option<i64>, value: &Value) -> Value {
         .iter()
         .filter_map(|r| r.get("id").and_then(Value::as_str).map(str::to_string))
         .collect();
-    let keep: HashSet<String> = crate::api::angela(0)
-        .state
-        .store
-        .identity()
-        .readable(uid, "session", &names)
+    // Seated rooms count too (the roster is what makes a room appear in the
+    // viewer's tree) — one predicate with the listing and the read gates.
+    let keep: HashSet<String> = crate::api::visible_session_ids(Some(uid), &names)
         .into_iter()
         .collect();
     let mut out = value.clone();
@@ -146,31 +177,36 @@ fn visible_to(viewer: Option<i64>, value: &Value) -> Value {
 
 /// May this viewer see a turn's session at all? A running turn in an
 /// unshared conversation is not theirs to watch.
+/// A turn in a conversation this viewer cannot see is not theirs to watch —
+/// not its rows, not its prompt. "Cannot see" is the same predicate as the
+/// listings and the read gate: the ACL, **or** being seated in it (a person
+/// invited into a room watches its turns live like anyone else).
 fn turn_visible(viewer: Option<i64>, session_id: &str) -> bool {
-    let Some(uid) = viewer else {
-        return true;
-    };
-    crate::api::angela(0)
-        .state
-        .store
-        .identity()
-        .readable(uid, "session", &[session_id.to_string()])
-        .len()
-        == 1
+    crate::api::session_open_to(viewer, session_id, "read")
 }
 
 pub fn start(state: Arc<State>) {
+    let port = state.config.port;
     // The sandbox service can be slow or offline; its poll must not block
     // session updates, approvals, or the event feed.
-    std::thread::spawn(|| {
-        let root = crate::api::project_root();
+    std::thread::spawn(move || {
+        let server = crate::api::angela(port);
         let mut last = json!([]);
         loop {
-            let up = match crate::sbox::list(&root) {
-                Ok(rows) => { last = rows; true }
+            // PLAN55 D6/D13: rows carry each container's serving (session,
+            // agent); no friendly names and no per-container session count
+            // (it is always 1).
+            let up = match angela::sandbox::list_for_menu(&server.state.store) {
+                Ok(rows) => {
+                    last = rows;
+                    true
+                }
                 Err(_) => false,
             };
-            publish(3, json!({"sandboxes": last, "sboxUp": up}));
+            publish(3, json!({
+                "sandboxes": last,
+                "sboxUp": up,
+            }));
             std::thread::sleep(Duration::from_secs(2));
         }
     });
@@ -311,14 +347,20 @@ pub fn stream(out: &mut Stream<'_>, viewer: Option<i64>) {
                 if let Some(value) = &guard.values[i] {
                     // Both sides of the diff pass through the viewer's
                     // window first: a delta computed from unfiltered
-                    // snapshots would name sessions they may not see.
-                    let (old_f, new_f) = if *name == "sessions" {
-                        (
+                    // snapshots would name sessions — or sandboxes — they
+                    // may not see.
+                    let (old_f, new_f) = match *name {
+                        "sessions" => (
                             previous[i].as_ref().map(|p| visible_to(viewer, p)),
                             visible_to(viewer, value),
-                        )
-                    } else {
-                        (previous[i].clone(), value.clone())
+                        ),
+                        "sandboxes" => (
+                            previous[i]
+                                .as_ref()
+                                .map(|p| sandboxes_visible_to(viewer, p)),
+                            sandboxes_visible_to(viewer, value),
+                        ),
+                        _ => (previous[i].clone(), value.clone()),
                     };
                     let (event, data) = match (&old_f, *name) {
                         (Some(old), "sessions") => {

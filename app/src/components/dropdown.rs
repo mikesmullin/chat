@@ -239,31 +239,6 @@ pub fn dropdown_ex(
         ])
 }
 
-/// A fixed-choice menu using the same trigger and menu as the composer.
-/// The value and action belong to the caller's store.
-pub fn choice(key: &str, icon: &str, value: &str, options: &[&str], on_pick: &str) -> Node {
-    let open = format!("$store.{STORE}.open === '{key}'");
-    let rows = options.iter().map(|option| {
-        let selected = format!("({value} === '{option}')");
-        m("button").class("dropdown-item").attr("type", "button")
-            .bind("class", &format!("({selected} ? 'on' : '')"))
-            .on("click", &format!("{}; $store.{STORE}.closeIf('{key}')", on_pick.replace("{}", option)))
-            .kids(vec![m("span").class("dropdown-item-label").child(lit(option)),
-                m("i").class("ph ph-check dropdown-item-check").show(&selected)])
-    }).collect();
-    m("div").class("dropdown")
-        .bind("class", &format!("({open} ? 'open' : '')"))
-        .on("click.outside", &format!("$store.{STORE}.closeIf('{key}')"))
-        .kids(vec![m("button").class("dropdown-btn").attr("type", "button")
-            .attr("aria-label", "Sandbox image")
-            .bind("aria-expanded", &format!("({open} ? 'true' : 'false')"))
-            .on("click", &format!("$store.{STORE}.toggle('{key}')"))
-            .kids(vec![m("i").class(&format!("ph ph-{icon} dropdown-icon")),
-                m("span").class("dropdown-value").text(value),
-                m("i").class("ph ph-caret-down dropdown-caret")]),
-            m("div").class("dropdown-menu").show(&open).kids(rows)])
-}
-
 pub const LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 /// Agent editor picker: an empty value inherits the session setting.

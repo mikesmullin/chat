@@ -488,32 +488,15 @@ pub fn picker(p: &Picker) -> Node {
         ])
 }
 
-// ── the four instances ──────────────────────────────────────────────────
+// ── the three instances ──────────────────────────────────────────────
 //
 // Named builders beside the generic one, as `dropdown::model` /
-// `::level` / `::policy` already are. The composer asks for a sandbox
-// picker; it does not spell out what a sandbox picker is.
-
-/// Which sandbox this session works in.
-pub fn sandbox(st: &str) -> Node {
-    picker(&Picker {
-        key: "sandbox",
-        icon: "desktop",
-        extra: "dd-sandbox",
-        search: "Search sandboxes…",
-        items: &format!("{st}.sandboxes"),
-        value: &format!("{st}.sandboxId"),
-        null: Some(("No sandbox", "Local")),
-        null_icon: "desktop",
-        on_pick: &format!("{st}.pickTarget('sandbox', {{}})"),
-        on_edit: &format!("{st}.editTarget('sandbox', {{}})"),
-        actions: &[Action {
-            icon: "plus",
-            label: "Create new sandbox",
-            run: &format!("{st}.createTarget('sandbox')"),
-        }],
-    })
-}
+// `::level` / `::policy` already are. The composer asks for a project
+// picker; it does not spell out what a project picker is.
+//
+// There is deliberately no sandbox picker (PLAN55 D2): sandboxes belong to
+// agents, one per (session → agent), launched at the agent's first turn.
+// There is nothing for a session to pick.
 
 /// Which folder this conversation is filed under.
 pub fn project(st: &str) -> Node {
@@ -599,14 +582,13 @@ pub fn branch(st: &str) -> Node {
     })
 }
 
-/// The row the composer puts under its envelope: the four, in order.
+/// The row the composer puts under its envelope: the three, in order.
 ///
-/// Reading left to right it narrows — the machine, the filing, the checkout
+/// Reading left to right it narrows — the filing, the checkout
 /// strategy, the checkout — which is also the order in which a later choice
 /// depends on an earlier one.
 pub fn target_row(st: &str) -> Node {
     m("div").class("composer-targets").kids(vec![
-        sandbox(st),
         project(st),
         worktree(st),
         branch(st),

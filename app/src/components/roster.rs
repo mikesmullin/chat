@@ -50,9 +50,19 @@ pub fn roster(st: &str) -> Node {
                     ),
                     // The room, newest invite last. Truncation is the CSS
                     // `nth-child` rule above, not `x-show` on this row.
-                    presence::seat("p.handle", "p.icon", "p.accentColor", "!p.active", "(100 - i)")
-                        .for_each(&format!("(p, i) in {st}.activeOthers"))
-                        .key("p.id"),
+                    // The mark resolves through `iconOf`/`accentOf` — the
+                    // same source the transcript byline draws — so a seat
+                    // and its bylines can never disagree, and a seated
+                    // person wears the person's mark like "You" does.
+                    presence::seat(
+                        "p.handle",
+                        &format!("{st}.iconOf(p.handle)"),
+                        &format!("{st}.accentOf(p.handle)"),
+                        "!p.active",
+                        "(100 - i)",
+                    )
+                    .for_each(&format!("(p, i) in {st}.activeOthers"))
+                    .key("p.id"),
                     // Everyone past the first five lives behind this, in the
                     // session editor — which is what `+N` opens.
                     presence::more(&format!("{st}.activeOthers.length - 5")),

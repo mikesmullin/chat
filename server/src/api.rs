@@ -42,6 +42,18 @@ pub(crate) fn angela(port: u16) -> &'static AngelaServer {
         state.prompt_sender = Some(Arc::new(|session: &str, content: String, agent: String, model: String| {
             crate::automations::submit_prompt(session, content, agent, model);
         }));
+        // A roster change hits the event feed the moment it happens: the
+        // person just invited sees the session appear in their sidebar in
+        // real time (PLAN: an invite is an SSE event, not a 4s-later poll).
+        state.seat_sender = Some(Arc::new(|_session: &str| {
+            crate::events::bump_sessions();
+        }));
+        // Agent-owned sandboxes (PLAN55): angela owns the policy (one
+        // container per session → agent, lazily launched), this module owns
+        // the seam (the sbox-b client + worktree bookkeeping).
+        angela::sandbox::set_backend(Box::new(crate::sbox::SboxBackend {
+            root: root.clone(),
+        }));
         eprintln!(
             "angela embedded · conversations in {}/.angela/conversations.db",
             root.display()
@@ -241,8 +253,27 @@ pub(crate) fn sessions(port: u16) -> Value {
     if let Ok(conn) = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
         add_latest_events(&mut data, &conn);
         add_token_counts(&mut data, &conn);
+        add_seat_counts(&mut data, &conn);
     }
     data
+}
+
+/// The row contract's `seats`: how many active seats the conversation has —
+/// the roster fingerprint that makes an invite change this snapshot at all.
+/// Without it, seating someone rewrites nothing here and no SSE fires: the
+/// session would reach their sidebar only after an unrelated row edit.
+fn add_seat_counts(data: &mut Value, db: &rusqlite::Connection) {
+    let Some(rows) = data.get_mut("sessions").and_then(Value::as_array_mut) else { return; };
+    let Ok(mut query) = db.prepare_cached(
+        "SELECT COUNT(*) FROM participants WHERE conversation_id = ?1 AND active = 1"
+    ) else { return; };
+    for row in rows {
+        let Some(id) = row.get("id").and_then(Value::as_str) else { continue; };
+        let n: i64 = query.query_row([id], |r| r.get(0)).unwrap_or(0);
+        if let Some(row) = row.as_object_mut() {
+            row.insert("seats".into(), Value::from(n));
+        }
+    }
 }
 
 fn add_latest_events(data: &mut Value, db: &rusqlite::Connection) {
@@ -302,6 +333,94 @@ fn is_admin(req: &Request) -> bool {
     crate::auth::current_user(req).map(|u| u.is_admin()).unwrap_or(true)
 }
 
+/// PLAN44 C4 + the roster: a session is the viewer's to see or speak in when
+/// the ACL says so **or when they are seated in it** — being invited into a
+/// room (a named `user` seat, from a `@mention` or `/invite`) is what makes
+/// it appear in their Projects tree and lets them talk in it. The dev zone
+/// and the admin see everything.
+pub(crate) fn session_open_to(uid: Option<i64>, sid: &str, privilege: &str) -> bool {
+    let Some(uid) = uid else {
+        return true;
+    };
+    let server = angela(0);
+    let ident = server.state.store.identity();
+    if ident.user_by_id(uid).map(|u| u.is_admin()).unwrap_or(false) {
+        return true;
+    }
+    if ident.can(uid, "session", sid, privilege) {
+        return true;
+    }
+    ident
+        .user_by_id(uid)
+        .map(|u| server.state.store.sessions_seating(&u.name).iter().any(|s| s == sid))
+        .unwrap_or(false)
+}
+
+/// [`session_open_to`] for a whole listing: which of these sessions may
+/// this viewer see?
+pub(crate) fn visible_session_ids(uid: Option<i64>, names: &[String]) -> Vec<String> {
+    let Some(uid) = uid else {
+        return names.to_vec();
+    };
+    let server = angela(0);
+    let ident = server.state.store.identity();
+    if ident.user_by_id(uid).map(|u| u.is_admin()).unwrap_or(false) {
+        return names.to_vec();
+    }
+    let allowed: std::collections::HashSet<String> =
+        ident.readable(uid, "session", names).into_iter().collect();
+    let seated: std::collections::HashSet<String> = ident
+        .user_by_id(uid)
+        .map(|u| server.state.store.sessions_seating(&u.name).into_iter().collect())
+        .unwrap_or_default();
+    names
+        .iter()
+        .filter(|n| allowed.contains(*n) || seated.contains(*n))
+        .cloned()
+        .collect()
+}
+
+/// PLAN55 listing gate: a sandbox holds its agent's work, so a row is
+/// visible — and its container destroyable — only to the admin and to users
+/// who may **edit** the agent inhabiting it. `None` viewer is the dev zone,
+/// which acts as the admin. An uninhabited row has no agent to authorize
+/// against: admin-only (fail closed).
+fn sandbox_visible_with(
+    ident: &angela::identity::Identity<'_>,
+    viewer: Option<i64>,
+    agent: &str,
+) -> bool {
+    let Some(uid) = viewer else {
+        return true;
+    };
+    if ident.user_by_id(uid).map(|u| u.is_admin()).unwrap_or(false) {
+        return true;
+    }
+    !agent.is_empty() && ident.can(uid, "agent", agent, "edit")
+}
+
+/// [`sandbox_visible_with`] for the one viewer a request or a feed stream
+/// carries.
+pub(crate) fn sandbox_visible(viewer: Option<i64>, agent: &str) -> bool {
+    let ident = angela(0).state.store.identity();
+    sandbox_visible_with(&ident, viewer, agent)
+}
+
+/// The sandboxes rows one viewer may see (the listing gate applied).
+fn visible_sandboxes(viewer: Option<i64>, rows: Value) -> Value {
+    let ident = angela(0).state.store.identity();
+    let Value::Array(list) = rows else {
+        return rows;
+    };
+    Value::Array(
+        list.into_iter()
+            .filter(|r| {
+                sandbox_visible_with(&ident, viewer, r.get("agent").and_then(Value::as_str).unwrap_or_default())
+            })
+            .collect(),
+    )
+}
+
 /// Layer 1 in one call: the dev zone and the admin hold everything.
 fn actor_may(req: &Request, cap: &str) -> bool {
     match crate::auth::current_user(req) {
@@ -337,9 +456,6 @@ fn required_capability(req: &Request) -> Option<&'static str> {
             | "/api/projects/worktree-add"
     ) {
         return Some("project.create");
-    }
-    if p == "/api/targets/sandbox-add" || p == "/api/targets/sandbox-rename" {
-        return Some("sandbox.create");
     }
     None
 }
@@ -771,8 +887,9 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
         if let Some(sid) = body.get("sessionId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
             if let Some(u) = crate::auth::current_user(req) {
-                let ident = angela(state.config.port).state.store.identity();
-                if !ident.can(u.id, "session", sid, "post") {
+                // Seated counts as speaking too — a person invited into a
+                // room who cannot answer is not in the room.
+                if !session_open_to(Some(u.id), sid, "post") {
                     let _ = out.json(403, &serde_json::json!({
                         "ok": false, "error": "you may not post in this conversation",
                     }));
@@ -792,8 +909,7 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 .split('/')
                 .next()
                 .unwrap_or("");
-            let ident = angela(state.config.port).state.store.identity();
-            if !id.is_empty() && !ident.can(u.id, "session", id, "seat") {
+            if !id.is_empty() && !session_open_to(Some(u.id), id, "seat") {
                 let _ = out.json(403, &serde_json::json!({
                     "ok": false, "error": "you may not seat participants in this conversation",
                 }));
@@ -809,8 +925,7 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 .split('/')
                 .next()
                 .unwrap_or("");
-            let ident = angela(state.config.port).state.store.identity();
-            if !id.is_empty() && id != "new" && !ident.can(u.id, "session", id, "read") {
+            if !id.is_empty() && id != "new" && !session_open_to(Some(u.id), id, "read") {
                 let _ = out.json(403, &serde_json::json!({
                     "ok": false, "error": "no such conversation",
                 }));
@@ -851,6 +966,9 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
             Some(Ok(true)) => {
                 let server = angela(state.config.port);
                 // Finish the ordinary deletion cleanup, including legacy files.
+                // The PLAN55 sandbox cascade rides `store.delete` — a no-op on
+                // this path by construction: a session with no events has never
+                // had a turn, and a container only exists from a turn on.
                 server.state.store.delete(id);
                 server.state.tabs.forget_session(id);
                 server.state.cancels.forget(id);
@@ -865,18 +983,18 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     if req.path == "/api/sessions" && req.method == "GET" {
         let mut body = sessions(state.config.port);
         // "Unshared resources are invisible" (PLAN44 C4): a real,
-        // non-admin user sees only conversations they may read. The dev
-        // zone and the admin see everything.
+        // non-admin user sees only conversations they may read — or are
+        // seated in (the roster is what makes a room appear in their tree).
+        // The dev zone and the admin see everything.
         if let Some(u) = crate::auth::current_user(req) {
             if !u.is_admin() {
-                let ident = angela(state.config.port).state.store.identity();
                 if let Some(rows) = body.get_mut("sessions").and_then(Value::as_array_mut) {
                     let names: Vec<String> = rows
                         .iter()
                         .filter_map(|s| s.get("id").and_then(Value::as_str).map(str::to_string))
                         .collect();
                     let keep: std::collections::HashSet<String> =
-                        ident.readable(u.id, "session", &names).into_iter().collect();
+                        visible_session_ids(Some(u.id), &names).into_iter().collect();
                     rows.retain(|s| {
                         s.get("id")
                             .and_then(Value::as_str)
@@ -900,20 +1018,28 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         return;
     }
     // ── sandboxes, repos and worktrees ─────────────────────────────────
-    // The other three pickers. `/api/targets` is one GET for all of them:
-    // they are read together on every redraw, and three round-trips would
-    // let the menus disagree about which checkout exists.
+    // The other pickers, plus the sandboxes menu's data. `/api/targets` is
+    // one GET for all of them: they are read together on every redraw, and
+    // separate round-trips would let the menus disagree about what exists.
+    //
+    // Sandboxes are agent-owned now (PLAN55 D2): the rows come from angela's
+    // sandbox policy — each container with the (session, agent) it serves —
+    // plus a per-image live rollup (D6, D13: there is no per-container
+    // session count; it is always 1).
     if req.path == "/api/targets" && req.method == "GET" {
         let root = project_root();
         let mut body = crate::hostgit::everything(&root);
-        let (sandboxes, up) = match crate::sbox::list(&root) {
-            Ok(v) => (v, true),
+        let store = &angela(state.config.port).state.store;
+        let (sandboxes, up) = match angela::sandbox::list_for_menu(store) {
+            Ok(rows) => (rows, true),
             // An empty list and a dead service look identical in a menu, so
-            // the flag travels with it and the picker can say which.
+            // the flag travels with it and the menu can say which.
             Err(_) => (serde_json::json!([]), false),
         };
         if let Value::Object(m) = &mut body {
-            m.insert("sandboxes".into(), sandboxes);
+            // PLAN55 listing gate: only admin-visible rows travel per viewer.
+            let viewer = crate::auth::current_user(req).map(|u| u.id);
+            m.insert("sandboxes".into(), visible_sandboxes(viewer, sandboxes));
             m.insert("sboxUp".into(), serde_json::json!(up));
         }
         let _ = out.json(200, &body);
@@ -930,6 +1056,27 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         };
         let flag = |k: &str, dflt: bool| body.get(k).and_then(Value::as_bool).unwrap_or(dflt);
         let action = req.path.trim_start_matches("/api/targets/").trim_matches('/');
+        // PLAN55 listing gate: destroying a sandbox is at least as privileged
+        // as seeing it — admin, or edit on the inhabiting agent.
+        if action == "sandbox-remove" {
+            let viewer = crate::auth::current_user(req).map(|u| u.id);
+            let id = f("id");
+            let agent = angela(state.config.port)
+                .state
+                .store
+                .sandbox_rows()
+                .into_iter()
+                .find(|(_, _, cid)| *cid == id)
+                .map(|(_, agent, _)| agent)
+                .unwrap_or_default();
+            if !sandbox_visible(viewer, &agent) {
+                let _ = out.json(
+                    403,
+                    &serde_json::json!({"ok": false, "error": "you may not destroy this sandbox"}),
+                );
+                return;
+            }
+        }
         let result: Result<Value, String> = match action {
             "repo-add" => crate::hostgit::add_repo(&root, &f("path")),
             "repo-remove" => crate::hostgit::remove_repo(&root, &f("id")),
@@ -940,24 +1087,10 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 crate::hostgit::add_worktree(&root, &f("repoId"), &f("branch"), flag("create", false))
             }
             "worktree-remove" => crate::hostgit::remove_worktree(&root, &f("id")),
-            "sandbox-add" => crate::sbox::create(
-                &root,
-                &f("kind"),
-                &f("worktreeId"),
-                &f("branchId"),
-                flag("network", true),
-                &f("name"),
-            ),
-            // Rename only the label (chat-owned); sbox-b's id never changes.
-            "sandbox-rename" => {
-                crate::hostgit::set_sandbox_name(
-                    &root,
-                    &f("id"),
-                    &f("name"),
-                )
-                    .map(|_| serde_json::json!({}))
-            }
-            "sandbox-remove" => crate::sbox::destroy(&root, &f("id")),
+            // Sandboxes have no hand-driven create/rename (PLAN55 D2/D4/D10):
+            // an agent's container is launched at its first turn and dies with
+            // its session. Destroy stays, for the Sandbox form's Delete.
+            "sandbox-remove" => crate::sbox::destroy(&root, &f("id")).map(|_| serde_json::json!({})),
             other => Err(format!("unknown target action: {other}")),
         };
         match result {
@@ -971,8 +1104,10 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                             map.insert(k, val);
                         }
                     }
-                    if let Ok(list) = crate::sbox::list(&root) {
-                        map.insert("sandboxes".into(), list);
+                    let store = &angela(state.config.port).state.store;
+                    if let Ok(rows) = angela::sandbox::list_for_menu(store) {
+                        let viewer = crate::auth::current_user(req).map(|u| u.id);
+                        map.insert("sandboxes".into(), visible_sandboxes(viewer, rows));
                     }
                 }
                 let _ = out.json(200, &v);
@@ -1073,14 +1208,13 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
             // visibility *derives* from what is shared inside it.
             if let Some(u) = crate::auth::current_user(req) {
                 if !u.is_admin() {
-                    let ident = angela(state.config.port).state.store.identity();
                     let all: Vec<Value> = angela(state.config.port).state.store.list_meta();
                     let names: Vec<String> = all
                         .iter()
                         .filter_map(|s| s.get("id").and_then(Value::as_str).map(str::to_string))
                         .collect();
                     let keep: std::collections::HashSet<String> =
-                        ident.readable(u.id, "session", &names).into_iter().collect();
+                        visible_session_ids(Some(u.id), &names).into_iter().collect();
                     let mut counts: std::collections::HashMap<String, i64> =
                         std::collections::HashMap::new();
                     for s in &all {
@@ -1175,10 +1309,10 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 "allowlistMode",
                 "allowlistSource",
                 "project",
-                // Where this conversation's work happens. `sandboxId` is the
-                // one the turn loop reads to decide whose filesystem the
-                // file and shell tools mean.
-                "sandboxId",
+                // Where this conversation's work happens. There is no
+                // session sandbox any more (PLAN55 D2): an agent's container
+                // is per (session → agent), owned by the agents plane — so
+                // `sandboxId` is deliberately not a composer setting.
                 "worktreeId",
                 "branchId",
             ] {
@@ -1308,5 +1442,38 @@ mod latest_event_tests {
         add_token_counts(&mut sessions, &db);
         assert_eq!(sessions["sessions"][0]["totalTokens"], 4800);
         assert!(sessions["sessions"][1].get("totalTokens").is_none());
+    }
+}
+
+#[cfg(test)]
+mod sandbox_gate_tests {
+    use super::*;
+
+    /// PLAN55 listing gate: a sandbox holds its agent's work, so only the
+    /// admin and whoever may edit the inhabiting agent see its row — and an
+    /// uninhabited instance, having no agent to authorize against, is
+    /// admin-only.
+    #[test]
+    fn a_sandbox_is_visible_only_to_whoever_may_edit_its_agent() {
+        let store = angela::conv_store::ConvStore::memory("/tmp/sandbox-gate-test").unwrap();
+        let ident = store.identity();
+        // The first user is the admin; the second is nobody in particular.
+        let bob = ident.create_user("Bob", "Bob").unwrap();
+        let alice = ident.create_user("alice", "Alice").unwrap();
+        ident.ensure_resource("agent", "video", bob.id).unwrap();
+        ident
+            .grant(alice.id, "agent", "video", "edit", bob.id, false)
+            .unwrap();
+
+        // The dev zone (no viewer) and the admin see everything.
+        assert!(sandbox_visible_with(&ident, None, ""));
+        assert!(sandbox_visible_with(&ident, Some(bob.id), "video"));
+        assert!(sandbox_visible_with(&ident, Some(bob.id), ""));
+
+        // Alice may edit `video`, so its sandbox is hers to see — and nothing
+        // else's is.
+        assert!(sandbox_visible_with(&ident, Some(alice.id), "video"));
+        assert!(!sandbox_visible_with(&ident, Some(alice.id), "chewy"));
+        assert!(!sandbox_visible_with(&ident, Some(alice.id), ""));
     }
 }

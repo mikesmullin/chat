@@ -123,8 +123,12 @@ pub const CSS: &str = r#"
   margin-bottom: 6px; width: fit-content;
   border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
 }
+/* The pending attachment: a square tile, filled and cropped — a preview
+   you can recognize at a glance, not the whole picture squeezed in. Click
+   opens the lightbox. */
 .mjs-chat .composer-attach-chip img {
-  max-height: 64px; max-width: 160px; border-radius: 6px; display: block;
+  width: 56px; height: 56px; object-fit: cover;
+  border-radius: 8px; display: block; cursor: zoom-in;
 }
 .mjs-chat .composer-attach-chip button {
   appearance: none; border: 0; background: transparent; cursor: pointer;
@@ -282,7 +286,7 @@ pub const CSS: &str = r#"
 .mjs-chat .composer-box .dropdown.dd-policy { margin-right: 2px; }
 
 /* ---- the target row ---------------------------------------------
-   Where this session works: sandbox, project, worktree, branch. It sits
+   Where this session works: project, worktree, branch. It sits
    OUTSIDE the envelope, under it — these are not part of composing a
    message, they are the standing context the message will be composed
    in, and putting them inside the plate would say otherwise.
@@ -296,7 +300,7 @@ pub const CSS: &str = r#"
   padding: 2px 2px 0;
 }
 /* The row is the one place these triggers appear, and it is the full width
-   of the composer, so a long sandbox name may have the space a composer-row
+   of the composer, so a long worktree name may have the space a composer-row
    dropdown may not. */
 .mjs-chat .composer-targets .dropdown-value { max-width: 180px; }
 /* The last two menus sit near the right edge of a narrow sidebar, where a
@@ -438,7 +442,10 @@ pub fn panel(st: &str) -> Node {
                     .on("keydown.up", &format!("{st}.treeOpen ? ($event.preventDefault(), {st}.treeMove(-1)) : (!$event.shiftKey && !$event.ctrlKey && !$event.altKey && !$event.metaKey && $el.selectionStart === $el.selectionEnd && !$el.value.slice(0, $el.selectionStart).includes('\\n') && {st}.historyMove(-1, $event))"))
                     .on("keydown.down", &format!("{st}.treeOpen ? ($event.preventDefault(), {st}.treeMove(1)) : (!$event.shiftKey && !$event.ctrlKey && !$event.altKey && !$event.metaKey && $el.selectionStart === $el.selectionEnd && !$el.value.slice($el.selectionEnd).includes('\\n') && {st}.historyMove(1, $event))")),
                 m("div").class("composer-attach-chip").show(&format!("{st}.image")).kids(vec![
-                    m("img").attr("src", &format!("{st}.image")).attr("alt", "attached"),
+                    m("img")
+                        .bind("src", &format!("{st}.image"))
+                        .attr("alt", "attached")
+                        .on("click", &format!("$store.lightbox.open({st}.image)")),
                     m("button")
                         .attr("type", "button")
                         .attr("title", "Remove image")

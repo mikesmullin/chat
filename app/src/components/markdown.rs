@@ -47,6 +47,18 @@ pub const CSS: &str = r#"
 .mjs-chat .md-body pre code { background: transparent; border: 0; padding: 0; }
 .mjs-chat .md-body a { color: var(--mjs-accent); }
 .mjs-chat .md-body a:hover { text-decoration: underline; }
+/* An attached image in a message: a small thumbnail, **fit** — the whole
+   picture in a 150px frame, never the natural size overflowing the room.
+   Click opens the lightbox (the transcript delegates the click). */
+.mjs-chat .md-body img {
+  max-width: 150px; max-height: 150px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: var(--mjs-panel-2);
+  display: block;
+  margin: 6px 0;
+  cursor: zoom-in;
+}
 "#;
 
 pub fn register() {

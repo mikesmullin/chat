@@ -43,7 +43,7 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::css;
-use crate::components::{dropdown, validation_info};
+use crate::components::{name_tag, validation_info};
 
 const STORE: &str = "tform";
 const ST: &str = "$store.tform";
@@ -89,7 +89,24 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .tform-path .sep { opacity: .5; }
 
-/* The icon and its animation belong to the status field in this form. */
+/* a read-only value line in the inspector (the sandbox form's facts) */
+.tform-value {
+  display: inline-flex; align-items: center;
+  font-size: 12px;
+  color: var(--fg);
+}
+.tform-value-icon {
+  font-size: 13px; line-height: 1;
+  color: var(--gray-dim);
+  margin-right: 5px;
+}
+.tform-value > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The status chip: the label's icon and its animation. */
 .tform-status { display: inline-flex; align-items: center; gap: 6px; }
 .tform-status-icon { display: inline-block; font-size: 14px; line-height: 1; }
 .tform-status.is-busy .tform-status-icon { color: var(--mjs-yellow); animation: tform-status-spin 1s linear infinite; }
@@ -101,6 +118,7 @@ pub const CSS: &str = r#"
 @media (prefers-reduced-motion: reduce) {
   .tform-status.is-busy .tform-status-icon { animation: none; }
 }
+
 .tform-demo { width: 320px; }
 "#;
 
@@ -151,11 +169,74 @@ pub fn panel() -> Node {
                     .key("seg")
                     .text("seg")]),
             // In edit mode these kinds have nothing to change: the panel
-            // exists to show which row it is and to offer Delete.
+            // exists to show which row it is and to offer Delete. (The
+            // sandbox's id gets its own headed field below.)
             m("p")
                 .class("tform-note")
-                .show(&format!("{ST}.mode === 'edit' && {ST}.kind !== 'project'"))
+                .show(&format!(
+                    "{ST}.mode === 'edit' && {ST}.kind !== 'project' && {ST}.kind !== 'sandbox'"
+                ))
                 .text(&format!("{ST}.original")),
+            // ---- sandbox (PLAN55): an instance is its container id — no
+            // name to edit, so the panel shows what it is running and who it
+            // serves, and offers Delete.
+            // The container id under its own heading: it is the row's name,
+            // and a labelled field like every other fact here.
+            m("div").class("ae-field").show(&format!("{ST}.kind === 'sandbox'")).kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Container")),
+                ]),
+                m("p").class("tform-note").text(&format!("{ST}.original")),
+            ]),
+            m("div").class("ae-field").show(&format!("{ST}.kind === 'sandbox'")).kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Image")),
+                ]),
+                m("span").class("tform-value").kids(vec![
+                    // one class call with the full list: a second `.class()`
+                    // would replace the glyph's own classes
+                    m("i").class("ph ph-shipping-container tform-value-icon"),
+                    m("span").text(&format!("{ST}.image")),
+                ]),
+            ]),
+            m("div").class("ae-field").show(&format!("{ST}.kind === 'sandbox'")).kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Status")),
+                ]),
+                m("span").class("tform-status").attr("role", "status")
+                    .bind("class", &format!("('tform-status ' + {ST}.statusClass({ST}.status))"))
+                    .kids(vec![
+                        Node::icon_dyn(&format!("{ST}.statusIcon({ST}.status)"))
+                            .class("tform-status-icon").attr("aria-hidden", "true"),
+                        m("span").text(&format!("{ST}.statusLabel({ST}.status)")),
+                    ]),
+            ]),
+            m("div").class("ae-field").show(&format!("{ST}.kind === 'sandbox'")).kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Agent")),
+                ]),
+                // The agent mark is the byline brick (name_tag), not a
+                // look-alike chip — and it is a link: clicking opens the
+                // agent's own edit form, so the sandbox panel is a way
+                // *into* the agent that runs in it.
+                name_tag::who_link(
+                    &format!("({ST}.agentIcon || 'robot')"),
+                    &format!("({ST}.agentAccent || '#a78bfa')"),
+                    &format!("{ST}.agentName"),
+                    &format!("$store.agents.select({ST}.agentName); {ST}.close()"),
+                )
+                .show(&format!("{ST}.agentName")),
+                m("span")
+                    .class("tform-value")
+                    .show(&format!("!{ST}.agentName"))
+                    .text("'unassigned'"),
+            ]),
+            m("div").class("ae-field").show(&format!("{ST}.kind === 'sandbox'")).kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Created")),
+                ]),
+                m("span").class("tform-value").text(&format!("{ST}.createdAt")),
+            ]),
             // ---- repo: an absolute path, because nothing is scanned ----
             m("div")
                 .class("ae-field")
@@ -220,65 +301,6 @@ pub fn panel() -> Node {
                         .model(&format!("{ST}.create")),
                     m("span").child(lit("create this branch too")),
                 ]),
-            // ---- sandbox ----------------------------------------------
-            // The label you give the box is what the sandbox menu reads; the
-            // id sbox-b hands back is a key, not something a person should
-            // squint at every time.
-            // x-if, not x-show: the field remounts on every open, so its
-            // init fires each time and the cursor lands in a fresh input —
-            // the one case where show-then-focus would silently do nothing.
-            m("div")
-                .class("ae-field")
-                .iff(&format!("{ST}.kind === 'sandbox'"))
-                .kids(vec![
-                    m("label").class("ae-label").kids(vec![
-                        m("span").child(lit("Name")),
-                        m("span").class("hint").child(lit("shown in the menu")),
-                    ]),
-                    m("input")
-                        .attr("type", "text")
-                        .attr("spellcheck", "false")
-                        .model(&format!("{ST}.name"))
-                        .on("keydown.enter", &format!("{ST}.save()"))
-                        .init("$el.focus()"),
-                ]),
-            m("div")
-                .class("ae-field")
-                .show(&format!("{ST}.kind === 'sandbox' && {ST}.mode !== 'edit'"))
-                .kids(vec![
-                    m("label").class("ae-label").kids(vec![
-                        m("span").child(lit("Image")),
-                        m("span").class("hint").child(lit("headless has no desktop")),
-                    ]),
-                    dropdown::choice("sandbox-image", "desktop", &format!("{ST}.image"),
-                        &["headless", "headed"], &format!("{ST}.setImage('{{}}')")),
-                ]),
-            m("div").class("ae-field")
-                .show(&format!("{ST}.kind === 'sandbox' && {ST}.mode === 'edit'"))
-                .kids(vec![m("label").class("ae-label").child(lit("Status")),
-                    m("span").class("tform-status").attr("role", "status")
-                        .bind("class", &format!("{ST}.statusClass({ST}.status)"))
-                        .kids(vec![
-                            Node::icon_dyn(&format!("{ST}.statusIcon({ST}.status)"))
-                                .class("tform-status-icon").attr("aria-hidden", "true"),
-                            m("span").text(&format!("{ST}.status")),
-                        ])]),
-            m("label")
-                .class("ae-label")
-                .show(&format!("{ST}.kind === 'sandbox' && {ST}.mode !== 'edit'"))
-                .kids(vec![
-                    m("input")
-                        .attr("type", "checkbox")
-                        .model(&format!("{ST}.network")),
-                    m("span").child(lit("give it network access")),
-                ]),
-            // What it will mount, decided by the row above rather than by
-            // this form: the sandbox gets whatever checkout the composer has
-            // selected, which is the whole point of the row.
-            m("p")
-                .class("tform-note")
-                .show(&format!("{ST}.kind === 'sandbox' && {ST}.mode !== 'edit'"))
-                .text(&format!("{ST}.mountNote")),
             // ---- automation -------------------------------------------
             // A named prompt on a cron: firing creates a fresh session and
             // submits the prompt there. Every field here travels with the
@@ -417,23 +439,23 @@ pub fn panel() -> Node {
                 m("button")
                     .class("ae-btn primary")
                     .attr("type", "button")
-                    // Only a project, a sandbox and an automation have a
+                    // Only a project and an automation have a
                     // renameable name. A repo's identity is its path on disk
                     // and a worktree's is its branch — neither of those can
                     // be renamed from here, so in edit mode the button is
                     // not disabled, it is absent.
-                    .show(&format!("({ST}.mode !== 'edit' || {ST}.kind === 'project' || {ST}.kind === 'sandbox' || {ST}.kind === 'automation')"))
+                    .show(&format!("({ST}.mode !== 'edit' || {ST}.kind === 'project' || {ST}.kind === 'automation')"))
                     .bind("disabled", &format!("({ST}.busy || !{ST}.ready())"))
                     .on("click", &format!("{ST}.save()"))
                     .text(&format!(
                         "({ST}.busy ? 'Working…' : ({ST}.mode === 'edit' ? ({ST}.kind === 'automation' ? 'Save' : 'Rename') : 'Create'))"
                     )),
-                // The share dialog reaches projects, sandboxes and
-                // automations too (PLAN44 C2) — same dialog, same grants.
+                // The share dialog reaches projects and automations
+                // too (PLAN44 C2) — same dialog, same grants.
                 m("button")
                     .class("ae-btn")
                     .attr("type", "button")
-                    .show(&format!("({ST}.mode === 'edit' && ['project', 'sandbox', 'automation'].includes({ST}.kind))"))
+                    .show(&format!("({ST}.mode === 'edit' && ['project', 'automation'].includes({ST}.kind))"))
                     .on("click", "$store.share.open($store.tform.kind, $store.tform.name)")
                     .kids(vec![
                         Node::icon("users-three").class("ph ph-users-three"),
@@ -463,8 +485,6 @@ pub fn panel() -> Node {
 /// standalone demo — the form as the inspector shows it, over the guide.
 pub fn demo() -> Node { demo_for("project") }
 
-pub fn demo_sandbox() -> Node { demo_for("sandbox") }
-
 pub fn demo_automation() -> Node { demo_for("automation") }
 
 fn demo_for(kind: &str) -> Node {
@@ -479,7 +499,7 @@ fn demo_for(kind: &str) -> Node {
 fn kind_info(kind: &str) -> (&'static str, &'static str) {
     match kind {
         "project" => ("Project", "folder-plus"),
-        "sandbox" => ("Sandbox", "desktop"),
+        "sandbox" => ("Sandbox", "cube"),
         "automation" => ("Automation", "timer"),
         "worktree" => ("Worktree", "tree-structure"),
         "branch" => ("Branch", "git-branch"),
@@ -502,8 +522,8 @@ fn danger_note(kind: &str) -> &'static str {
              uncommitted in it. The branch, and everything committed to it, stays."
         }
         "sandbox" => {
-            "Destroying a sandbox removes the container. A worktree chat mounted into \
-             it goes too; a repo you registered does not."
+            "Destroying a sandbox removes the container. Everything written inside \
+             it — transcripts, downloads, scratch files — is gone with it."
         }
         "automation" => {
             "Deleting an automation stops its schedule. Sessions it already ran stay."
@@ -525,7 +545,6 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     js::set_str(&s, "store", store);
     js::set_str(&s, "name", name);
     js::set_str(&s, "original", name);
-    js::set_str(&s, "status", "Unknown");
     // The bare Phosphor name: the template hands this to `Node::icon_dyn`,
     // which supplies the `ph ph-` prefix itself. Writing the prefix here too
     // yields `ph ph-ph-folder-plus`, which draws nothing.
@@ -533,9 +552,13 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     js::set_str(&s, "dangerNote", danger_note(kind));
     js::set_bool(&s, "busy", false);
     js::set_str(&s, "path", "");
+    js::set_str(&s, "image", "");
+    js::set_str(&s, "status", "");
+    js::set_str(&s, "agentName", "");
+    js::set_str(&s, "agentIcon", "");
+    js::set_str(&s, "agentAccent", "");
+    js::set_str(&s, "createdAt", "");
     js::set_bool(&s, "create", true);
-    js::set_str(&s, "image", "headless");
-    js::set_bool(&s, "network", true);
     js::set_str(&s, "cron", "");
     js::set_str(&s, "prompt", "");
     js::set_str(&s, "agent", "");
@@ -544,7 +567,6 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     js::set_bool(&s, "enabled", true);
     js::set_bool(&s, "catchUp", false);
     seed_from_host(&s, kind, mode, name);
-    if kind == "sandbox" && store == "live" { sync_sandbox_status(&mjs::store_ref(store)); }
     js::set_str(
         &s,
         "heading",
@@ -580,8 +602,7 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
 ///
 /// A branch or worktree form defaults to the first registered repo, because
 /// with one repo registered — the common case — picking it again is a step
-/// that teaches nothing. A sandbox form says which checkout it is about to
-/// mount, which is decided by the composer row rather than by this form.
+/// that teaches nothing.
 fn seed_from_host(s: &JsValue, kind: &str, mode: &str, name: &str) {
     let host_name = js::get_str(s, "store");
     if host_name.is_empty() || !mjs::has_store(&host_name) {
@@ -589,7 +610,6 @@ fn seed_from_host(s: &JsValue, kind: &str, mode: &str, name: &str) {
     }
     let host = mjs::store_ref(&host_name);
     js::set_str(s, "note", "");
-    js::set_str(s, "mountNote", "");
 
     if kind == "branch" || kind == "worktree" {
         let repos = js_sys::Array::from(&js::get(&host, "repos"));
@@ -643,51 +663,35 @@ fn seed_from_host(s: &JsValue, kind: &str, mode: &str, name: &str) {
     }
 
     if kind == "sandbox" {
-        if mode == "edit" {
-            // The id came in; the form should open on the label that row is
-            // already showing, not a raw hex id.
-            let id = name;
-            let sandboxes = js_sys::Array::from(&js::get(&host, "sandboxes"));
-            for item in sandboxes.iter() {
-                if js::get_str(&item, "id") == id {
-                    let state = js::get_str(&item, "state");
-                    if !state.is_empty() { js::set_str(s, "status", &state); }
-                    let display = js::get_str(&item, "name");
-                    if !display.is_empty() {
-                        js::set_str(s, "name", &display);
+        // The instance's live row at open: what image it runs, its state,
+        // when it was created, and who inhabits it (PLAN55 D6).
+        for item in js_sys::Array::from(&js::get(&host, "sandboxes")).iter() {
+            if js::get_str(&item, "id") == name {
+                js::set_str(s, "image", &js::get_str(&item, "image"));
+                js::set_str(s, "status", &js::get_str(&item, "state"));
+                js::set_str(s, "createdAt", &js::get_str(&item, "createdAt"));
+                let agent = js::get_str(&item, "agent");
+                js::set_str(s, "agentName", &agent);
+                // The badge wears the agent's own mark when the list has it
+                // (it is loaded with the rail); the defaults keep the guide
+                // and an unknown agent drawing the same chip.
+                let mut icon = String::new();
+                let mut accent = String::new();
+                if !agent.is_empty() && mjs::has_store("agents") {
+                    for a in js_sys::Array::from(&js::get(&mjs::store_ref("agents"), "agents")).iter() {
+                        if js::get_str(&a, "name") == agent {
+                            icon = js::get_str(&a, "icon");
+                            accent = js::get_str(&a, "accentColor");
+                            break;
+                        }
                     }
-                    break;
                 }
+                js::set_str(s, "agentIcon", &icon);
+                js::set_str(s, "agentAccent", &accent);
+                break;
             }
         }
-        if !js::get_bool(&host, "sboxUp") {
-            js::set_str(
-                s,
-                "note",
-                "The sandbox service is not answering. Start sbox-b and reopen this.",
-            );
-        }
-        let wt = js::get_str(&host, "worktreeId");
-        let br = js::get_str(&host, "branchId");
-        js::set_str(
-            s,
-            "mountNote",
-            &if !wt.is_empty() {
-                format!(
-                    "Mounts the selected worktree at /work, read-write. Destroying this \
-                     sandbox will remove that worktree."
-                )
-            } else if !br.is_empty() {
-                "Mounts the selected repo at /work, read-write. Note this mounts the \
-                 clone as it currently stands — it does not switch its branch. Pick a \
-                 worktree if you want this box on a branch of its own."
-                    .to_string()
-            } else {
-                "Nothing is selected in the row below the composer, so this sandbox \
-                 will have no checkout mounted."
-                    .to_string()
-            },
-        );
+        return;
     }
 }
 
@@ -704,7 +708,7 @@ fn repos(_this: JsValue, _args: js_sys::Array) -> JsValue {
 /// `ready()` — is there enough here to submit?
 ///
 /// Per kind, because the required field differs: a repo needs a path, a
-/// branch needs a name and a repo, a sandbox needs a name.
+/// branch needs a name and a repo.
 fn ready(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let kind = js::get_str(&s, "kind");
@@ -715,7 +719,6 @@ fn ready(_this: JsValue, _args: js_sys::Array) -> JsValue {
             !js::get_str(&s, "name").trim().is_empty()
                 && !js::get_str(&s, "repoId").trim().is_empty()
         }
-        "sandbox" => !js::get_str(&s, "name").trim().is_empty(),
         "automation" => {
             !js::get_str(&s, "name").trim().is_empty()
                 && !js::get_str(&s, "prompt").trim().is_empty()
@@ -884,47 +887,6 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
                 }
                 send(&s, "automation-save", &fields)
             }
-            "sandbox" => {
-                let host = mjs::store_ref(&js::get_str(&s, "store"));
-                if name.is_empty() {
-                    crate::components::validation_info::note("tform", "error", "give the sandbox a name");
-                    mjs::redraw();
-                    return JsValue::UNDEFINED;
-                }
-                let editing = js::get_str(&s, "mode") == "edit";
-                if editing {
-                    // Rename only the label; sbox-b's id never changes.
-                    send(
-                        &s,
-                        "sandbox-rename",
-                        &[
-                            ("id", JsValue::from_str(&js::get_str(&s, "original"))),
-                            ("name", JsValue::from_str(&name)),
-                        ],
-                    )
-                } else {
-                    send(
-                        &s,
-                        "sandbox-add",
-                        &[
-                            ("name", JsValue::from_str(&name)),
-                            ("kind", JsValue::from_str(&js::get_str(&s, "image"))),
-                            ("network", JsValue::from_bool(js::get_bool(&s, "network"))),
-                            // The checkout comes from the composer row, not
-                            // from this form — the row is where that choice
-                            // lives.
-                            (
-                                "worktreeId",
-                                JsValue::from_str(&js::get_str(&host, "worktreeId")),
-                            ),
-                            (
-                                "branchId",
-                                JsValue::from_str(&js::get_str(&host, "branchId")),
-                            ),
-                        ],
-                    )
-                }
-            }
             _ => {}
         }
         return JsValue::UNDEFINED;
@@ -986,32 +948,6 @@ fn remove(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// One mapping for the label's icon and styling, including unknown states.
-fn status_appearance(status: &str) -> (&'static str, &'static str) {
-    match status.trim().to_ascii_lowercase().as_str() {
-        "creating" | "cloning" | "starting" => ("circle-notch", "is-busy"),
-        "ready" => ("check-circle", "is-ready"),
-        "stopped" => ("stop-circle", "is-idle"),
-        "error" | "failed" => ("x-circle", "is-error"),
-        "service unavailable" | "not found" => ("warning-circle", "is-warning"),
-        _ => ("question", "is-idle"),
-    }
-}
-
-fn status_icon(_this: JsValue, args: js_sys::Array) -> JsValue {
-    JsValue::from_str(status_appearance(&js::arg_str(&args, 0)).0)
-}
-
-fn status_class(_this: JsValue, args: js_sys::Array) -> JsValue {
-    JsValue::from_str(status_appearance(&js::arg_str(&args, 0)).1)
-}
-
-fn set_image(_this: JsValue, args: js_sys::Array) -> JsValue {
-    let image = js::arg_str(&args, 0);
-    if image == "headless" || image == "headed" { js::set_str(&mjs::store_ref(STORE), "image", &image); }
-    JsValue::UNDEFINED
-}
-
 /// One schedule preset chip: sets the cron field. Highlights when the field
 /// matches, reusing the agent editor's mode chips rather than growing a
 /// second chip style.
@@ -1056,7 +992,39 @@ fn set_cron(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// Update only the status, leaving a user's in-progress name edit untouched.
+/// One mapping for the status label's icon and styling, including unknown
+/// states. The states come from sbox-b's lifecycle (`creating` → `ready`),
+/// plus the two the listing itself can report: no service, no such box.
+fn status_appearance(status: &str) -> (&'static str, &'static str) {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "creating" | "cloning" | "starting" => ("circle-notch", "is-busy"),
+        "ready" => ("check-circle", "is-ready"),
+        "stopped" => ("stop-circle", "is-idle"),
+        "error" | "failed" => ("x-circle", "is-error"),
+        "service unavailable" | "not found" => ("warning-circle", "is-warning"),
+        _ => ("question", "is-idle"),
+    }
+}
+
+fn status_icon(_this: JsValue, args: js_sys::Array) -> JsValue {
+    JsValue::from_str(status_appearance(&js::arg_str(&args, 0)).0)
+}
+
+/// The state's label as a person says it: the lifecycle's `ready` is
+/// "running" (the box is up and serving — "ready for what?" is a question
+/// the old word left open).
+fn status_label(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let status = js::arg_str(&args, 0);
+    JsValue::from_str(if status == "ready" { "running" } else { &status })
+}
+
+fn status_class(_this: JsValue, args: js_sys::Array) -> JsValue {
+    JsValue::from_str(status_appearance(&js::arg_str(&args, 0)).1)
+}
+
+/// Keep the open Sandbox form's status current as the listing refreshes
+/// (the events feed republishes sandboxes every couple of seconds), leaving
+/// a user's in-progress editing untouched.
 pub(crate) fn sync_sandbox_status(host: &JsValue) {
     let form = mjs::store_ref(STORE);
     if !js::get_bool(&form, "open") || js::get_str(&form, "kind") != "sandbox"
@@ -1073,14 +1041,6 @@ pub(crate) fn sync_sandbox_status(host: &JsValue) {
     if js::get_str(&form, "status") != status { js::set_str(&form, "status", &status); }
 }
 
-/// Switch a successful create into the same editor used by the picker.
-pub(crate) fn sandbox_created(id: &str, state: &str, name: &str, host: &str) {
-    open_with("sandbox", "edit", host, id);
-    let form = mjs::store_ref(STORE);
-    if js::get_str(&form, "name") == id && !name.is_empty() { js::set_str(&form, "name", name); }
-    if !state.is_empty() { js::set_str(&form, "status", state); }
-}
-
 pub fn register() {
     css::inject("target-form", CSS);
     let mut d = Def::new().named("store tform");
@@ -1093,13 +1053,16 @@ pub fn register() {
         .str("heading", "")
         .str("icon", "folder-plus")
         .str("note", "")
-        .str("mountNote", "")
         .str("dangerNote", "")
         .str("error", "")
         .str("path", "")
         .str("repoId", "")
-        .str("image", "headless")
-        .str("status", "Unknown")
+        .str("image", "")
+        .str("status", "")
+        .str("agentName", "")
+        .str("agentIcon", "")
+        .str("agentAccent", "")
+        .str("createdAt", "")
         .str("cron", "")
         .str("prompt", "")
         .str("agent", "")
@@ -1108,13 +1071,12 @@ pub fn register() {
         .bool("enabled", true)
         .bool("catchUp", false)
         .num("requestId", 0.0)
-        .bool("network", true)
         .bool("create", true)
         .bool("busy", false)
         .bool("confirming", false)
         .method("statusIcon", status_icon)
         .method("statusClass", status_class)
-        .method("setImage", set_image)
+        .method("statusLabel", status_label)
         .method("setCron", set_cron)
         .method("openCreate", open_create)
         .method("openEdit", open_edit)

@@ -367,7 +367,7 @@ fn sessions() -> JsValue {
     out.into()
 }
 
-/// The guide's instances for the four composer pickers: `{ id, name, icon,
+/// The guide's instances for the three composer pickers: `{ id, name, icon,
 /// hint }`, which is the shape [`crate::components::picker`] reads.
 ///
 /// Enough of each to exercise the menu rather than illustrate it — more rows
@@ -387,11 +387,28 @@ fn targets(rows: &[(&str, &str, &str, &str)]) -> JsValue {
     out.into()
 }
 
-const SANDBOXES: &[(&str, &str, &str, &str)] = &[
-    ("sb-kiets", "Kiets-Spaceship", "desktop", "ready"),
-    ("sb-atlas", "atlas-ci", "desktop", "ready"),
-    ("sb-borealis", "borealis-replay", "desktop", "booting"),
-];
+/// The guide's sandboxes for the menu (PLAN55 rows): `{ id, image, state,
+/// session, agent }` — the shape the listing reads. Two live `sbox-video`
+/// containers so the per-image rollup has something to count, and one
+/// unassigned stopped box so the "unassigned" label and a zero count show.
+fn sandbox_rows() -> JsValue {
+    const ROWS: &[(&str, &str, &str, &str, &str)] = &[
+        ("sandbox2-4f1e88a1", "sbox-video:latest", "ready", "s-2", "video"),
+        ("sandbox2-9c02d7b4", "sbox-video:latest", "starting", "s-1", "video"),
+        ("sandbox2-b71ae305", "sbox-chewy:latest", "stopped", "", ""),
+    ];
+    let out = js_sys::Array::new();
+    for (id, image, state, session, agent) in ROWS {
+        let o = js::obj();
+        js::set_str(&o, "id", id);
+        js::set_str(&o, "image", image);
+        js::set_str(&o, "state", state);
+        js::set_str(&o, "session", session);
+        js::set_str(&o, "agent", agent);
+        out.push(&o);
+    }
+    out.into()
+}
 
 /// (id, name, cron, prompt, agent, model, timeoutMin, enabled)
 const AUTOMATIONS: &[(&str, &str, &str, &str, &str, &str, f64, bool)] = &[
@@ -496,7 +513,6 @@ fn drop_session(_this: JsValue, args: js_sys::Array) -> JsValue {
 /// menu whose check never moves teaches nothing about the check.
 fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     let field = match js::arg_str(&args, 0).as_str() {
-        "sandbox" => "sandboxId",
         "project" => "projectId",
         "worktree" => "worktreeId",
         "branch" => "branchId",
@@ -510,36 +526,27 @@ fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// The sandbox form behaves like the app without reaching the real service.
+/// The automation form behaves like the app without reaching the real
+/// service: writes land in the samples store so the guide's rail redraws.
 fn save_target_sample(_this: JsValue, args: js_sys::Array) -> JsValue {
     let action = js::arg_str(&args, 0);
     let payload = args.get(1);
     let host = mjs::store_ref(STORE);
-    if action == "sandbox-add" {
-        let name = js::get_str(&payload, "name");
-        let id = "sample-created-sandbox";
-        let row = js::obj();
-        js::set_str(&row, "id", id);
-        js::set_str(&row, "name", &name);
-        js::set_str(&row, "state", "starting");
-        js::set_str(&row, "hint", "starting");
-        js::set_str(&row, "icon", "desktop");
-        let rows = js_sys::Array::from(&js::get(&host, "sandboxes"));
-        rows.push(&row.into());
-        js::set(&host, "sandboxes", &rows.into());
-        crate::components::target_form::sandbox_created(id, "starting", &name, STORE);
-    } else if action == "sandbox-rename" {
-        let id = js::get_str(&payload, "id");
-        for row in js_sys::Array::from(&js::get(&host, "sandboxes")).iter() {
-            if js::get_str(&row, "id") == id { js::set_str(&row, "name", &js::get_str(&payload, "name")); }
-        }
-    } else if action == "sandbox-remove" {
+    if action == "sandbox-remove" {
+        // The guide's Destroy behaves like the app: the row goes, the
+        // groups recompute, the form closes.
         let id = js::get_str(&payload, "id");
         let rows = js_sys::Array::new();
         for row in js_sys::Array::from(&js::get(&host, "sandboxes")).iter() {
             if js::get_str(&row, "id") != id { rows.push(&row); }
         }
-        js::set(&host, "sandboxes", &rows.into());
+        let rows_js: JsValue = rows.into();
+        js::set(&host, "sandboxes", &rows_js);
+        js::set(
+            &host,
+            "sandboxGroups",
+            &crate::components::sandboxes_menu::group_rows(&rows_js),
+        );
         js::set_bool(&mjs::store_ref("tform"), "open", false);
     } else if action == "automation-save" {
         // Mirror the server: an id replaces, no id mints one.
@@ -915,14 +922,15 @@ pub fn register() {
         .val("accents", &accents.into())
         .val("icons", &icons.into())
         // ── the composer's target row ─────────────────────────────
-        .val("sandboxes", &targets(SANDBOXES))
+        .val("sandboxes", &sandbox_rows())
+        .val("sandboxGroups", &crate::components::sandboxes_menu::group_rows(&sandbox_rows()))
+        .val("sandboxOpen", &js::obj().into())
         .val("automations", &sample_automations())
         .val("projects", &targets(PROJECTS))
         .val("worktrees", &targets(WORKTREES))
         .val("repos", &targets(REPOS))
         .bool("sboxUp", true)
         .val("repoBranches", &targets(BRANCHES))
-        .str("sandboxId", "sb-kiets")
         .str("projectId", "psicom/chat")
         // Nothing chosen, so the guide shows the null row checked too.
         .str("worktreeId", "")
@@ -1029,7 +1037,8 @@ pub fn register() {
         .method("createTarget", create_target)
         .method("persistComposerSettings", inert)
         // The guide's rail heads have buttons; the guide creates nothing.
-        .method("noop", inert);
+        .method("noop", inert)
+        .method("toggleSandboxGroup", crate::components::sandboxes_menu::toggle_group);
     mjs::store(STORE, &d.finish());
 }
 

@@ -46,7 +46,8 @@ button.rail-title:focus-visible { outline: 2px solid var(--accent); outline-offs
    negative margin to stack heads flush — which dragged the next group up
    over this one and made every gap measurement a liar.) */
 .project-tree.is-collapsed > .rail-head,
-.agents-menu.is-collapsed > .rail-head { margin-bottom: 0; }
+.agents-menu.is-collapsed > .rail-head,
+.sandboxes-menu.is-collapsed > .rail-head { margin-bottom: 0; }
 .rail-add {
   width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;

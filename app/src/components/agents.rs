@@ -58,6 +58,9 @@ const TEXT_FIELDS: &[&str] = &[
     // means the project root. Trimmed on save so a pasted path with trailing
     // spaces points where it was meant to.
     "cwd",
+    // PLAN55 D1: the agent's Containerfile, an absolute host path. Blank
+    // means no sandbox — the agent runs on the host.
+    "containerFile",
 ];
 
 fn blank_draft() -> JsValue {

@@ -37,8 +37,9 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::components::{
-    agent_editor, agents_menu, automations_menu, identity_switcher, mode_toggle, perf_badge,
-    profile_panel, project_tree, session_editor, session_panel, share_dialog, tab, target_form,
+    agent_editor, agents_menu, automations_menu, identity_switcher, lightbox, mode_toggle,
+    perf_badge, profile_panel, project_tree, sandboxes_menu, session_editor, session_panel,
+    share_dialog, tab, target_form,
 };
 use crate::css;
 
@@ -105,6 +106,7 @@ pub const CSS: &str = r#"
   overflow-y: auto;
 }
 .home-agents { padding: 0 14px; }
+.home-sandboxes { padding: 0 14px; }
 .home-automations { padding: 0 14px; }
 
 /* ---- centre column ----------------------------------------------
@@ -241,6 +243,7 @@ pub const CSS: &str = r#"
   .home-rail-content { gap: 12px; }
   .home-projects { padding: 10px 6px 4px; }
   .home-agents { padding: 0 6px 10px; }
+  .home-sandboxes { padding: 0 6px 10px; }
   .home-automations { padding: 0 6px 10px; }
   /* Keep the center column's internal z-index layers beneath the overlay. */
   .home-col { margin-right: 8px; isolation: isolate; }
@@ -269,15 +272,40 @@ fn rail() -> Node {
             // are filed rather than by when they were touched, so the top of
             // the rail always answers "what am I working in" at a glance.
             m("div").class("home-rail-content").kids(vec![
-                m("div").class("home-projects").child(project_tree::tree(
-                    LIVE,
-                    &format!("{LIVE}.previewSession({{}})"),
-                    &format!("{LIVE}.createTarget('project')"),
-                )),
-                m("div").class("home-agents").child(agents_menu::agents_menu_live()),
+                // A section with nothing in it recedes (progressive
+                // disclosure): a user who can see no projects, agents,
+                // sandboxes or automations gets a clean rail, and each
+                // section surfaces as the admin grants access. One exception,
+                // so the rule cannot lock anyone out of creation: a section
+                // whose `+` the user may use stays — it is the only way to
+                // make the first one. The Sandboxes section never has a `+`
+                // (agent-owned, PLAN55 D4), so its rule is simply "has a
+                // row".
+                m("div").class("home-projects")
+                    .show(&format!(
+                        "($store.ptree.rows({LIVE}.projects, {LIVE}.sessions).length > 0 \
+                          || $store.ident.can('project.create'))"
+                    ))
+                    .child(project_tree::tree(
+                        LIVE,
+                        &format!("{LIVE}.previewSession({{}})"),
+                        &format!("{LIVE}.createTarget('project')"),
+                    )),
+                m("div").class("home-agents")
+                    .show("($store.agents.agents.length > 0 || $store.ident.can('agent.create'))")
+                    .child(agents_menu::agents_menu_live()),
+                // The sandboxes listing (PLAN55): each running container with
+                // the (session, agent) it serves, grouped per image. Read-only
+                // — sandboxes are agent-owned and launch themselves, so there
+                // is nothing to create or name here (D3/D4/D10).
+                m("div").class("home-sandboxes")
+                    .show(&format!("{LIVE}.sandboxGroups.length > 0"))
+                    .child(sandboxes_menu::sandboxes_menu(LIVE)),
                 // Schedules below the people: each row is a named prompt on a
                 // cron, and firing one opens a fresh session that runs it.
-                m("div").class("home-automations").child(automations_menu::automations_menu_live()),
+                m("div").class("home-automations")
+                    .show("($store.live.automations.length > 0 || $store.ident.can('automation.create'))")
+                    .child(automations_menu::automations_menu_live()),
             ]),
             // Pinned to the bottom of the rail: it is not part of the
             // conversation, and it is the one item whose position should
@@ -395,7 +423,7 @@ pub fn shell() -> Node {
                 "(($store.{STORE}.asideOpen ? '' : 'aside-collapsed') + ($store.{STORE}.railOpen ? '' : ' rail-collapsed'))"
             ),
         )
-        .kids(vec![rail(), main_col(), aside()])
+        .kids(vec![rail(), main_col(), aside(), lightbox::lightbox()])
 }
 
 /// `toggleAside`: flip the right column open/closed.
@@ -426,7 +454,8 @@ fn section_open(key: &str) -> bool {
 
 /// `toggleSection(which)` — collapse/expand one left-rail section.
 ///
-/// `which` is `"projects"`, `"agents"` or `"automations"`; anything else is ignored.
+/// `which` is `"projects"`, `"agents"`, `"sandboxes"` or `"automations"`;
+/// anything else is ignored.
 /// Shell chrome, like the rail toggles above — the flag lives here rather
 /// than in the data stores because collapsing a section hides a view, it
 /// does not change what the view holds.
@@ -435,6 +464,7 @@ fn toggle_section(_this: JsValue, args: js_sys::Array) -> JsValue {
     let key = match js::arg_str(&args, 0).as_str() {
         "projects" => "projectsOpen",
         "agents" => "agentsOpen",
+        "sandboxes" => "sandboxesOpen",
         "automations" => "automationsOpen",
         _ => return JsValue::UNDEFINED,
     };
@@ -461,6 +491,7 @@ pub fn register() {
         .bool("railOpen", true)
         .bool("projectsOpen", section_open("projectsOpen"))
         .bool("agentsOpen", section_open("agentsOpen"))
+        .bool("sandboxesOpen", section_open("sandboxesOpen"))
         .bool("automationsOpen", section_open("automationsOpen"))
         .method("toggleAside", toggle_aside)
         .method("toggleRail", toggle_rail)

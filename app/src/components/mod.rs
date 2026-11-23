@@ -19,6 +19,7 @@ pub mod hint_text;
 pub mod history_tree;
 pub mod identity_switcher;
 pub mod item_group;
+pub mod lightbox;
 pub mod live;
 pub mod markdown;
 pub mod mode_toggle;
@@ -94,6 +95,7 @@ pub fn register() {
     hint_text::register();
     history_tree::register();
     identity_switcher::register();
+    lightbox::register();
     live::register();
     markdown::register();
     mode_toggle::register();

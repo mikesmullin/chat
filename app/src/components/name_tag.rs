@@ -28,6 +28,19 @@ pub const CSS: &str = r#"
 /* When, in the dim the rest of the chrome uses: it is a footnote to the
    byline, not a second thing being announced. */
 :is(#sb, #home) .name-tag-when { color: var(--gray-dim); }
+/* The author mark as a control: a button wearing the byline's clothes
+   exactly — no chrome of its own, just a pointer and a focus ring. Only
+   button chrome is reset here: `font: inherit` would outrank `.name-tag`'s
+   own 11px/18px (this selector is one class more specific) and the mark
+   would stop matching a byline.
+   */
+:is(#sb, #home) button.name-tag {
+  background: transparent; border: 0; padding: 0;
+  font-family: inherit; text-align: left; cursor: pointer;
+}
+:is(#sb, #home) button.name-tag:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+}
 "#;
 
 fn who(icon: &str, name: &str) -> Node {
@@ -35,6 +48,20 @@ fn who(icon: &str, name: &str) -> Node {
         Node::icon_dyn(icon),
         m("span").text(name),
     ])
+}
+
+/// The author mark as a **control**: the same glyph and ink as [`mention`],
+/// as a button — the sandbox form's agent mark links to the agent's own
+/// editor. The parts are expressions, so the caller resolves them however
+/// it knows them (`mention` computes them from a handle; the form carries
+/// them from its seed).
+pub fn who_link(icon: &str, accent: &str, name: &str, on: &str) -> Node {
+    m("button")
+        .class("name-tag")
+        .attr("type", "button")
+        .bind("style", &format!("('--agent-accent: ' + ({accent}))"))
+        .on("click", on)
+        .child(who(icon, name))
 }
 
 /// The same author mark used on a byline, for a mention in a status line.

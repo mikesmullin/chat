@@ -75,7 +75,8 @@ use crate::components::{
     user_card, validation_info,
 };
 
-/// the two-column shell: rail (left) + centred content (right).
+/// the two-column shell: rail (left) + centred content (right), plus the
+/// app-wide image lightbox (the guide's image demos open it too).
 fn shell(active: &str, content: Node) -> Node {
     m("div")
         .attr("id", "sb")
@@ -85,6 +86,7 @@ fn shell(active: &str, content: Node) -> Node {
             m("main")
                 .class("sb-content")
                 .child(m("section").class("feature").child(content)),
+            crate::components::lightbox::lightbox(),
         ])
 }
 
@@ -250,12 +252,13 @@ pub fn register(rt: &mut Runtime) {
         )
     });
 
-    // the sandboxes menu (one group per host computer).
+    // the sandboxes menu (PLAN55: containers grouped per image, each with
+    // the session/agent it serves) over the samples store.
     rt.route("/storybook/sandboxes", "Sandboxes Menu", |_| {
         route_def(
             "route /storybook/sandboxes",
             "Sandboxes Menu",
-            sandboxes_menu::sandboxes_menu(),
+            sandboxes_menu::sandboxes_menu(samples::EXPR),
         )
     });
 
@@ -391,10 +394,6 @@ pub fn register(rt: &mut Runtime) {
     // the inspector form behind the pickers' Create and Edit actions.
     rt.route("/storybook/target-form", "Target Form", |_| {
         route_def("route /storybook/target-form", "Target Form", target_form::demo())
-    });
-
-    rt.route("/storybook/sandbox-form", "Sandbox Form", |_| {
-        route_def("route /storybook/sandbox-form", "Sandbox Form", target_form::demo_sandbox())
     });
 
     rt.route("/storybook/automation-form", "Automation Form", |_| {

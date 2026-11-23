@@ -410,9 +410,21 @@ pub fn agent_editor() -> Node {
             // resolve under the project root, as `${projectRoot}` expands.
             field(
                 "Workspace root",
-                "file-io and the shell start here; blank = project root",
+                "file-io and the shell start here; blank = project root \
+                 — host-only (no effect on sandboxes)",
                 &format!("{ST}.draft.cwd"),
                 "/workspace/blz",
+                0,
+            ),
+            // PLAN55 D1: the agent's Containerfile (absolute host path).
+            // Set, and every turn of this agent runs in a container built
+            // from `sbox-<this file's directory>:latest` — one per session,
+            // launched at its first turn there. Empty = the host, unchanged.
+            field(
+                "Containerfile",
+                "absolute host path; empty = runs on the host",
+                &format!("{ST}.draft.containerFile"),
+                "/workspace/models/sbox/video/Containerfile",
                 0,
             ),
             field(

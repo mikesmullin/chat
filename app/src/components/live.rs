@@ -83,9 +83,10 @@ fn open_session_by_id(id: &str) {
         }
         // Where this conversation works. Restored from the session rather
         // than left as whatever the last tab happened to show — these are
-        // per-conversation settings, and the turn loop reads `sandboxId` to
-        // decide whose filesystem the file and shell tools mean.
-        for field in ["project", "sandboxId", "worktreeId", "branchId"] {
+        // per-conversation settings. There is no session sandbox any more
+        // (PLAN55 D2): an agent's container is per (session → agent) and
+        // owned by the agents plane.
+        for field in ["project", "worktreeId", "branchId"] {
             let store_field = if field == "project" { "projectId" } else { field };
             js::set_str(&s, store_field, &js::get_str(&meta, field));
         }
@@ -993,12 +994,21 @@ pub fn register() {
         .bool("notifyEnabled", crate::components::notification_toggle::enabled())
         .val("unreadSessions", &crate::components::notification_toggle::unread())
         // ── the composer's target row ─────────────────────────────────
-        // Where this session works: which sandbox, which folder it is filed
-        // under, which checkout gets mounted. Empty lists until the pickers
-        // are wired to their services — the row renders, every menu shows
-        // its null answer and its create action, and nothing claims an
-        // instance exists that does not.
+        // Where this session works: which folder it is filed under, which
+        // checkout gets mounted. Empty lists until the pickers are wired to
+        // their services — the row renders, every menu shows its null answer
+        // and its create action, and nothing claims an instance exists that
+        // does not.
+        //
+        // `sandboxes` + `sandboxGroups` are the left-rail sandboxes menu's
+        // data (PLAN55 D6): container rows with their serving (session,
+        // agent), grouped per image — computed by `sandboxes_menu::group_rows`
+        // whenever rows arrive.
         .val("sandboxes", &js_sys::Array::new().into())
+        .val("sandboxGroups", &js_sys::Array::new().into())
+        // Which image groups are expanded in the sandboxes menu (absent =
+        // open) — collapse state, not data, so the recompute cannot wipe it.
+        .val("sandboxOpen", &js::obj().into())
         .val("projects", &js_sys::Array::new().into())
         .val("worktrees", &js_sys::Array::new().into())
         .val("repoBranches", &js_sys::Array::new().into())
@@ -1010,7 +1020,6 @@ pub fn register() {
         // dead service look identical in a menu; this is what tells them
         // apart.
         .bool("sboxUp", false)
-        .str("sandboxId", "")
         .str("projectId", "")
         .str("worktreeId", "")
         .str("branchId", "")
@@ -1163,7 +1172,8 @@ pub fn register() {
         .method("stop", stop)
         .method("decideApproval", decide_approval)
         .method("setModel", set_model)
-        .method("refreshModels", refresh_models);
+        .method("refreshModels", refresh_models)
+        .method("toggleSandboxGroup", crate::components::sandboxes_menu::toggle_group);
     mjs::store(STORE, &d.finish());
 }
 
@@ -1685,6 +1695,15 @@ fn apply_targets(v: &JsValue) {
     if let Some(up) = up.as_bool() {
         if js::get_bool(&s, "sboxUp") != up { js::set_bool(&s, "sboxUp", up); }
     }
+    // The sandboxes menu groups rows per image (PLAN55 D6's rollup). One
+    // computation, shared with the samples store — the listing and its
+    // rollup cannot disagree because they are the same data.
+    let groups = crate::components::sandboxes_menu::group_rows(&js::get(&s, "sandboxes"));
+    if !same_json(&js::get(&s, "sandboxGroups"), &groups) {
+        js::set(&s, "sandboxGroups", &groups);
+    }
+    // An open Sandbox form tracks its container's state in real time (the
+    // feed republishes every couple of seconds).
     crate::components::target_form::sync_sandbox_status(&s);
 }
 
@@ -1702,36 +1721,19 @@ pub(crate) fn apply_sandboxes(value: &JsValue) { apply_targets(value); }
 fn save_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     let action = js::arg_str(&args, 0);
     let payload = args.get(1);
-    let name = js::get_str(&payload, "name");
     let form = mjs::store_ref("tform");
     let request_id = js::get_num(&form, "requestId");
     js::set_bool(&form, "busy", true);
-    let callback_action = action.clone();
     // One callback serves both endpoints: each answers the fresh listing,
-    // and `apply_targets` adopts whichever keys are present. Moving the
-    // callback into either branch is legal because only one runs.
+    // and `apply_targets` adopts whichever keys are present.
     let callback = move |v: JsValue| {
-        let action = &callback_action;
         let form = mjs::store_ref("tform");
         let same_form = js::get_bool(&form, "open") && js::get_num(&form, "requestId") == request_id;
         if js::get(&v, "ok").as_bool().unwrap_or(false) {
             apply_targets(&v);
             if same_form {
                 js::set_bool(&form, "busy", false);
-                if action == "sandbox-add" {
-                    let id = js::get_str(&v, "id");
-                    if id.is_empty() {
-                        crate::components::validation_info::note("tform", "error", "The sandbox service did not return an ID.");
-                    } else {
-                        let state = js::get_str(&v, "state");
-                        crate::components::target_form::sandbox_created(&id, &state, &name, "live");
-                    }
-                } else if action == "sandbox-rename" {
-                    // Keep the editor visible while status continues to update.
-                    js::set_str(&form, "error", "");
-                } else {
-                    js::set_bool(&form, "open", false);
-                }
+                js::set_bool(&form, "open", false);
             }
         } else if same_form {
             js::set_bool(&form, "busy", false);
@@ -1884,7 +1886,7 @@ fn rename_tree_row(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `pickTarget(kind, id)` — the composer's sandbox / project / worktree /
+/// `pickTarget(kind, id)` — the composer's project / worktree /
 /// branch row.
 ///
 /// Records the choice and closes the menu. It does **not** yet persist: the
@@ -1893,7 +1895,6 @@ fn rename_tree_row(_this: JsValue, args: js_sys::Array) -> JsValue {
 /// dangling id in the session file.
 fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     let field = match js::arg_str(&args, 0).as_str() {
-        "sandbox" => "sandboxId",
         "project" => "projectId",
         "worktree" => "worktreeId",
         "branch" => "branchId",
@@ -1904,10 +1905,10 @@ fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::set_str(&s, field, &value);
     js::call(&mjs::store_ref("picker"), "close", &[]);
     mjs::redraw();
-    // The sandbox, worktree and branch ride the composer-settings path, the
-    // same one the model and allowlist pickers use. The sandbox especially
-    // has to be durable: the turn loop reads it to decide whether the file
-    // and shell tools mean this machine or a container, so a selection that
+    // The worktree and branch ride the composer-settings path, the
+    // same one the model and allowlist pickers use. They have to be
+    // durable: the seam mounts the session's checkout into the agent's
+    // sandbox from them (PLAN55), so a selection that
     // lived only in the tab would silently stop applying on reload.
     if field != "projectId" {
         let id = js::get_str(&s, "activeId");
@@ -2317,9 +2318,10 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
     // includes the reader is a list of the room, not of who they are
     // talking to — and the one entry they can do nothing about.
     //
-    // There is one human for now, so "me" is the `user` seat. When several
-    // humans can share a conversation this becomes "the viewer", and the
-    // other humans start appearing here, which is the intended shape.
+    // "Me" is the generic `user` seat; a **named** user seat is someone
+    // invited in — the "other humans" this roster always meant to show
+    // (a `@mention` or `/invite` of a person seats them exactly like an
+    // agent).
     let others = js_sys::Array::new();
     let active_others = js_sys::Array::new();
     // handle -> colour, so a row can be tinted without searching the roster
@@ -2333,22 +2335,44 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
         let id = js::get(&p, "id").as_f64().unwrap_or(-1.0);
         let handle = js::get_str(&p, "handle");
         js::set_str(&by_id, &format!("{id}"), &handle);
+        let kind = js::get_str(&p, "kind");
+        // A person wears the person's mark whatever the row says: a user
+        // seat has no agent icon or accent to copy.
+        let is_person = kind == "user";
         let colour = js::get_str(&p, "accentColor");
         js::set_str(
             &accents,
             &handle,
-            if colour.is_empty() { crate::components::agents::DEFAULT_ACCENT } else { &colour },
+            if is_person {
+                crate::components::presence::USER_ACCENT
+            } else if colour.is_empty() {
+                crate::components::agents::DEFAULT_ACCENT
+            } else {
+                &colour
+            },
         );
         let icon = js::get_str(&p, "icon");
         js::set_str(
             &icons,
             &handle,
-            if icon.is_empty() { crate::components::agents::DEFAULT_ICON } else { &icon },
+            if is_person {
+                crate::components::presence::USER_ICON
+            } else if icon.is_empty() {
+                crate::components::agents::DEFAULT_ICON
+            } else {
+                &icon
+            },
         );
-        let kind = js::get_str(&p, "kind");
         if kind == "agent" {
             if js::get_bool(&p, "active") {
                 agents += 1.0;
+                active_others.push(&p);
+            }
+            others.push(&p);
+        } else if is_person && handle != "user" {
+            // The other humans: seated people appear in the roster bar.
+            // The generic `user` seat stays out — that one is me.
+            if js::get_bool(&p, "active") {
                 active_others.push(&p);
             }
             others.push(&p);
@@ -2667,8 +2691,8 @@ fn run_command(s: &JsValue, line: &str) {
             js::set_str(s, "draft", "");
             notice(
                 s,
-                "/invite @name — add an agent to this conversation\n\
-                 /kick @name — remove an agent (/uninvite also works)\n\
+                "/invite @name — add an agent or person to this conversation\n\
+                 /kick @name — remove an agent or person (/uninvite also works)\n\
                  /help — this list",
             );
         }
@@ -2679,49 +2703,41 @@ fn run_command(s: &JsValue, line: &str) {
     }
 }
 
-/// `/invite @a @b` — seat agents in the open conversation.
+/// `/invite @a @b` — seat agents or people in the open conversation.
+///
+/// The name is resolved server-side, the way a mention resolves it: an agent
+/// of that name first, a user next — seating either kind is the same act.
+/// The answers this side keeps are "already here" (the roster is right
+/// here) and whatever the server says about the rest.
 fn invite_command(s: &JsValue, names: &[String]) {
     let session = js::get_str(s, "activeId");
     if session.is_empty() {
-        notice(s, "Open a conversation first, then /invite an agent into it.");
+        notice(s, "Open a conversation first, then /invite someone into it.");
         return;
     }
     if names.is_empty() {
-        notice(s, "Usage: /invite @name — the Agents rail lists what you can invite.");
+        notice(s, "Usage: /invite @name — an agent's handle, or a person's name.");
         return;
     }
 
-    // Check against the defined agents before calling: "no agent named X"
-    // here is a better answer than a seat pointing at nothing.
-    let defined = js_sys::Array::from(&js::get(&mjs::store_ref("agents"), "agents"));
-    let known: Vec<String> = defined.iter().map(|a| js::get_str(&a, "name")).collect();
     let seats = js_sys::Array::from(&js::get(s, "others"));
     let seated: Vec<String> = seats.iter().filter(|p| js::get_bool(p, "active"))
         .map(|p| js::get_str(&p, "handle"))
         .collect();
 
     let mut invited: Vec<String> = Vec::new();
-    let mut unknown: Vec<String> = Vec::new();
     let mut already: Vec<String> = Vec::new();
     for name in names {
         if invited.contains(name) || seated.contains(name) {
             already.push(name.clone());
-        } else if known.contains(name) {
-            invited.push(name.clone());
         } else {
-            unknown.push(name.clone());
+            invited.push(name.clone());
         }
     }
 
     let mut said: Vec<String> = Vec::new();
     if !already.is_empty() {
         said.push(format!("already here: @{}", already.join(", @")));
-    }
-    if !unknown.is_empty() {
-        said.push(format!(
-            "no agent named @{} — define it with + in the Agents rail",
-            unknown.join(", @")
-        ));
     }
     if invited.is_empty() {
         if !said.is_empty() {
@@ -2731,44 +2747,48 @@ fn invite_command(s: &JsValue, names: &[String]) {
     }
 
     js::set_str(s, "draft", "");
-    // One request per agent; the roster is re-read once at the end rather
+    // One request per name; the roster is re-read once at the end rather
     // than after each, so the bar does not flicker through intermediate
-    // states on a multi-agent invite.
+    // states on a multi-name invite.
     let total = invited.len();
     let results = std::rc::Rc::new(std::cell::RefCell::new((Vec::<String>::new(), Vec::<String>::new())));
     for name in invited.clone() {
         let payload = js::obj();
-        js::set_str(&payload, "kind", "agent");
-        js::set_str(&payload, "agentName", &name);
-        js::set_str(&payload, "handle", &name);
-        let inactive_id = seats.iter().find(|p| js::get_str(p, "handle") == name && !js::get_bool(p, "active"))
-            .and_then(|p| js::get(&p, "id").as_f64());
-        let path = if let Some(pid) = inactive_id {
-            js::set_bool(&payload, "active", true);
-            format!("/api/participants/{pid}")
-        } else {
-            format!("/api/sessions/{session}/participants")
-        };
+        // The server resolves the name — an agent first, a person next —
+        // and re-seats a name that is already in the room.
+        js::set_str(&payload, "name", &name);
         let session = session.clone();
         let results = std::rc::Rc::clone(&results);
         let said = said.clone();
-        rustex1_kit::api::post_json(&path, &payload.into(), move |v| {
-            let mut results = results.borrow_mut();
-            if js::get_bool(&v, "ok") { results.0.push(name.clone()); }
-            else { results.1.push(name.clone()); }
-            if results.0.len() + results.1.len() < total { return; }
-            load_roster(&session);
-            let mut messages = Vec::new();
-            if !results.0.is_empty() { messages.push(format!("Invited @{}", results.0.join(", @"))); }
-            if !results.1.is_empty() { messages.push(format!("Could not invite @{}", results.1.join(", @"))); }
-            messages.extend(said.clone());
-            let message = messages.join("; ");
-            if !results.0.is_empty() { record_notice(&session, &message); }
-            else {
-                let s = mjs::store_ref(STORE);
-                if js::get_str(&s, "activeId") == session { notice(&s, &message); }
-            }
-        });
+        rustex1_kit::api::post_json(
+            &format!("/api/sessions/{session}/participants"),
+            &payload.into(),
+            move |v| {
+                let mut results = results.borrow_mut();
+                if js::get_bool(&v, "ok") {
+                    results.0.push(name.clone());
+                } else {
+                    let why = js::get_str(&v, "error");
+                    results.1.push(if why.is_empty() {
+                        format!("Could not invite @{name}")
+                    } else {
+                        format!("{why}")
+                    });
+                }
+                if results.0.len() + results.1.len() < total { return; }
+                load_roster(&session);
+                let mut messages = Vec::new();
+                if !results.0.is_empty() { messages.push(format!("Invited @{}", results.0.join(", @"))); }
+                messages.extend(results.1.clone());
+                messages.extend(said.clone());
+                let message = messages.join("; ");
+                if !results.0.is_empty() { record_notice(&session, &message); }
+                else {
+                    let s = mjs::store_ref(STORE);
+                    if js::get_str(&s, "activeId") == session { notice(&s, &message); }
+                }
+            },
+        );
     }
 }
 
