@@ -78,7 +78,9 @@ pub const CSS: &str = r#"
 pub fn panel() -> Node {
     m("div")
         .class("share-panel")
-        .show(&format!("{ST}.open"))
+        // The share form lives below the Profile form — it appears with
+        // it, and nowhere else (for now).
+        .show("$store.ident.panelOpen")
         .kids(vec![
             m("div").class("share-head").kids(vec![
                 Node::icon("users-three").class("ph ph-users-three"),
@@ -207,10 +209,16 @@ fn open_for_active(_this: JsValue, _args: js_sys::Array) -> JsValue {
 
 fn open(_this: JsValue, args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
-    js::set_bool(&s, "open", true);
     js::set_str(&s, "kind", &js::arg_str(&args, 0));
     js::set_str(&s, "name", &js::arg_str(&args, 1));
     js::set_str(&s, "error", "");
+    // Below the Profile form means *with* the Profile form: a Share…
+    // button opens that page too (one panel at a time).
+    js::set_bool(&mjs::store_ref("agents"), "open", false);
+    js::set_str(&mjs::store_ref("agents"), "selected", "");
+    js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
+    js::set_bool(&mjs::store_ref("settings"), "open", false);
+    js::set_bool(&mjs::store_ref("ident"), "panelOpen", true);
     js::set_bool(&mjs::store_ref("home"), "asideOpen", true);
     load(JsValue::UNDEFINED, js_sys::Array::new());
     redraw()

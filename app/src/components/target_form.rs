@@ -517,6 +517,9 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     let s = mjs::store_ref(STORE);
     js::set_num(&s, "requestId", js::get_num(&s, "requestId") + 1.0);
     js::set_bool(&s, "open", true);
+    // One panel at a time: the inspector shows what you last selected.
+    js::set_bool(&mjs::store_ref("ident"), "panelOpen", false);
+    js::set_bool(&mjs::store_ref("settings"), "open", false);
     js::set_str(&s, "kind", kind);
     js::set_str(&s, "mode", mode);
     js::set_str(&s, "store", store);

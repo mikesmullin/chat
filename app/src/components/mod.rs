@@ -30,6 +30,7 @@ pub mod perf_badge;
 pub mod picker;
 pub mod pie_ring_graph;
 pub mod presence;
+pub mod profile_panel;
 pub mod project_tree;
 pub mod prompt_card;
 pub mod queued_card;
@@ -82,6 +83,7 @@ pub fn register() {
     fold_card::register();
     name_tag::register();
     notification_toggle::register();
+    profile_panel::register();
     project_tree::register();
     prompt_card::register();
     queued_card::register();

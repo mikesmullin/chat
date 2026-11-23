@@ -38,7 +38,7 @@ use rustex1_kit::{js, mjs};
 
 use crate::components::{
     agent_editor, agents_menu, automations_menu, identity_switcher, mode_toggle, perf_badge,
-    project_tree, session_editor, session_panel, share_dialog, tab, target_form,
+    profile_panel, project_tree, session_editor, session_panel, share_dialog, tab, target_form,
 };
 use crate::css;
 
@@ -371,6 +371,7 @@ fn aside() -> Node {
             m("div").class("home-aside-body").kids(vec![
                 agent_editor::agent_editor(),
                 agent_editor::settings_panel(),
+                profile_panel::panel(),
                 target_form::panel(),
                 session_editor::panel(),
                 share_dialog::panel(),

@@ -133,6 +133,7 @@ pub fn register() {
     css::inject("identity-switcher", CSS);
     let mut d = Def::new().named("store ident");
     d.bool("open", false)
+        .bool("panelOpen", false)
         .bool("loggedIn", false)
         .bool("admin", false)
         .bool("masquerade", false)
@@ -280,17 +281,26 @@ fn can(_this: JsValue, args: js_sys::Array) -> JsValue {
 /// (below) this account's devices and the admin's shields.
 fn open_profile(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_bool(&mjs::store_ref(STORE), "open", false);
-    // The settings store owns the panel; its `openPanel` does the
-    // one-panel-at-a-time dance this store must not duplicate.
-    let settings = mjs::store_ref("settings");
-    if let Ok(f) = js_sys::Reflect::get(&settings, &"openPanel".into()) {
-        if f.is_function() {
-            let f: &js_sys::Function = f.unchecked_ref();
-            let _ = js_sys::Reflect::apply(f, &settings, &js_sys::Array::new());
+    // One panel at a time: the inspector shows what you last selected.
+    js::set_bool(&mjs::store_ref("agents"), "open", false);
+    js::set_str(&mjs::store_ref("agents"), "selected", "");
+    js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
+    js::set_bool(&mjs::store_ref("settings"), "open", false);
+    js::set_bool(&mjs::store_ref(STORE), "panelOpen", true);
+    js::set_bool(&mjs::store_ref("home"), "asideOpen", true);
+    // The share form rides below the profile: seed it with whatever is on
+    // screen (openForActive), unless a Share… button already named one.
+    let share = mjs::store_ref("share");
+    if js::get_str(&share, "name").is_empty() {
+        if let Ok(f) = js_sys::Reflect::get(&share, &"openForActive".into()) {
+            if f.is_function() {
+                let f: &js_sys::Function = f.unchecked_ref();
+                let _ = js_sys::Reflect::apply(f, &share, &js_sys::Array::new());
+            }
         }
     }
-    // Refresh what the profile shows — devices and shields move between
-    // opens, and a list read once at boot is a list that lies.
+    // Refresh what the profile shows — devices move between opens, and a
+    // list read once at boot is a list that lies.
     load_devices(JsValue::UNDEFINED, js_sys::Array::new());
     redraw()
 }

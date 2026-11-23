@@ -36,6 +36,7 @@
 //!   /storybook/queued-card -> Queued Card (waiting for a model slot)
 //!   /storybook/identity-switcher -> Identity Switcher (the account chip)
 //!   /storybook/share-dialog -> Share Dialog (who else can reach this)
+//!   /storybook/profile-panel -> Profile Panel (the per-user form)
 //!   /storybook/user-card -> User Card (user prompt bubble)
 //!   /storybook/assistant-card -> Assistant Card (response block)
 //!   /storybook/reasoning-card -> Reasoning Card (thinking block)
@@ -68,7 +69,7 @@ use crate::components::{
     share_dialog,
     target_form,
     field, hint_text, history_tree, item_group, label, nav_rail, notification_toggle, perf_badge, radio_input, range_input,
-    presence, reasoning_card, relative_timestamp, sandboxes_menu, session, session_editor, session_panel,
+    presence, profile_panel, reasoning_card, relative_timestamp, sandboxes_menu, session, session_editor, session_panel,
     session_state,
     system_card, tab, tag_input, task_list, text_area, text_input, thinking, toggle_button, tool_call_card, tool_response_card,
     user_card, validation_info,
@@ -420,6 +421,9 @@ pub fn register(rt: &mut Runtime) {
     });
     rt.route("/storybook/share-dialog", "Share Dialog", |_| {
         route_def("route /storybook/share-dialog", "Share Dialog", share_dialog::demo())
+    });
+    rt.route("/storybook/profile-panel", "Profile Panel", |_| {
+        route_def("route /storybook/profile-panel", "Profile Panel", profile_panel::demo())
     });
     rt.route("/storybook/user-card", "User Card", |_| {
         route_def("route /storybook/user-card", "User Card", user_card::demo())
