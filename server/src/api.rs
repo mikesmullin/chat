@@ -431,7 +431,7 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                               "location": u.location,
                               "admin": u.is_admin(), "disabled": u.disabled },
                     "capabilities": caps,
-                    "masquerade": crate::auth::is_masquerade(&dev),
+                    "masquerade": crate::auth::is_masked(&u, &dev),
                     "realName": real.name,
                     // Every user sees the perimeter's state (PLAN44 D12):
                     // the page glows while the door is open.
@@ -583,8 +583,16 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 ident
                     .list_devices(uid)
                     .into_iter()
+                    // Masquerade acts are not the user's recognized
+                    // devices: they are the admin's acts, recorded in the
+                    // audit log, and nothing here can delete or block
+                    // them — so they do not appear here. (The `ip` check
+                    // retires rows from before the provenance mark.)
+                    .filter(|d| {
+                        !d.fingerprint.starts_with("masquerade:by:") && d.ip != "masquerade"
+                    })
                     .map(|d| serde_json::json!({
-                        "id": d.id, "tokenHint": d.token_hint, "fingerprint": d.fingerprint,
+                        "id": d.id, "fingerprint": d.fingerprint,
                         "userAgent": d.user_agent, "ip": d.ip, "createdAt": d.created_at,
                         "lastSeenAt": d.last_seen_at, "revoked": d.revoked,
                     }))

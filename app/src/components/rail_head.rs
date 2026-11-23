@@ -40,17 +40,13 @@ button.rail-title {
 button.rail-title:hover { color: var(--text); }
 button.rail-title .ph { font-size: 11px; line-height: 1; }
 button.rail-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-/* Collapsed: the section keeps only its head — nothing trails it. The head
-   sheds its own margin, and the section root pulls up by exactly what would
-   follow it (see `.home-rail` gap and section padding in `pages/home.rs`),
-   so stacked collapsed heads sit flush. Plain rules, no `:has()`, so the
-   Fire's older Chromium honours them. */
+/* Collapsed: the section keeps only its head — nothing trails it, so the
+   head sheds its margin-bottom and the *container gap* alone decides the
+   space to the next group. (An earlier version pulled the root up by a
+   negative margin to stack heads flush — which dragged the next group up
+   over this one and made every gap measurement a liar.) */
 .project-tree.is-collapsed > .rail-head,
 .agents-menu.is-collapsed > .rail-head { margin-bottom: 0; }
-/* 18px rail gap + 4px `.home-projects` padding-bottom */
-.project-tree.is-collapsed { margin-bottom: -22px; }
-/* 18px rail gap + 10px `.home-agents` padding-bottom */
-.agents-menu.is-collapsed { margin-bottom: -28px; }
 .rail-add {
   width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;

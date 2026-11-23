@@ -146,7 +146,7 @@ pub fn register() {
         .val("bans", &js_sys::Array::new().into())
         .val("capabilities", &js_sys::Array::new().into())
         .str("location", "")
-        .str("saved", "")
+        .str("error", "")
         .str("shields", "up")
         .bool("kernelFirewall", false)
         .method("load", load)
@@ -159,6 +159,7 @@ pub fn register() {
         .method("revoke", revoke)
         .method("setShields", set_shields)
         .method("saveProfile", save_profile)
+        .method("queueSave", queue_save)
         .method("unban", unban);
     mjs::store(STORE, &d.finish());
 }
@@ -359,14 +360,61 @@ fn revoke(_this: JsValue, args: js_sys::Array) -> JsValue {
 /// The admin's Shields Up/Down switch (D12): `setShields(down)` — the
 /// segments set a direction; there is no blind flip to misread.
 /// The profile save (PLAN44): the location only — the username is fixed at
-/// sign-in and has nothing to save.
+/// sign-in and has nothing to save. Success is silent (auto-save should
+/// not shout on every pause); failures land on the verdict banner.
 fn save_profile(_this: JsValue, _args: js_sys::Array) -> JsValue {
-    let s = mjs::store_ref(STORE);
+    post_location(js::get_str(&mjs::store_ref(STORE), "location"));
+    JsValue::UNDEFINED
+}
+
+fn post_location(location: String) {
     let body = js::obj();
-    js::set_str(&body, "location", &js::get_str(&s, "location"));
-    rustex1_kit::api::post_json("/api/profile", &body.into(), |_| {
-        crate::components::validation_info::note(STORE, "saved", "Saved");
+    js::set_str(&body, "location", &location);
+    rustex1_kit::api::post_json("/api/profile", &body.into(), |v| {
+        if !js::get_bool(&v, "ok") {
+            let err = js::get_str(&v, "error");
+            crate::components::validation_info::note(
+                STORE,
+                "error",
+                if err.is_empty() { "that did not save" } else { &err },
+            );
+        } else {
+            js::set_str(&mjs::store_ref(STORE), "error", "");
+        }
     });
+}
+
+thread_local! {
+    /// One save timer for the profile fields: each keystroke re-arms it.
+    static SAVE_GEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// `queueSave($event)` — auto-save on edit, debounced ~700ms. The value is
+/// read from the event's target — what the user is actually typing — since
+/// the model binding syncs on change and a keystroke alone has not.
+fn queue_save(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let value = if args.length() > 0 {
+        let ev = js::arg(&args, 0);
+        js::get_str(&js::get(&ev, "target"), "value")
+    } else {
+        js::get_str(&mjs::store_ref(STORE), "location")
+    };
+    let gen = SAVE_GEN.with(|g| {
+        let next = g.get() + 1;
+        g.set(next);
+        next
+    });
+    let later = wasm_bindgen::closure::Closure::once_into_js(move |_: JsValue| {
+        let current = SAVE_GEN.with(|g| g.get());
+        if current == gen {
+            post_location(value);
+        }
+    });
+    js::call(
+        &js::global(),
+        "setTimeout",
+        &[later, JsValue::from_f64(700.0)],
+    );
     JsValue::UNDEFINED
 }
 

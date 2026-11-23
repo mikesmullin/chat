@@ -156,11 +156,18 @@ body {
 
 .mjs-chat .ph { display: inline-block; vertical-align: -0.125em; line-height: 1; }
 
-/* Shields Down (PLAN44 D12): the document itself glows red — slowly,
+/* Shields Down (PLAN44 D12): the *viewport* glows red — slowly,
    persistently — until the admin raises them again. The point is to be
    impossible to forget: a registration window left open is a house with
-   the door standing open, and the page says so to everyone in the room. */
-body.shields-down {
+   the door standing open, and the page says so to everyone in the room.
+   It is a fixed overlay, not a body shadow: the app's own background
+   paints over body's inset shadow, which is why the glow was invisible. */
+body.shields-down::after {
+  content: "";
+  position: fixed; inset: 0;
+  pointer-events: none;
+  /* Above every app layer (they sit at z 30-ish); below hilite's tools. */
+  z-index: 2147482999;
   animation: shields-pulse 2.6s ease-in-out infinite;
 }
 @keyframes shields-pulse {

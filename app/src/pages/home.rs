@@ -72,6 +72,15 @@ pub const CSS: &str = r#"
 #home.rail-collapsed .home-col { margin-left: 10px; }
 #home.rail-collapsed.aside-collapsed { grid-template-columns: 0px 1fr 0px; }
 .home-rail { grid-column: 1; }
+
+/* The sidebar's group rhythm: the visible gap between menu groups (and
+   between the bottom block's rows) is ONE number — `--group-gap` — so
+   every section and every future one spaces alike, collapsed or expanded.
+   The container gap carries it; an earlier "tuck collapsed groups flush"
+   hack (negative root margins) dragged the next group up over the head
+   and made every gap a liar. 8px is the default for anything new added
+   to this menu. */
+.home-rail { --group-gap: 8px; }
 .home-col { grid-column: 2; }
 .home-aside { grid-column: 3; }
 
@@ -81,7 +90,7 @@ pub const CSS: &str = r#"
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--group-gap);
   overflow: hidden;
   padding: 10px 0 10px 4px;
   /* clears the rail's scrollbar from the content card beside it */
@@ -92,11 +101,11 @@ pub const CSS: &str = r#"
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--group-gap);
   overflow-y: auto;
 }
-.home-agents { padding: 0 14px 10px; }
-.home-automations { padding: 0 14px 10px; }
+.home-agents { padding: 0 14px; }
+.home-automations { padding: 0 14px; }
 
 /* ---- centre column ----------------------------------------------
    A plain flex column holding the tab strip and, beneath it, the card.
@@ -172,11 +181,19 @@ pub const CSS: &str = r#"
    same brick in both sections — so the section owns the whole inset. 14px
    puts the title where it always was and the rows 6px in, the way the
    agents list sits. */
-.home-projects { padding: 14px 14px 4px; }
+.home-projects { padding: 0 14px; }
+/* The bottom block: two menu rows — Settings on its own line above the
+   account chip. The rows touch (gap 0): the button and the chip carry
+   their own padding, and stacked padding is how these two ended up apart. */
+.home-settings {
+  flex: 0 0 auto; display: flex; flex-direction: column;
+  gap: 0; padding-top: 0;
+}
+.home-settings-row { display: flex; align-items: center; gap: 6px; }
+.home-settings-spacer { margin-left: auto; }
 
 /* Settings stays outside the scrolling content and keeps its intrinsic height. */
 .home-rail-content > div { flex: 0 0 auto; }
-.home-settings { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding-top: 12px; }
 .rail-settings {
   display: inline-flex; align-items: center; gap: 8px;
   flex: 1 1 auto; min-width: 0; border: 0; border-radius: 8px;
@@ -266,20 +283,28 @@ fn rail() -> Node {
             // conversation, and it is the one item whose position should
             // never move as the lists above it grow.
             m("div").class("home-settings").kids(vec![
+                // Settings on its own line, above the account chip — two
+                // menu rows in the same rhythm as the groups above.
+                m("div").class("home-settings-row").child(
+                    m("button")
+                        .class("rail-settings")
+                        .attr("type", "button")
+                        .attr("aria-label", "Settings")
+                        .on("click", "$store.settings.openPanel()")
+                        .kids(vec![
+                            Node::icon("gear").class("ph ph-gear"),
+                            m("span").child(lit("Settings")),
+                        ]),
+                ),
                 // Who you are (PLAN44 D4): the account chip owns the bottom
                 // left — presence dot, name, and the menu to profile, switch
-                // and log out.
-                identity_switcher::widget(),
-                m("button")
-                    .class("rail-settings")
-                    .attr("type", "button")
-                    .attr("aria-label", "Settings")
-                    .on("click", "$store.settings.openPanel()")
-                    .kids(vec![
-                        Node::icon("gear").class("ph ph-gear"),
-                        m("span").child(lit("Settings")),
-                    ]),
-                mode_toggle::button(),
+                // and log out. The mode toggle rides the same line, pushed
+                // to the far right.
+                m("div").class("home-settings-row").kids(vec![
+                    identity_switcher::widget(),
+                    m("span").class("home-settings-spacer"),
+                    mode_toggle::button(),
+                ]),
             ]),
         ])
 }

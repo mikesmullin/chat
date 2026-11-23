@@ -234,9 +234,18 @@ pub fn real_actor(
         .unwrap_or_else(|| acting.clone())
 }
 
-/// Is this session wearing a mask? (The chip keeps its switcher then.)
-pub fn is_masquerade(device: &angela::identity::Device) -> bool {
-    device.fingerprint.starts_with("masquerade:by:")
+/// Is this session wearing another account's face? The backer named in the
+/// device's fingerprint says who stands behind it; the mask is on when the
+/// face is not the backer (switching back to yourself turns it off, even
+/// though the device keeps its provenance mark).
+pub fn is_masked(
+    acting: &angela::identity::User,
+    device: &angela::identity::Device,
+) -> bool {
+    device
+        .fingerprint
+        .strip_prefix("masquerade:by:")
+        .is_some_and(|backer| !acting.name.eq_ignore_ascii_case(backer))
 }
 
 impl Gate for GateImpl {
@@ -268,7 +277,7 @@ impl Gate for GateImpl {
         // the caller's own session.
         match (req.method.as_str(), req.path.as_str(), logged_in) {
             ("POST", "/logout", true) => return logout(token.as_ref().unwrap()),
-            ("POST", "/masquerade", true) => return masquerade(req, token.as_ref().unwrap()),
+            ("POST", "/masquerade", true) => return masquerade(req, token.as_ref().unwrap(), peer),
             ("GET", "/login", false) => {
                 return GateVerdict::Reply(GateReply {
                     status: 200,
@@ -402,7 +411,7 @@ fn header(req: &Request, name: &str) -> String {
 /// cookie is that user's, but the device record names the hand that took
 /// it — `masquerade:by:<admin>` — so the audit trail reads "alice (by
 /// Bob)" exactly as decided. Admin only; everyone else gets 403.
-fn masquerade(req: &Request, token: &str) -> GateVerdict {
+fn masquerade(req: &Request, token: &str, peer: Option<IpAddr>) -> GateVerdict {
     let ident = crate::api::angela(0).state.store.identity();
     let denied = |msg: &str| {
         GateVerdict::Reply(GateReply {
@@ -435,19 +444,18 @@ fn masquerade(req: &Request, token: &str) -> GateVerdict {
     let ua = header(req, "user-agent");
     // Switching back to the real account ends the mask: the new device is
     // an ordinary one, so `is_masquerade` reads false again.
-    let (fingerprint, via) = if target.name == real.name {
-        (String::new(), String::new())
+    // Every device this route makes wears the same provenance mark —
+    // including switching back to yourself — so the devices list can tell
+    // "a login" from "an admin act" in one place. Whether a mask is *worn*
+    // is a different question (acting ≠ backer), answered at /api/me.
+    let fingerprint = format!("masquerade:by:{}", real.name);
+    let via = if acting.name == real.name || target.name == real.name {
+        String::new()
     } else {
-        (
-            format!("masquerade:by:{}", real.name),
-            if acting.name == real.name {
-                String::new()
-            } else {
-                format!(" via {}", acting.name)
-            },
-        )
+        format!(" via {}", acting.name)
     };
-    match ident.issue_device(target.id, &fingerprint, &ua, "masquerade") {
+    let ip = peer.map(|p| p.to_string()).unwrap_or_else(|| "masquerade".into());
+    match ident.issue_device(target.id, &fingerprint, &ua, &ip) {
         Ok((new_token, _)) => {
             // The record names both faces (PLAN44 D4): "alice (by Bob)".
             ident.audit(

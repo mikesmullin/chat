@@ -36,9 +36,16 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .ae-field { display: flex; flex-direction: column; gap: 5px; }
 :is(#sb, #home) .ae-label {
   font-size: 11px; color: var(--gray-dim); line-height: 16px;
-  display: flex; align-items: baseline; gap: 6px;
+  /* Title + hint belong on different lines: the label box dissolves
+     (display: contents) so its two spans join the field's column, and the
+     hint is ordered below every control in the field — the same
+     label/control/hint stacking the shared `field` brick already does. */
+  display: contents;
 }
-:is(#sb, #home) .ae-label .hint { color: var(--gray-dim); opacity: .7; font-size: 10px; }
+:is(#sb, #home) .ae-label .hint {
+  order: 1; display: block; margin-top: 2px;
+  color: var(--gray-dim); opacity: .7; font-size: 10px;
+}
 :is(#sb, #home) .ae-field input,
 :is(#sb, #home) .ae-field textarea {
   width: 100%; box-sizing: border-box;
@@ -128,7 +135,7 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .shields-track {
   position: relative; width: 32px; height: 17px;
-  border-radius: 999px; background: #d4d4d7;
+  border-radius: 999px; background: #00ad0d;
   transition: background 140ms ease;
 }
 :is(#sb, #home) .shields-knob {
@@ -141,17 +148,30 @@ pub const CSS: &str = r#"
   transition: left 160ms cubic-bezier(.2,.8,.2,1);
 }
 :is(#sb, #home) .shields-icon {
-  /* Same hue as the track, darker: a light track colour on the white
-     handle is unreadable — the shade carries contrast, the hue carries
-     the match. */
-  font-size: 10px; color: #3f4756;
+  /* Same hue as the track. Up wears the Fill face (a solid glyph); Down
+     wears Bold (a warned glyph) — the weight changes with the state. */
+  font-size: 10px; color: #00ad0d;
 }
 :is(#sb, #home) .shields-label {
+  display: inline-flex; align-items: center; gap: 5px;
   font: 500 12px/1 var(--sans); color: var(--text);
 }
 :is(#sb, #home) .shields-switch.is-down .shields-track { background: #ef4444; }
 :is(#sb, #home) .shields-switch.is-down .shields-knob { left: 1px; }
 :is(#sb, #home) .shields-switch.is-down .shields-icon { color: #b91c1c; }
+/* Field prefix icons (PLAN44 UI): white, bold phosphor glyphs. The globe
+   is inset in the input (absolute, so the field keeps its height); the
+   device glyph is each row's bullet; the shield stands by the switch. */
+:is(#sb, #home) .ae-input-icon { position: relative; display: flex; align-items: center; }
+:is(#sb, #home) .ae-input-glyph {
+  position: absolute; left: 10px; z-index: 1; pointer-events: none;
+  color: #fff; font-size: 14px; line-height: 1;
+}
+:is(#sb, #home) .ae-input-icon input { padding-left: 32px; }
+:is(#sb, #home) .ae-device-icon {
+  color: #fff; font-size: 12px; line-height: 1.6; flex: 0 0 auto;
+}
+:is(#sb, #home) .shields-glyph { color: #fff; font-size: 13px; line-height: 1; }
 /* Recognized devices (PLAN44 A2): one row per issued session cookie. */
 :is(#sb, #home) .ae-devices {
   display: flex; flex-direction: column; gap: 4px;
@@ -161,13 +181,13 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .ae-device {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
 }
-:is(#sb, #home) .ae-device-token {
-  font: 500 11px/1.6 var(--mono); color: var(--text);
-}
 :is(#sb, #home) .ae-device-fp,
 :is(#sb, #home) .ae-device-ip {
   font: 400 11px/1.6 var(--mono); color: var(--gray-dim);
   overflow-wrap: anywhere;
+}
+:is(#sb, #home) .ae-device-when {
+  font: 400 11px/1.6 var(--mono); color: var(--gray-dim);
 }
 :is(#sb, #home) .ae-device-del {
   border: 0; background: transparent; color: var(--gray-dim);
@@ -471,31 +491,27 @@ pub fn settings_panel() -> Node {
                 m("span").class("agent-editor-title").child(lit("Settings")),
             ]),
             // The verdict banner: always at the top of the form, just above
-            // the first field — one brick, every aside form.
-            validation_info::live("'ok'", "$store.ident.saved"),
-            // The username is fixed at sign-in (PLAN44): shown, never
-            // edited — only re-creating the account changes it.
-            m("div").class("ae-field").kids(vec![
-                m("label").class("ae-label").kids(vec![
-                    m("span").child(lit("Username")),
-                    m("span")
-                        .class("hint")
-                        .child(lit("set at sign-in · an admin re-creates the account to change it")),
-                ]),
-                m("input")
-                    .attr("type", "text")
-                    .attr("readonly", "")
-                    .model("$store.ident.name"),
-            ]),
+            // the first field — one brick, every aside form. This form
+            // auto-saves, so the banner is only ever the bad news.
+            validation_info::live("'error'", "$store.ident.error"),
             m("div").class("ae-field").kids(vec![
                 m("label").class("ae-label").kids(vec![
                     m("span").child(lit("Location")),
-                    m("span").class("hint").child(lit("where you are · yours alone")),
+                    m("span").class("hint").child(lit("where you are · shared with agents")),
                 ]),
-                m("input")
-                    .attr("type", "text")
-                    .attr("placeholder", "City, State")
-                    .model("$store.ident.location"),
+                // The globe lives inside the field — inset at the left,
+                // the input's text padded past it. Absolute, so the field
+                // keeps its height.
+                m("div").class("ae-input-icon").kids(vec![
+                    Node::icon("globe").class("ph ph-bold ph-globe ae-input-glyph"),
+                    m("input")
+                        .attr("type", "text")
+                        .attr("placeholder", "City, State")
+                        .model("$store.ident.location")
+                        // Auto-save on edit, debounced — this form has no
+                        // submit button (the fields save themselves).
+                        .on("input", "$store.ident.queueSave($event)"),
+                ]),
             ]),
             // ---- identity: recognized devices (PLAN44 A2) --------------
             // Every login this account owns. The cookie is shown masked —
@@ -503,7 +519,7 @@ pub fn settings_panel() -> Node {
             m("div").class("ae-field").kids(vec![
                 m("label").class("ae-label").kids(vec![
                     m("span").child(lit("Devices")),
-                    m("span").class("hint").child(lit("recognized logins · cookie shown masked")),
+                    m("span").class("hint").child(lit("most recent activity")),
                 ]),
                 m("div")
                     .class("ae-devices")
@@ -512,9 +528,20 @@ pub fn settings_panel() -> Node {
                         .class("ae-device")
                         .for_each("d in $store.ident.devices")
                         .kids(vec![
-                            m("span").class("ae-device-token").text("d.tokenHint"),
+                            // The row's bullet: a phone for phones, a
+                            // laptop for the rest (one class binding —
+                            // stacked binds clobber each other).
+                            m("i").bind(
+                                "class",
+                                "((d.userAgent || '').includes('Mobile') ? 'ph ph-bold ph-device-mobile ae-device-icon' : 'ph ph-bold ph-laptop ae-device-icon')",
+                            ),
                             m("span").class("ae-device-fp").text("d.fingerprint"),
                             m("span").class("ae-device-ip").text("d.ip"),
+                            // Last seen, ticking (PLAN44 A2): the kit's
+                            // relative clock, same one the bylines use.
+                            Node::host("uiRelTime", &[])
+                                .class("ae-device-when")
+                                .bind("at", "new Date(d.lastSeenAt).toISOString()"),
                             m("button")
                                 .class("ae-device-del")
                                 .attr("type", "button")
@@ -531,8 +558,8 @@ pub fn settings_panel() -> Node {
                 ]),
                 // The anatomy (Switch Anatomy reference): one pill track
                 // ~2× the handle, white handle with a green check icon,
-                // state word *outside* on the right. Track carries the
-                // alarm: gray = up (quiet), red = down (open door).
+                // state word *outside* on the right — with its shield
+                // prefixed: check when the door is shut, plain when open.
                 m("button")
                     .attr("type", "button")
                     .attr("title", "Toggle shields")
@@ -545,18 +572,24 @@ pub fn settings_panel() -> Node {
                         m("span").class("shields-track").child(
                             m("span")
                                 .class("shields-knob")
-                                // Check-fat when the door is shut (the
-                                // font's filled weight of the check), x
-                                // when it is open — both phosphor, both
-                                // wearing their track's colour.
-                                .child(Node::icon_dyn(
-                                    "($store.ident.shields === 'down' ? 'x' : 'check-fat')",
-                                )
-                                .class("ph-fill shields-icon")),
+                                // Check-fat in the Fill face when the
+                                // door is shut (solid); x in the Bold face
+                                // when it is open. ONE class binding —
+                                // stacked binds clobber each other.
+                                .child(m("i").bind(
+                                    "class",
+                                    "($store.ident.shields === 'down' ? 'ph ph-bold ph-x shields-icon' : 'ph ph-fill ph-check-fat shields-icon')",
+                                )),
                         ),
-                        m("span")
-                            .class("shields-label")
-                            .text("($store.ident.shields === 'down' ? 'Down' : 'Up')"),
+                        m("span").class("shields-label").kids(vec![
+                            // The state shield prefixes the word.
+                            m("i").bind(
+                                "class",
+                                "($store.ident.shields === 'down' ? 'ph ph-bold ph-shield shields-glyph' : 'ph ph-bold ph-shield-check shields-glyph')",
+                            ),
+                            m("span")
+                                .text("($store.ident.shields === 'down' ? 'Down' : 'Up')"),
+                        ]),
                     ]),
                 m("div")
                     .class("ae-bans")
@@ -571,18 +604,6 @@ pub fn settings_panel() -> Node {
                             .child(Node::icon("x").class("ph ph-x")),
                     ]),
             ]),
-            m("div").class("ae-actions").child(
-                // Per-user profile save (PLAN44): the location — the
-                // username is fixed and has nothing to save.
-                m("button")
-                    .class("ae-btn primary")
-                    .attr("type", "button")
-                    .on("click", "$store.ident.saveProfile()")
-                    .kids(vec![
-                        Node::icon("check").class("ph ph-check"),
-                        m("span").child(lit("Save")),
-                    ]),
-            ),
         ])
 }
 
