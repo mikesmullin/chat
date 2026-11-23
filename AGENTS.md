@@ -124,6 +124,43 @@ build, and `rm -rf target/blaze` fixed it). A wild SIGSEGV after a refactor
 is suspect stale blaze state first, your code second: wipe `target/blaze`,
 rebuild, and only then start reading stack traces.
 
+The devserver's watcher covers `server/` and `vendor/rustex1`, and HMR
+covers the wasm and static files — but the path dependencies (`angela-rs`,
+`agl-rs`, whatever else `Cargo.toml` points at sideways) are **not** in the
+watch set. After changing one, restart the server (`pkill -x chat-server`
+then `./dev.sh`) or the running binary keeps serving the old code — which
+looks exactly like your change not working.
+
+## Template gotchas (m-js)
+
+- **Class bindings clobber; class *calls* replace.** Two
+  `bind("class", …)` on one element are one binding — the later wins and
+  the earlier silently disappears (a `ph ph-…` prefix vanished this way and
+  the glyph with it). And `Node::icon("x").class("y")` does **not** append:
+  it replaces the icon's classes. The fix is always the same: one binding
+  (or one `.class()`) carrying the **full** class list per state.
+- **`model` syncs on `change`, not `input`.** A handler that reads the
+  store in the same event that typed the text — or a debounce firing before
+  any blur — sees the **previous** value. Read `$event.target.value` at the
+  moment of the event; that is what the user actually typed.
+- **`for_each` repeats the element it is bound to**, not its children.
+  Bind it to the row; binding it to a list container clones the whole
+  container once per item.
+
+## Verification and tests
+
+- **Measure the visible tree, after it settles.** The app renders hidden
+  duplicate DOM (the mobile overlay shares class names with the desktop
+  rail) — unfiltered probes return zero-height phantoms and lie about
+  geometry. Filter by `getBoundingClientRect().height > 0 && offsetParent`,
+  and read computed styles after transitions finish: a 140ms color fade
+  read at t=0 reported the old color. Screenshots — looked at with your own
+  eyes — caught what every probe missed.
+- **Parallel tests need unique temp dirs.** Two suites using
+  `temp_dir().join(format!("…-{}", now_ms()))` collided within one
+  millisecond, shared one database, and failed in ways that pointed
+  everywhere except at the collision. Use pid plus an atomic counter.
+
 ## Where things live
 
 ```
@@ -146,8 +183,17 @@ app/src/
 ## House rules
 
 - Don't commit unless asked.
+- Use `rg`, never `grep`.
 - Use the VS Code integrated browser to look at the app; reuse one tab.
 - Don't create or translate MCP servers — run the ones that exist.
 - The running app at `/` is **authoritative** for how something should look.
   If the guide disagrees, the guide is the thing that is wrong — and the fix
   is never to edit the guide's copy, because there should not be one.
+- When a citation points at a DOM element (a pasted xpath + bounds), verify
+  the change against *that* element's geometry and behavior — not against
+  something that merely looks similar in a screenshot.
+- **No real names in committed files.** The placeholders are **Bob** and
+  **Alice**; the databases may keep real names (they are gitignored), git
+  may not. cover ALL-CAPS variants too (`\bBob\b` misses `BOB`).
+- Say so when a request seems off, and propose the correction instead of
+  building it — a wrong premise caught early is cheaper than a wrong build.
