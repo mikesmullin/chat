@@ -171,6 +171,12 @@ pub fn panel() -> Node {
             Node::icon("pencil-simple"),
             m("span").class("agent-editor-title").child(lit("Edit session")),
         ]),
+        // The verdict banner: always at the top of the form, just above the
+        // first field — one brick, every aside form.
+        validation_info::live(
+            &format!("({ST}.messageTone ? ' ' + {ST}.messageTone : '')"),
+            &format!("{ST}.message"),
+        ),
         field(
             "Title",
             "the tab's tooltip; the tab itself shows the number",
@@ -217,10 +223,6 @@ pub fn panel() -> Node {
                 .attr("title", "Save")
                 .on("click", &format!("{ST}.save()"))
                 .child(m("span").child(lit("Save"))),
-            validation_info::live(
-                &format!("({ST}.messageTone ? ' ' + {ST}.messageTone : '')"),
-                &format!("{ST}.message"),
-            ),
             // Who else can reach this conversation (PLAN44 C4): the share
             // dialog owns the grants; this only opens it.
             m("button")
@@ -264,7 +266,9 @@ pub fn demo() -> Node {
 
 fn say(s: &JsValue, tone: &str, message: &str) {
     js::set_str(s, "messageTone", tone);
-    js::set_str(s, "message", message);
+    // Through the brick: the message fades in a minute, re-armed by each
+    // new one.
+    crate::components::validation_info::note(STORE, "message", message);
 }
 
 /// `invite()` — seat a name.

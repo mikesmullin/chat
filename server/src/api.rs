@@ -84,6 +84,9 @@ struct DevSink<'s, 'a> {
     /// (PLAN44: ownership is claimed at creation, never at first touch —
     /// a stranger's first message must not make them the owner).
     claim_owner: Option<i64>,
+    /// The acting user, for listings the response must filter (PLAN44 C4):
+    /// `None` is the dev/admin zone — unfiltered.
+    viewer: Option<i64>,
 }
 
 impl DevSink<'_, '_> {
@@ -133,6 +136,28 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
         if body.get("messages").and_then(Value::as_array).is_some() {
             if let Some(id) = body.pointer("/session/id").and_then(Value::as_str).map(str::to_owned) {
                 body["messages"] = Value::Array(chat_messages(&angela(self.port).state.store, &id));
+            }
+        }
+        // Agent listings ride this path (angela's /api/agents): only agents
+        // shared with this viewer survive (PLAN44 C4).
+        if let Some(uid) = self.viewer {
+            if let Some(rows) = body.get_mut("agents").and_then(Value::as_array_mut) {
+                let names: Vec<String> = rows
+                    .iter()
+                    .filter_map(|a| a.get("name").and_then(Value::as_str).map(str::to_string))
+                    .collect();
+                let keep: std::collections::HashSet<String> = angela(self.port)
+                    .state
+                    .store
+                    .identity()
+                    .readable(uid, "agent", &names)
+                    .into_iter()
+                    .collect();
+                rows.retain(|a| {
+                    a.get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|n| keep.contains(n))
+                });
             }
         }
         crate::assistant_text::normalize_assistant_messages(&mut body);
@@ -369,15 +394,51 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     // arrives here is either a logged-in user or the dev zone (loopback, no
     // cookie — the developer on this machine, D12). The dev zone passes
     // every check below as the admin would.
+    if req.path == "/api/profile" && req.method == "POST" {
+        // Per-user profile (PLAN44): the location is yours to set. The
+        // name is *not* here — it is fixed at login, and only re-creating
+        // the account changes it.
+        let Some(u) = crate::auth::current_user(req) else {
+            let _ = out.json(401, &serde_json::json!({"ok": false, "error": "login required"}));
+            return;
+        };
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let location = body.get("location").and_then(Value::as_str).unwrap_or("");
+        let ident = angela(state.config.port).state.store.identity();
+        let r = ident.set_location(u.id, location);
+        let _ = out.json(
+            if r.is_ok() { 200 } else { 400 },
+            &serde_json::json!({"ok": r.is_ok(), "error": r.err().unwrap_or_default()}),
+        );
+        return;
+    }
     if req.path == "/api/me" && req.method == "GET" {
         let ident = angela(state.config.port).state.store.identity();
-        let body = match crate::auth::current_user(req) {
-            Some(u) => serde_json::json!({
-                "user": { "id": u.id, "name": u.name, "displayName": u.display_name,
-                          "admin": u.is_admin(), "disabled": u.disabled },
-                "capabilities": ident.capabilities(u.id),
-            }),
-            None => serde_json::json!({ "user": null, "dev": true }),
+        let body = match crate::auth::current_session(req) {
+            Some((u, dev)) => {
+                // A masked session keeps its switcher (D4): the chip must
+                // know it is wearing one, and who stands behind it.
+                let real = crate::auth::real_actor(&ident, &u, &dev);
+                // The *effective* list: the admin holds everything
+                // implicitly, so the UI can gate on membership alone.
+                let caps: Vec<String> = if u.is_admin() {
+                    angela::identity::CAPABILITIES.iter().map(|s| s.to_string()).collect()
+                } else {
+                    ident.capabilities(u.id)
+                };
+                serde_json::json!({
+                    "user": { "id": u.id, "name": u.name, "displayName": u.display_name,
+                              "location": u.location,
+                              "admin": u.is_admin(), "disabled": u.disabled },
+                    "capabilities": caps,
+                    "masquerade": crate::auth::is_masquerade(&dev),
+                    "realName": real.name,
+                    // Every user sees the perimeter's state (PLAN44 D12):
+                    // the page glows while the door is open.
+                    "shields": if crate::auth::instance().shields_down() { "down" } else { "up" },
+                })
+            }
+            None => serde_json::json!({ "user": null }),
         };
         let _ = out.json(200, &body);
         return;
@@ -438,14 +499,24 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     }
     if req.path == "/api/users" && req.method == "GET" {
         let ident = angela(state.config.port).state.store.identity();
+        // Names and ids are public inside the house (the share dialog needs
+        // them); capability lists are nobody's business but your own — and
+        // the admin's.
+        let admin_view = is_admin(req);
+        let me = actor_id(req);
         let users: Vec<Value> = ident
             .list_users()
             .into_iter()
-            .map(|u| serde_json::json!({
-                "id": u.id, "name": u.name, "displayName": u.display_name,
-                "admin": u.is_admin(), "disabled": u.disabled,
-                "capabilities": ident.capabilities(u.id),
-            }))
+            .map(|u| {
+                let mut row = serde_json::json!({
+                    "id": u.id, "name": u.name, "displayName": u.display_name,
+                    "admin": u.is_admin(), "disabled": u.disabled,
+                });
+                if admin_view || u.id == me {
+                    row["capabilities"] = serde_json::json!(ident.capabilities(u.id));
+                }
+                row
+            })
             .collect();
         let _ = out.json(200, &serde_json::json!({"ok": true, "users": users}));
         return;
@@ -499,11 +570,14 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     }
     if req.path == "/api/devices" && req.method == "GET" {
         let ident = angela(state.config.port).state.store.identity();
-        // A user lists their own; the admin may pass ?userId=. The dev
-        // zone (no cookie) is the admin and defaults to the admin's own.
-        let target = query_int(req, "userId").or_else(|| {
-            Some(crate::auth::current_user(req).map(|u| u.id).unwrap_or(1))
-        });
+        // A user lists their own devices. Peeking at anyone else's is
+        // admin work — and "anyone else" includes the face an admin
+        // masquerades as: the acting user decides, always.
+        let target = if is_admin(req) {
+            query_int(req, "userId").or_else(|| crate::auth::current_user(req).map(|u| u.id))
+        } else {
+            crate::auth::current_user(req).map(|u| u.id)
+        };
         let devices: Vec<Value> = target
             .map(|uid| {
                 ident
@@ -807,7 +881,8 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         return;
     }
     if req.path == "/api/events" && req.method == "GET" {
-        crate::events::stream(out);
+        // The feed is shared; the *window* on it is per-user (PLAN44 C4).
+        crate::events::stream(out, crate::auth::current_user(req).map(|u| u.id));
         return;
     }
     if req.path == "/api/models" {
@@ -907,7 +982,27 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     // live here; firing itself reuses angela's dispatch, so a run is a
     // real turn in every consumer's eyes.
     if req.path == "/api/automations" && req.method == "GET" {
-        let _ = out.json(200, &crate::automations::list(&project_root()));
+        let mut body = crate::automations::list(&project_root());
+        // Only automations explicitly shared to this user (PLAN44 C4).
+        if let Some(u) = crate::auth::current_user(req) {
+            if !u.is_admin() {
+                let ident = angela(state.config.port).state.store.identity();
+                if let Some(rows) = body.get_mut("automations").and_then(Value::as_array_mut) {
+                    let names: Vec<String> = rows
+                        .iter()
+                        .filter_map(|a| a.get("name").and_then(Value::as_str).map(str::to_string))
+                        .collect();
+                    let keep: std::collections::HashSet<String> =
+                        ident.readable(u.id, "automation", &names).into_iter().collect();
+                    rows.retain(|a| {
+                        a.get("name")
+                            .and_then(Value::as_str)
+                            .is_some_and(|n| keep.contains(n))
+                    });
+                }
+            }
+        }
+        let _ = out.json(200, &body);
         return;
     }
     if req.path.starts_with("/api/automations/") && req.method == "POST" {
@@ -964,7 +1059,43 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
             return;
         };
         if req.method == "GET" {
-            let _ = out.json(200, &store.projects_detail());
+            let mut body = store.projects_detail();
+            // A group is visible iff at least one of its sessions is
+            // (PLAN44): groups are organizational, never grants — group
+            // visibility *derives* from what is shared inside it.
+            if let Some(u) = crate::auth::current_user(req) {
+                if !u.is_admin() {
+                    let ident = angela(state.config.port).state.store.identity();
+                    let all: Vec<Value> = angela(state.config.port).state.store.list_meta();
+                    let names: Vec<String> = all
+                        .iter()
+                        .filter_map(|s| s.get("id").and_then(Value::as_str).map(str::to_string))
+                        .collect();
+                    let keep: std::collections::HashSet<String> =
+                        ident.readable(u.id, "session", &names).into_iter().collect();
+                    let mut counts: std::collections::HashMap<String, i64> =
+                        std::collections::HashMap::new();
+                    for s in &all {
+                        if s.get("id").and_then(Value::as_str).is_some_and(|id| keep.contains(id)) {
+                            let p = s.get("project").and_then(Value::as_str).unwrap_or("").to_string();
+                            *counts.entry(p).or_default() += 1;
+                        }
+                    }
+                    if let Some(rows) = body.get_mut("projects").and_then(Value::as_array_mut) {
+                        rows.retain(|p| {
+                            counts
+                                .contains_key(p.get("id").and_then(Value::as_str).unwrap_or(""))
+                        });
+                        for p in rows.iter_mut() {
+                            let key = p.get("id").and_then(Value::as_str).unwrap_or("");
+                            if let Some(n) = counts.get(key) {
+                                p["count"] = serde_json::json!(n);
+                            }
+                        }
+                    }
+                }
+            }
+            let _ = out.json(200, &body);
             return;
         }
         if req.method != "POST" {
@@ -1100,6 +1231,7 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         } else {
             None
         },
+        viewer: crate::auth::current_user(req).map(|u| u.id),
     };
     angela(state.config.port).dispatch(&areq, &mut sink);
     sink.end();

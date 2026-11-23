@@ -1,8 +1,12 @@
 //! One server-side sampler feeds all browsers. Only changed topics are sent.
+//!
+//! What a connection may see is filtered **at the wire** (PLAN44 C4): the
+//! sessions topic and the turn journal are per-user, and the feed is shared.
+//! `viewer: None` is the dev/admin zone — unfiltered.
 use rustex1_devserver::{State, Stream};
 use serde_json::{json, Value};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -103,6 +107,56 @@ fn sandbox_delta(previous: &Value, current: &Value) -> Value {
         map.insert("sboxUp".into(), current.get("sboxUp").cloned().unwrap_or(Value::Bool(false)));
     }
     patch
+}
+
+/// The sessions topic as one viewer may see it: unshared conversations are
+/// invisible (PLAN44 C4) — dropped before the diff, so a delta can never
+/// mention one either.
+fn visible_to(viewer: Option<i64>, value: &Value) -> Value {
+    let Some(uid) = viewer else {
+        return value.clone();
+    };
+    let Some(rows) = value.get("sessions").and_then(Value::as_array) else {
+        return value.clone();
+    };
+    let names: Vec<String> = rows
+        .iter()
+        .filter_map(|r| r.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    let keep: HashSet<String> = crate::api::angela(0)
+        .state
+        .store
+        .identity()
+        .readable(uid, "session", &names)
+        .into_iter()
+        .collect();
+    let mut out = value.clone();
+    out["sessions"] = Value::Array(
+        rows.iter()
+            .filter(|r| {
+                r.get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| keep.contains(id))
+            })
+            .cloned()
+            .collect(),
+    );
+    out
+}
+
+/// May this viewer see a turn's session at all? A running turn in an
+/// unshared conversation is not theirs to watch.
+fn turn_visible(viewer: Option<i64>, session_id: &str) -> bool {
+    let Some(uid) = viewer else {
+        return true;
+    };
+    crate::api::angela(0)
+        .state
+        .store
+        .identity()
+        .readable(uid, "session", &[session_id.to_string()])
+        .len()
+        == 1
 }
 
 pub fn start(state: Arc<State>) {
@@ -221,7 +275,7 @@ fn approval_delta(previous: &Value, current: &Value) -> Value {
 }
 
 /// A reconnect receives the latest snapshot before change-only updates resume.
-pub fn stream(out: &mut Stream<'_>) {
+pub fn stream(out: &mut Stream<'_>, viewer: Option<i64>) {
     if out
         .start(
             200,
@@ -255,13 +309,24 @@ pub fn stream(out: &mut Stream<'_>) {
             if guard.versions[i] != seen[i] {
                 seen[i] = guard.versions[i];
                 if let Some(value) = &guard.values[i] {
-                    let (event, data) = match (&previous[i], *name) {
+                    // Both sides of the diff pass through the viewer's
+                    // window first: a delta computed from unfiltered
+                    // snapshots would name sessions they may not see.
+                    let (old_f, new_f) = if *name == "sessions" {
+                        (
+                            previous[i].as_ref().map(|p| visible_to(viewer, p)),
+                            visible_to(viewer, value),
+                        )
+                    } else {
+                        (previous[i].clone(), value.clone())
+                    };
+                    let (event, data) = match (&old_f, *name) {
                         (Some(old), "sessions") => {
-                            ("sessions-delta", delta(old, value, "sessions"))
+                            ("sessions-delta", delta(old, &new_f, "sessions"))
                         }
-                        (Some(old), "approvals") => ("approvals-delta", approval_delta(old, value)),
-                        (Some(old), "sandboxes") => ("sandboxes-delta", sandbox_delta(old, value)),
-                        _ => (*name, value.clone()),
+                        (Some(old), "approvals") => ("approvals-delta", approval_delta(old, &new_f)),
+                        (Some(old), "sandboxes") => ("sandboxes-delta", sandbox_delta(old, &new_f)),
+                        _ => (*name, new_f),
                     };
                     frames.push(format!("event: {event}\ndata: {data}\n\n"));
                     previous[i] = Some(value.clone());
@@ -270,6 +335,11 @@ pub fn stream(out: &mut Stream<'_>) {
         }
         turn_version = guard.turn_version;
         for (id, turn) in &guard.turns {
+            // A turn in a conversation this viewer cannot see is not theirs
+            // to watch — not its rows, not its prompt.
+            if !turn_visible(viewer, &turn.session_id) {
+                continue;
+            }
             if let Some(offset) = turns_seen.get_mut(id) {
                 for (index, row) in turn.rows.iter().enumerate().skip(*offset) {
                     let data = json!({"turnId":id.to_string(), "sessionId":turn.session_id, "seq":index, "row":row});
@@ -318,7 +388,7 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
             let (mut server, _) = listener.accept().unwrap();
-            std::thread::spawn(move || { stream(&mut Stream::new(&mut server)); });
+            std::thread::spawn(move || { stream(&mut Stream::new(&mut server), None); });
             client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
             client
         }

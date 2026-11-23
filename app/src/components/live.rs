@@ -209,13 +209,19 @@ fn preview_session(_this: JsValue, args: js_sys::Array) -> JsValue {
 
 /// Double-clicking the preview keeps it alongside the other tabs.
 fn pin_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
-    let id = js::arg_str(&args, 0);
+    keep_tab(&js::arg_str(&args, 0));
+    JsValue::UNDEFINED
+}
+
+/// Keep a tab: clear its preview status so it stops being replaceable.
+/// Talking in a session counts as keeping it — sending from the composer
+/// pins the tab it lands in, same as the double-click.
+fn keep_tab(id: &str) {
     if !id.is_empty() && read_preview_id() == id {
         write_preview_id("");
         js::set_str(&mjs::store_ref(STORE), "previewId", "");
         mjs::redraw();
     }
-    JsValue::UNDEFINED
 }
 
 /// `newSession()` — the tab bar's `+`.
@@ -333,6 +339,9 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     if content.is_empty() || js::get_bool(&s, "waiting") || api::chat_stream_active() || OWN_TURN.with(|t| t.borrow().is_some()) {
         return JsValue::UNDEFINED;
     }
+    // A session you are talking in is one you mean to keep: submitting
+    // pins the preview tab exactly like the double-click does.
+    keep_tab(&js::get_str(&s, "activeId"));
     // A slash command is an instruction to the app, not a message to the
     // conversation — it never reaches a model and never enters the
     // transcript, so it is handled before anything else happens.
@@ -1712,7 +1721,7 @@ fn save_target(_this: JsValue, args: js_sys::Array) -> JsValue {
                 if action == "sandbox-add" {
                     let id = js::get_str(&v, "id");
                     if id.is_empty() {
-                        js::set_str(&form, "error", "The sandbox service did not return an ID.");
+                        crate::components::validation_info::note("tform", "error", "The sandbox service did not return an ID.");
                     } else {
                         let state = js::get_str(&v, "state");
                         crate::components::target_form::sandbox_created(&id, &state, &name, "live");
@@ -1727,7 +1736,7 @@ fn save_target(_this: JsValue, args: js_sys::Array) -> JsValue {
         } else if same_form {
             js::set_bool(&form, "busy", false);
             let msg = js::get_str(&v, "error");
-            js::set_str(&form, "error", if msg.is_empty() { "that did not work" } else { &msg });
+            crate::components::validation_info::note("tform", "error", if msg.is_empty() { "that did not work" } else { &msg });
         }
     };
     if action.starts_with("automation-") {

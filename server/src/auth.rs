@@ -204,13 +204,39 @@ pub fn cookie_of(req: &Request) -> Option<String> {
 /// `None` = anonymous. The gate has already turned anonymous non-loopback
 /// traffic away by the time a handler calls this.
 pub fn current_user(req: &Request) -> Option<angela::identity::User> {
+    current_session(req).map(|(u, _)| u)
+}
+
+/// The session behind a request: who it acts as, and the device row that
+/// says how it got there.
+pub fn current_session(req: &Request) -> Option<(angela::identity::User, angela::identity::Device)> {
     let token = cookie_of(req)?;
     crate::api::angela(0)
         .state
         .store
         .identity()
         .device_by_token(&token)
-        .map(|(u, _)| u)
+}
+
+/// The real actor behind a session. A masquerade device's fingerprint
+/// names its backer (`masquerade:by:<admin>`): the face the session wears
+/// may be anyone's, but the authority behind it is the admin's (PLAN44 D4 —
+/// the switcher survives the mask; admin *operations* do not).
+pub fn real_actor(
+    ident: &angela::identity::Identity<'_>,
+    acting: &angela::identity::User,
+    device: &angela::identity::Device,
+) -> angela::identity::User {
+    device
+        .fingerprint
+        .strip_prefix("masquerade:by:")
+        .and_then(|name| ident.user_by_name(name))
+        .unwrap_or_else(|| acting.clone())
+}
+
+/// Is this session wearing a mask? (The chip keeps its switcher then.)
+pub fn is_masquerade(device: &angela::identity::Device) -> bool {
+    device.fingerprint.starts_with("masquerade:by:")
 }
 
 impl Gate for GateImpl {
@@ -255,8 +281,26 @@ impl Gate for GateImpl {
             _ => {}
         }
 
-        // The dev zone (D12): the machine itself is through, always.
-        if is_loopback(peer) || logged_in {
+        // A cookieless visit to the *app* is a login, not a ghost identity:
+        // loopback document requests go to the form like everyone else
+        // (the "Dev" chip is gone). Raw traffic — the API, assets, curl
+        // without `Accept: text/html` — still trusts loopback for local
+        // tooling (D12's dev access lives there, see `api::actor_id`).
+        if is_loopback(peer) && !logged_in {
+            let document = req.method == "GET"
+                && header(req, "accept").contains("text/html")
+                && req.path != "/login";
+            if document {
+                return GateVerdict::Reply(GateReply {
+                    status: 302,
+                    headers: vec![("location".into(), "/login".into())],
+                    content_type: "text/plain",
+                    body: b"login required".to_vec(),
+                });
+            }
+            return GateVerdict::Allow;
+        }
+        if logged_in {
             return GateVerdict::Allow;
         }
 
@@ -368,10 +412,15 @@ fn masquerade(req: &Request, token: &str) -> GateVerdict {
             body: serde_json::to_vec(&json!({ "ok": false, "error": msg })).unwrap_or_default(),
         })
     };
-    let Some((admin, _)) = ident.device_by_token(token) else {
+    let Some((acting, dev)) = ident.device_by_token(token) else {
         return denied("unknown session");
     };
-    if !admin.is_admin() {
+    // Authorization is the *backer's*, not the mask's: a session already
+    // wearing Alice's face may still switch users as long as Bob stands
+    // behind it (PLAN44 D4). Admin *operations* elsewhere still read the
+    // acting face, which is exactly "switch back to do admin things".
+    let real = real_actor(&ident, &acting, &dev);
+    if !real.is_admin() {
         return denied("only the admin may switch users");
     }
     let body: serde_json::Value =
@@ -384,11 +433,29 @@ fn masquerade(req: &Request, token: &str) -> GateVerdict {
         return denied("that account is disabled");
     }
     let ua = header(req, "user-agent");
-    let fingerprint = format!("masquerade:by:{}", admin.name);
+    // Switching back to the real account ends the mask: the new device is
+    // an ordinary one, so `is_masquerade` reads false again.
+    let (fingerprint, via) = if target.name == real.name {
+        (String::new(), String::new())
+    } else {
+        (
+            format!("masquerade:by:{}", real.name),
+            if acting.name == real.name {
+                String::new()
+            } else {
+                format!(" via {}", acting.name)
+            },
+        )
+    };
     match ident.issue_device(target.id, &fingerprint, &ua, "masquerade") {
         Ok((new_token, _)) => {
             // The record names both faces (PLAN44 D4): "alice (by Bob)".
-            ident.audit(&admin.name, &target.name, "masquerade", &fingerprint);
+            ident.audit(
+                &real.name,
+                &target.name,
+                "masquerade",
+                &format!("{fingerprint}{via}"),
+            );
             GateVerdict::Reply(GateReply {
                 status: 200,
                 headers: vec![(

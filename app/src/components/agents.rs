@@ -232,7 +232,7 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let draft = js::get(&s, "draft");
     let name = js::get_str(&draft, "name").trim().to_string();
     if name.is_empty() {
-        js::set_str(&s, "error", "an agent needs a name");
+        crate::components::validation_info::note("agents", "error", "an agent needs a name");
         mjs::redraw();
         return JsValue::UNDEFINED;
     }
@@ -258,14 +258,14 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
         js::set_bool(&s, "saving", false);
         let err = js::get_str(&v, "error");
         if !err.is_empty() {
-            js::set_str(&s, "error", &err);
+            crate::components::validation_info::note("agents", "error", &err);
             mjs::redraw();
             return;
         }
         let agent = js::get(&v, "agent");
         let saved = js::get_str(&agent, "name");
         js::set_str(&s, "error", "");
-        js::set_str(&s, "saved", "Saved");
+        crate::components::validation_info::note("agents", "saved", "Saved");
         js::set_bool(&s, "creating", false);
         // After a rename the row is under its new name, so the form has to
         // point at that one or the next save would 404.
@@ -298,7 +298,7 @@ fn remove(_this: JsValue, _args: js_sys::Array) -> JsValue {
         js::set_bool(&s, "confirmDelete", false);
         let err = js::get_str(&v, "error");
         if !err.is_empty() {
-            js::set_str(&s, "error", &err);
+            crate::components::validation_info::note("agents", "error", &err);
             mjs::redraw();
             return;
         }

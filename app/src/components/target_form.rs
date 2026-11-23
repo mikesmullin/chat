@@ -10,10 +10,12 @@
 //!
 //! ## It reuses the agent editor's clothes on purpose
 //!
-//! `.agent-editor`, `.ae-field`, `.ae-label`, `.ae-actions`, `.ae-btn` and
-//! `.ae-error` are defined once, in
+//! `.agent-editor`, `.ae-field`, `.ae-label`, `.ae-actions` and `.ae-btn`
+//! are defined once, in
 //! [`agent_editor`](crate::components::agent_editor), and the settings panel
-//! already borrows them. A third set of inspector-form styles would be a
+//! already borrows them. The verdict banner is
+//! [`validation_info`](crate::components::validation_info)'s alone. A third
+//! set of inspector-form styles would be a
 //! third thing to keep in step with the first two, and the inspector should
 //! look like one place rather than three panels that happen to share a
 //! column.
@@ -41,7 +43,7 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::css;
-use crate::components::dropdown;
+use crate::components::{dropdown, validation_info};
 
 const STORE: &str = "tform";
 const ST: &str = "$store.tform";
@@ -115,6 +117,9 @@ pub fn panel() -> Node {
                     .class("agent-editor-title")
                     .text(&format!("{ST}.heading")),
             ]),
+            // The verdict banner: always at the top of the form, just
+            // above the first field — one brick, every aside form.
+            validation_info::live("'error'", &format!("{ST}.error")),
             // ---- the project form ------------------------------------
             m("div")
                 .class("ae-field")
@@ -408,10 +413,6 @@ pub fn panel() -> Node {
                     Node::icon("warning").class("ph ph-warning tform-warn-icon"),
                     m("span").text(&format!("{ST}.note")),
                 ]),
-            m("p")
-                .class("ae-error")
-                .show(&format!("{ST}.error"))
-                .text(&format!("{ST}.error")),
             m("div").class("ae-actions").kids(vec![
                 m("button")
                     .class("ae-btn primary")
@@ -858,7 +859,7 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
             ),
             "automation" => {
                 if !cron_shape_ok(&js::get_str(&s, "cron")) {
-                    js::set_str(&s, "error", "that cron does not parse — five fields, like 0 9 * * 1-5");
+                    crate::components::validation_info::note("tform", "error", "that cron does not parse — five fields, like 0 9 * * 1-5");
                     mjs::redraw();
                     return JsValue::UNDEFINED;
                 }
@@ -883,7 +884,7 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
             "sandbox" => {
                 let host = mjs::store_ref(&js::get_str(&s, "store"));
                 if name.is_empty() {
-                    js::set_str(&s, "error", "give the sandbox a name");
+                    crate::components::validation_info::note("tform", "error", "give the sandbox a name");
                     mjs::redraw();
                     return JsValue::UNDEFINED;
                 }
@@ -927,7 +928,7 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
     }
     let name = js::get_str(&s, "name");
     if let Some(msg) = invalid(&name) {
-        js::set_str(&s, "error", &msg);
+        crate::components::validation_info::note("tform", "error", &msg);
         mjs::redraw();
         return JsValue::UNDEFINED;
     }

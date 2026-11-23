@@ -32,7 +32,17 @@ const PRESETS: &[(&str, &[&str])] = &[
 ];
 
 pub const CSS: &str = r#"
-:is(#sb, #home) .share-panel { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
+:is(#sb, #home) .share-panel {
+  display: flex; flex-direction: column; gap: 14px;
+  /* A sibling form, not a card: the aside supplies the horizontal padding,
+     exactly like `.agent-editor`, so the rows keep the same grid. The rule
+     across the top is what says "a new form starts here" — kept brighter
+     than the faint in-form dividers (which stay `--line-soft`), with air
+     on both sides so it reads as a seam and not a stray mark. */
+  border-top: 1px solid #363636;
+  margin: 14px 0;
+  padding-top: 14px;
+}
 :is(#sb, #home) .share-head { display: flex; align-items: center; gap: 8px; }
 :is(#sb, #home) .share-head .ph { color: var(--gray-dim); }
 :is(#sb, #home) .share-title { font: 600 13px/1.4 var(--sans); }
@@ -320,8 +330,7 @@ fn set_preset(_this: JsValue, args: js_sys::Array) -> JsValue {
         js::set_str(&body, "privilege", p);
         rustex1_kit::api::post_json("/api/acl/grant", &body.into(), move |v| {
             if !js::get_bool(&v, "ok") {
-                let s = mjs::store_ref(STORE);
-                js::set_str(&s, "error", &js::get_str(&v, "error"));
+                crate::components::validation_info::note("share", "error", &js::get_str(&v, "error"));
                 mjs::redraw();
             }
         });
@@ -365,7 +374,7 @@ fn invite(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let who = js::get_str(&s, "who");
     if who.is_empty() {
-        js::set_str(&s, "error", "pick someone first");
+        crate::components::validation_info::note("share", "error", "pick someone first");
         return redraw();
     }
     let preset = js::get_str(&s, "preset");

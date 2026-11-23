@@ -65,7 +65,7 @@ pub fn agents_menu_live() -> Node {
             rail_head::head(
                 "Agents",
                 "robot",
-                Some(("Define a new agent", &format!("{st}.newAgent()"))),
+                Some(("Define a new agent", &format!("{st}.newAgent()"), "$store.ident.can('agent.create')")),
                 Some("agents"),
             ),
             m("div").class("agent-list").show("$store.home.agentsOpen").kids(vec![
@@ -97,7 +97,7 @@ pub fn agents_menu_live() -> Node {
                 m("p")
                     .class("agent-empty")
                     .show(&format!("{st}.agents.length === 0"))
-                    .child(lit("No agents yet. Use + to define one.")),
+                    .child(lit("No agents yet.")),
             ]),
         ])
 }

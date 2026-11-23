@@ -145,11 +145,11 @@ fn create(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let name = js::get_str(&s, "name").trim().to_string();
     if name.is_empty() {
-        js::set_str(&s, "message", "Name is required");
+        crate::components::validation_info::note("automationDraft", "message", "Name is required");
         js::set_str(&s, "messageTone", "error");
     } else {
         let schedule = js::get_str(&s, "schedule").trim().to_string();
-        js::set_str(&s, "message", &format!("Queued {name} · {schedule}"));
+        crate::components::validation_info::note("automationDraft", "message", &format!("Queued {name} · {schedule}"));
         js::set_str(&s, "messageTone", "ok");
     }
     mjs::redraw();

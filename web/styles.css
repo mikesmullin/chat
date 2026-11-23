@@ -156,3 +156,21 @@ body {
 
 .mjs-chat .ph { display: inline-block; vertical-align: -0.125em; line-height: 1; }
 
+/* Shields Down (PLAN44 D12): the document itself glows red — slowly,
+   persistently — until the admin raises them again. The point is to be
+   impossible to forget: a registration window left open is a house with
+   the door standing open, and the page says so to everyone in the room. */
+body.shields-down {
+  animation: shields-pulse 2.6s ease-in-out infinite;
+}
+@keyframes shields-pulse {
+  0%, 100% {
+    box-shadow: inset 0 0 42px rgba(239, 68, 68, .38),
+                inset 0 0 12px rgba(239, 68, 68, .55);
+  }
+  50% {
+    box-shadow: inset 0 0 96px rgba(239, 68, 68, .8),
+                inset 0 0 26px rgba(239, 68, 68, .95);
+  }
+}
+

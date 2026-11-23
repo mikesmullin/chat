@@ -98,16 +98,17 @@ pub fn widget() -> Node {
                     .attr("type", "button")
                     .on("click", &format!("{ST}.openProfile()"))
                     .child(lit("Profile…")),
-                // The switch list is the admin's alone (D4).
-                m("div").class("ident-sep").show(&format!("{ST}.admin")),
+                // The switch list is the admin's alone (D4) — including
+                // while wearing a mask, where it is the way back.
+                m("div").class("ident-sep").show(&format!("({ST}.admin || {ST}.masquerade)")),
                 m("div")
                     .class("ident-label")
-                    .show(&format!("{ST}.admin"))
+                    .show(&format!("({ST}.admin || {ST}.masquerade)"))
                     .child(lit("switch to")),
                 m("button")
                     .class("ident-item")
                     .attr("type", "button")
-                    .show(&format!("{ST}.admin"))
+                    .show(&format!("({ST}.admin || {ST}.masquerade)"))
                     .for_each(&format!("u in {ST}.users"))
                     .on("click", &format!("{ST}.switchUser(u.name)"))
                     .bind("class", &format!("(u.name === {ST}.name ? 'ident-item me' : 'ident-item')"))
@@ -134,6 +135,8 @@ pub fn register() {
     d.bool("open", false)
         .bool("loggedIn", false)
         .bool("admin", false)
+        .bool("masquerade", false)
+        .str("realName", "")
         .bool("dev", false)
         .str("name", "…")
         .str("initial", "?")
@@ -141,16 +144,21 @@ pub fn register() {
         .val("users", &js_sys::Array::new().into())
         .val("devices", &js_sys::Array::new().into())
         .val("bans", &js_sys::Array::new().into())
+        .val("capabilities", &js_sys::Array::new().into())
+        .str("location", "")
+        .str("saved", "")
         .str("shields", "up")
         .bool("kernelFirewall", false)
         .method("load", load)
+        .method("can", can)
         .method("toggle", toggle)
         .method("openProfile", open_profile)
         .method("switchUser", switch_user)
         .method("logout", logout)
         .method("loadDevices", load_devices)
         .method("revoke", revoke)
-        .method("toggleShields", toggle_shields)
+        .method("setShields", set_shields)
+        .method("saveProfile", save_profile)
         .method("unban", unban);
     mjs::store(STORE, &d.finish());
 }
@@ -158,6 +166,44 @@ pub fn register() {
 fn redraw() -> JsValue {
     mjs::redraw();
     JsValue::UNDEFINED
+}
+
+/// The page itself wears the perimeter's state (PLAN44 D12): while shields
+/// are down, `document.body` glows red — slowly, persistently — so a
+/// registration window left open is impossible to forget.
+fn apply_shields(state: &str) {
+    let doc = js::get(&js::global(), "document");
+    let body = js::get(&doc, "body");
+    let classes = js::get(&body, "classList");
+    js::call(
+        &classes,
+        "toggle",
+        &[
+            JsValue::from_str("shields-down"),
+            JsValue::from_bool(state == "down"),
+        ],
+    );
+}
+
+thread_local! {
+    /// One heartbeat chain for the flag, whoever mounts the chip first.
+    static POLLING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The glow must not go stale on a page left open — a slow heartbeat for
+/// the flag, in case someone else raises (or lowers) the shields.
+fn poll_shields() {
+    rustex1_kit::api::get("/api/me", None, |v| {
+        apply_shields(&js::get_str(&v, "shields"));
+    });
+    let later = wasm_bindgen::closure::Closure::once_into_js(move |_v: JsValue| {
+        poll_shields();
+    });
+    js::call(
+        &js::global(),
+        "setTimeout",
+        &[later, JsValue::from_f64(15_000.0)],
+    );
 }
 
 /// `/api/me` — who this browser is — plus the user list the admin's switch
@@ -176,6 +222,16 @@ fn load(_this: JsValue, _args: js_sys::Array) -> JsValue {
             js::set_str(&s, "name", &name);
             js::set_num(&s, "userId", js::get_num(&u, "id"));
             js::set_bool(&s, "admin", js::get_bool(&u, "admin"));
+            // The effective capability list drives what the UI offers to
+            // create (PLAN44 Layer 1) — the admin's list is pre-filled.
+            js::set(&s, "capabilities", &js::get(&v, "capabilities"));
+            js::set_str(&s, "location", &js::get_str(&u, "location"));
+            js::set_str(&s, "shields", &js::get_str(&v, "shields"));
+            apply_shields(&js::get_str(&v, "shields"));
+            // A masked session keeps the switcher (D4): it is the only way
+            // back to the real account.
+            js::set_bool(&s, "masquerade", js::get_bool(&v, "masquerade"));
+            js::set_str(&s, "realName", &js::get_str(&v, "realName"));
         } else {
             js::set_str(&s, "initial", "D");
             js::set_str(&s, "name", "Dev");
@@ -188,6 +244,13 @@ fn load(_this: JsValue, _args: js_sys::Array) -> JsValue {
         js::set(&s, "users", &js::get(&v, "users"));
         mjs::redraw();
     });
+    // One heartbeat chain for the glow, started on first mount.
+    POLLING.with(|p| {
+        if !p.get() {
+            p.set(true);
+            poll_shields();
+        }
+    });
     JsValue::UNDEFINED
 }
 
@@ -195,6 +258,21 @@ fn toggle(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     js::set_bool(&s, "open", !js::get_bool(&s, "open"));
     redraw()
+}
+
+/// `can('session.create')` — the gate every create affordance reads
+/// (PLAN44 Layer 1). The dev zone and the admin hold everything.
+fn can(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let cap = js::arg_str(&args, 0);
+    let s = mjs::store_ref(STORE);
+    if !js::get_bool(&s, "loggedIn") || js::get_bool(&s, "admin") {
+        return JsValue::from_bool(true);
+    }
+    let list = js_sys::Array::from(&js::get(&s, "capabilities"));
+    JsValue::from_bool(
+        list.iter()
+            .any(|v| v.as_string().as_deref() == Some(cap.as_str())),
+    )
 }
 
 /// The profile is the Settings panel: it carries the personal fields, and
@@ -261,6 +339,7 @@ fn load_devices(_this: JsValue, _args: js_sys::Array) -> JsValue {
             js::set_str(&s, "shields", &js::get_str(&v, "shields"));
             js::set(&s, "bans", &js::get(&v, "bans"));
             js::set_bool(&s, "kernelFirewall", js::get_bool(&v, "kernelFirewall"));
+            apply_shields(&js::get_str(&v, "shields"));
             mjs::redraw();
         }
     });
@@ -277,15 +356,32 @@ fn revoke(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// The admin's Shields Up/Down button (D12).
-fn toggle_shields(_this: JsValue, _args: js_sys::Array) -> JsValue {
+/// The admin's Shields Up/Down switch (D12): `setShields(down)` — the
+/// segments set a direction; there is no blind flip to misread.
+/// The profile save (PLAN44): the location only — the username is fixed at
+/// sign-in and has nothing to save.
+fn save_profile(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
-    let down = js::get_str(&s, "shields") == "up";
+    let body = js::obj();
+    js::set_str(&body, "location", &js::get_str(&s, "location"));
+    rustex1_kit::api::post_json("/api/profile", &body.into(), |_| {
+        crate::components::validation_info::note(STORE, "saved", "Saved");
+    });
+    JsValue::UNDEFINED
+}
+
+fn set_shields(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let down = js::arg(&args, 0).as_bool().unwrap_or(false);
+    let s = mjs::store_ref(STORE);
+    // Reflect immediately; the server answer confirms it.
+    js::set_str(&s, "shields", if down { "down" } else { "up" });
+    apply_shields(if down { "down" } else { "up" });
     let body = js::obj();
     js::set_bool(&body, "down", down);
     rustex1_kit::api::post_json("/api/admin/shields", &body.into(), |_| {
         load_devices(JsValue::UNDEFINED, js_sys::Array::new());
     });
+    mjs::redraw();
     JsValue::UNDEFINED
 }
 

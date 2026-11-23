@@ -110,7 +110,7 @@ pub fn edit(tip: &str, on: &str) -> Node {
 /// section in the shell: the title becomes a button with a caret, bound to
 /// `$store.home`, and the section body shows on the same flag. `None` keeps
 /// the plain label for heads with nothing to collapse.
-pub fn head(title: &str, icon: &str, add: Option<(&str, &str)>, section: Option<&str>) -> Node {
+pub fn head(title: &str, icon: &str, add: Option<(&str, &str, &str)>, section: Option<&str>) -> Node {
     // The caret leads, tree-row style: it acts on what follows. Then the
     // section's own glyph, then the name.
     let title_node = match section {
@@ -133,8 +133,11 @@ pub fn head(title: &str, icon: &str, add: Option<(&str, &str)>, section: Option<
             .kids(vec![Node::icon(icon), m("span").child(lit(title))]),
     };
     let mut kids = vec![title_node];
-    if let Some((tip, on)) = add {
-        kids.push(self::add(tip, on));
+    if let Some((tip, on, guard)) = add {
+        // The guard is a capability expression (PLAN44 Layer 1): a user who
+        // may not create the resource does not see the button that would.
+        let b = self::add(tip, on);
+        kids.push(if guard.is_empty() { b } else { b.show(guard) });
     }
     m("div").class("rail-head").kids(kids)
 }
@@ -144,8 +147,8 @@ pub fn head(title: &str, icon: &str, add: Option<(&str, &str)>, section: Option<
 /// the section toggles are live, writing to the guide's own `home` store.
 pub fn demo() -> Node {
     m("div").class("rail-head-demo").kids(vec![
-        head("Projects", "folders", Some(("New project", "$store.samples.noop()")), Some("projects")),
-        head("Agents", "robot", Some(("Define a new agent", "$store.samples.noop()")), Some("agents")),
+        head("Projects", "folders", Some(("New project", "$store.samples.noop()", "")), Some("projects")),
+        head("Agents", "robot", Some(("Define a new agent", "$store.samples.noop()", "")), Some("agents")),
         head("(ungrouped)", "tray", None, None),
     ])
 }

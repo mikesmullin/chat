@@ -173,7 +173,7 @@ pub const CSS: &str = r#"
 pub fn tree(st: &str, on_open: &str, on_new: &str) -> Node {
     let rows = format!("$store.{STORE}.rows({st}.projects, {st}.sessions)");
     m("div").class("project-tree").bind("class", "($store.home.projectsOpen ? '' : 'is-collapsed')").kids(vec![
-        rail_head::head("Projects", "folders", Some(("New project", on_new)), Some("projects")),
+        rail_head::head("Projects", "folders", Some(("New project", on_new, "$store.ident.can('project.create')")), Some("projects")),
         m("div")
             .class("ptree-list")
             .show("$store.home.projectsOpen")
@@ -182,7 +182,7 @@ pub fn tree(st: &str, on_open: &str, on_new: &str) -> Node {
             m("p")
                 .class("ptree-empty")
                 .show(&format!("{rows}.length === 0"))
-                .child(lit("No projects yet. Use + to make one.")),
+                .child(lit("No projects yet.")),
         ]),
     ])
 }
@@ -494,6 +494,41 @@ fn session_row(s: &JsValue, depth: usize) -> JsValue {
 
 // ── store ───────────────────────────────────────────────────────────────
 
+/// Which groups were shut is a per-browser memory (a reload should return
+/// to the tree you left), kept the way `home` keeps its rail sections.
+const COLLAPSED_KEY: &str = "chat.ptree.collapsed";
+
+fn collapsed_from_storage() -> JsValue {
+    let storage = js::get(&js::global(), "localStorage");
+    let text = js::call(&storage, "getItem", &[JsValue::from_str(COLLAPSED_KEY)])
+        .as_string()
+        .unwrap_or_default();
+    let out = js_sys::Array::new();
+    if !text.is_empty() {
+        let json = js::get(&js::global(), "JSON");
+        let parsed = js::call(&json, "parse", &[JsValue::from_str(&text)]);
+        if js_sys::Array::is_array(&parsed) {
+            for v in js_sys::Array::from(&parsed).iter() {
+                if let Some(s) = v.as_string() {
+                    out.push(&JsValue::from_str(&s));
+                }
+            }
+        }
+    }
+    out.into()
+}
+
+fn collapsed_to_storage(collapsed: &JsValue) {
+    let storage = js::get(&js::global(), "localStorage");
+    let json = js::get(&js::global(), "JSON");
+    let text = js::call(&json, "stringify", &[collapsed.clone()]);
+    js::call(
+        &storage,
+        "setItem",
+        &[JsValue::from_str(COLLAPSED_KEY), text],
+    );
+}
+
 fn toggle(_this: JsValue, args: js_sys::Array) -> JsValue {
     let name = js::arg_str(&args, 0);
     let st = mjs::store_ref(STORE);
@@ -512,7 +547,9 @@ fn toggle(_this: JsValue, args: js_sys::Array) -> JsValue {
     if !found {
         next.push(&JsValue::from_str(&name));
     }
-    js::set(&st, "collapsed", &next.into());
+    let merged: JsValue = next.into();
+    js::set(&st, "collapsed", &merged);
+    collapsed_to_storage(&merged);
     mjs::redraw();
     JsValue::UNDEFINED
 }
@@ -600,7 +637,7 @@ pub fn demo() -> Node {
 pub fn register() {
     css::inject("project-tree", CSS);
     let mut d = Def::new().named("store ptree");
-    d.val("collapsed", &js_sys::Array::new().into())
+    d.val("collapsed", &collapsed_from_storage())
         .str("editing", "")
         .str("editDraft", "")
         .str("dragId", "")

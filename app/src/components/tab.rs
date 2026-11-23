@@ -343,6 +343,9 @@ pub fn tab_bar(st: &str) -> Node {
             .class("tab-plus")
             .attr("type", "button")
             .attr("aria-label", "new session")
+            // Creating sessions is a capability (PLAN44 Layer 1): no
+            // `session.create`, no button.
+            .show("$store.ident.can('session.create')")
             .on("click", &format!("{st}.newSession()"))
             .child(Node::icon("plus")),
     ])

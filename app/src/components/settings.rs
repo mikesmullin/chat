@@ -83,7 +83,7 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
         let values = js::get(&v, "settings");
         js::set(&s, "values", &values);
         js::set(&s, "draft", &shallow_copy(&values));
-        js::set_str(&s, "saved", "Saved");
+        crate::components::validation_info::note("settings", "saved", "Saved");
         mjs::redraw();
     });
     JsValue::UNDEFINED

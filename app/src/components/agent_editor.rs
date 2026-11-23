@@ -19,7 +19,7 @@
 use rustex1_kit::h::{lit, m, Node};
 
 use crate::css;
-use crate::components::dropdown;
+use crate::components::{dropdown, validation_info};
 
 pub const CSS: &str = r#"
 :is(#sb, #home) .agent-editor {
@@ -115,8 +115,43 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .ae-btn.danger:hover { color: var(--danger, #d9534f); }
 :is(#sb, #home) .ae-btn.is-confirm { color: var(--danger, #d9534f); }
 :is(#sb, #home) .ae-btn[disabled] { opacity: .5; cursor: default; }
-:is(#sb, #home) .ae-error { color: var(--danger, #d9534f); font-size: 11px; line-height: 1.5; }
-:is(#sb, #home) .ae-saved { color: var(--ok, #4f9d69); font-size: 11px; line-height: 1.5; }
+/* The shields switch (PLAN44 D12), per the Switch Anatomy reference: a
+   pill track ~2× its white handle, a green check in the handle, and the
+   state word outside on the right. The track is the alarm — quiet gray
+   while the door is shut, red while it stands open. Colours sampled from
+   the reference: #34c671 (green), #d4d4d7 (track gray). */
+:is(#sb, #home) .shields-switch {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 8px; padding: 0;
+  /* The field column stretches its children; hug the control instead. */
+  align-self: flex-start;
+}
+:is(#sb, #home) .shields-track {
+  position: relative; width: 32px; height: 17px;
+  border-radius: 999px; background: #d4d4d7;
+  transition: background 140ms ease;
+}
+:is(#sb, #home) .shields-knob {
+  position: absolute; top: 50%; margin-top: -8px;
+  /* Handle right = Up, handle left = Down. */
+  left: 15px;
+  width: 16px; height: 16px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,.3);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: left 160ms cubic-bezier(.2,.8,.2,1);
+}
+:is(#sb, #home) .shields-icon {
+  /* Same hue as the track, darker: a light track colour on the white
+     handle is unreadable — the shade carries contrast, the hue carries
+     the match. */
+  font-size: 10px; color: #3f4756;
+}
+:is(#sb, #home) .shields-label {
+  font: 500 12px/1 var(--sans); color: var(--text);
+}
+:is(#sb, #home) .shields-switch.is-down .shields-track { background: #ef4444; }
+:is(#sb, #home) .shields-switch.is-down .shields-knob { left: 1px; }
+:is(#sb, #home) .shields-switch.is-down .shields-icon { color: #b91c1c; }
 /* Recognized devices (PLAN44 A2): one row per issued session cookie. */
 :is(#sb, #home) .ae-devices {
   display: flex; flex-direction: column; gap: 4px;
@@ -138,6 +173,14 @@ pub const CSS: &str = r#"
   border: 0; background: transparent; color: var(--gray-dim);
   cursor: pointer; padding: 2px; border-radius: 6px; font-size: 12px;
   line-height: 1;
+  /* The row's action, not its content: hidden until the row is hovered —
+     same idiom as the transcript's fork button. Keyboard still reaches it. */
+  opacity: 0; pointer-events: none; transition: opacity 100ms ease;
+}
+:is(#sb, #home) .ae-device:hover .ae-device-del,
+:is(#sb, #home) .ae-bans:hover .ae-device-del,
+:is(#sb, #home) .ae-device-del:focus-visible {
+  opacity: 1; pointer-events: auto;
 }
 :is(#sb, #home) .ae-device-del:hover { color: var(--danger, #f87171); background: var(--panel-2); }
 :is(#sb, #home) .ae-bans {
@@ -200,7 +243,12 @@ pub fn agent_editor() -> Node {
                         "({ST}.creating ? 'New agent' : ({ST}.draft.name || 'Agent'))"
                     )),
             ]),
-
+            // The verdict banner: always at the top of the form, just above
+            // the first field — one brick, every aside form.
+            validation_info::live(
+                &format!("({ST}.error ? 'error' : 'ok')"),
+                &format!("({ST}.error ? {ST}.error : {ST}.saved)"),
+            ),
             field("Name", "the @handle", &format!("{ST}.draft.name"), "scout", 0),
             field(
                 "Description",
@@ -362,9 +410,6 @@ pub fn agent_editor() -> Node {
                 4,
             ),
 
-            m("p").class("ae-error").show(&format!("{ST}.error")).text(&format!("{ST}.error")),
-            m("p").class("ae-saved").show(&format!("{ST}.saved")).text(&format!("{ST}.saved")),
-
             m("div").class("ae-actions").kids(vec![
                 m("button")
                     .class("ae-btn primary")
@@ -425,30 +470,33 @@ pub fn settings_panel() -> Node {
                 Node::icon("gear").class("ph ph-gear"),
                 m("span").class("agent-editor-title").child(lit("Settings")),
             ]),
+            // The verdict banner: always at the top of the form, just above
+            // the first field — one brick, every aside form.
+            validation_info::live("'ok'", "$store.ident.saved"),
+            // The username is fixed at sign-in (PLAN44): shown, never
+            // edited — only re-creating the account changes it.
             m("div").class("ae-field").kids(vec![
                 m("label").class("ae-label").kids(vec![
-                    m("span").child(lit("Full name")),
-                    m("span").class("hint").child(lit("how you are named")),
+                    m("span").child(lit("Username")),
+                    m("span")
+                        .class("hint")
+                        .child(lit("set at sign-in · an admin re-creates the account to change it")),
                 ]),
                 m("input")
                     .attr("type", "text")
-                    .attr("placeholder", "Bob")
-                    .model(&format!("{st}.draft.user__full_name")),
+                    .attr("readonly", "")
+                    .model("$store.ident.name"),
             ]),
             m("div").class("ae-field").kids(vec![
                 m("label").class("ae-label").kids(vec![
                     m("span").child(lit("Location")),
-                    m("span").class("hint").child(lit("where you are")),
+                    m("span").class("hint").child(lit("where you are · yours alone")),
                 ]),
                 m("input")
                     .attr("type", "text")
                     .attr("placeholder", "City, State")
-                    .model(&format!("{st}.draft.location")),
+                    .model("$store.ident.location"),
             ]),
-            m("p")
-                .class("ae-saved")
-                .show(&format!("{st}.saved"))
-                .text(&format!("{st}.saved")),
             // ---- identity: recognized devices (PLAN44 A2) --------------
             // Every login this account owns. The cookie is shown masked —
             // its value is never stored — and the trash force-expires it.
@@ -481,11 +529,35 @@ pub fn settings_panel() -> Node {
                     m("span").child(lit("Shields")),
                     m("span").class("hint").child(lit("up: strangers are firewalled · down: invite by name")),
                 ]),
+                // The anatomy (Switch Anatomy reference): one pill track
+                // ~2× the handle, white handle with a green check icon,
+                // state word *outside* on the right. Track carries the
+                // alarm: gray = up (quiet), red = down (open door).
                 m("button")
-                    .class("ae-btn")
                     .attr("type", "button")
-                    .on("click", "$store.ident.toggleShields()")
-                    .text("('Shields ' + ($store.ident.shields === 'up' ? 'Up' : 'Down') + ' — toggle')"),
+                    .attr("title", "Toggle shields")
+                    .bind(
+                        "class",
+                        "($store.ident.shields === 'down' ? 'shields-switch is-down' : 'shields-switch')",
+                    )
+                    .on("click", "$store.ident.setShields($store.ident.shields !== 'down')")
+                    .kids(vec![
+                        m("span").class("shields-track").child(
+                            m("span")
+                                .class("shields-knob")
+                                // Check-fat when the door is shut (the
+                                // font's filled weight of the check), x
+                                // when it is open — both phosphor, both
+                                // wearing their track's colour.
+                                .child(Node::icon_dyn(
+                                    "($store.ident.shields === 'down' ? 'x' : 'check-fat')",
+                                )
+                                .class("ph-fill shields-icon")),
+                        ),
+                        m("span")
+                            .class("shields-label")
+                            .text("($store.ident.shields === 'down' ? 'Down' : 'Up')"),
+                    ]),
                 m("div")
                     .class("ae-bans")
                     .for_each("ip in $store.ident.bans")
@@ -500,14 +572,15 @@ pub fn settings_panel() -> Node {
                     ]),
             ]),
             m("div").class("ae-actions").child(
+                // Per-user profile save (PLAN44): the location — the
+                // username is fixed and has nothing to save.
                 m("button")
                     .class("ae-btn primary")
                     .attr("type", "button")
-                    .bind("disabled", &format!("{st}.saving"))
-                    .on("click", &format!("{st}.save()"))
+                    .on("click", "$store.ident.saveProfile()")
                     .kids(vec![
                         Node::icon("check").class("ph ph-check"),
-                        m("span").text(&format!("({st}.saving ? 'Saving…' : 'Save')")),
+                        m("span").child(lit("Save")),
                     ]),
             ),
         ])

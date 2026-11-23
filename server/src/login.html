@@ -50,7 +50,8 @@
     });
     const body = await r.json().catch(() => ({}));
     if (r.ok && body.ok) {
-      location.reload();
+      // The app, now as whoever just signed in — not a reload of the form.
+      location.href = '/';
     } else {
       err.textContent = body.error || "that did not work";
     }
