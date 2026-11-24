@@ -47,6 +47,13 @@ pub const CSS: &str = r#"
 .mjs-chat .md-body pre code { background: transparent; border: 0; padding: 0; }
 .mjs-chat .md-body a { color: var(--mjs-accent); }
 .mjs-chat .md-body a:hover { text-decoration: underline; }
+.mjs-chat .md-body .md-table-wrap { max-width: 100%; overflow-x: auto; margin: 0.65em 0; }
+.mjs-chat .md-body table { border-collapse: collapse; width: 100%; }
+.mjs-chat .md-body th, .mjs-chat .md-body td { border: 1px solid var(--mjs-line); padding: 0.45em 0.65em; text-align: left; vertical-align: top; overflow-wrap: normal; }
+.mjs-chat .md-body th { background: var(--mjs-panel-2); font-weight: 600; }
+.mjs-chat .md-body .md-align-center { text-align: center; }
+.mjs-chat .md-body .md-align-right { text-align: right; }
+.mjs-chat .md-body .md-align-left { text-align: left; }
 /* An attached image in a message: a small thumbnail, **fit** — the whole
    picture in a 150px frame, never the natural size overflowing the room.
    Click opens the lightbox (the transcript delegates the click). */

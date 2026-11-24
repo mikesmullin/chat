@@ -40,7 +40,7 @@ pub fn format_elapsed(ms: f64) -> String {
 ///
 /// Supported, because this is what models actually emit: fenced code blocks
 /// (``` with an optional language), ATX headings, unordered and ordered
-/// lists, blockquotes, horizontal rules, paragraphs, and the inline set
+/// lists, pipe tables, blockquotes, horizontal rules, paragraphs, and the inline set
 /// `` `code` ``, `**bold**`, `*italic*`, `~~strike~~`, `[text](url)` and
 /// bare HTTP(S) URLs.
 pub fn markdown_to_html(src: &str) -> String {
@@ -104,6 +104,33 @@ pub fn markdown_to_html(src: &str) -> String {
             close_list!();
             i += 1;
             continue;
+        }
+
+        // A delimiter row distinguishes a table from ordinary pipe prose.
+        if i + 1 < lines.len() {
+            if let (Some(header), Some(align)) = (table_cells(raw), table_delimiter(lines[i + 1])) {
+                if header.len() == align.len() {
+                    close_para!();
+                    close_list!();
+                    out.push_str("<div class=\"md-table-wrap\"><table><thead><tr>");
+                    for (cell, alignment) in header.iter().zip(&align) {
+                        table_cell(&mut out, "th", cell, alignment);
+                    }
+                    out.push_str("</tr></thead><tbody>");
+                    i += 2;
+                    while i < lines.len() {
+                        let Some(cells) = table_cells(lines[i]) else { break };
+                        out.push_str("<tr>");
+                        for (col, alignment) in align.iter().enumerate() {
+                            table_cell(&mut out, "td", cells.get(col).map_or("", String::as_str), alignment);
+                        }
+                        out.push_str("</tr>");
+                        i += 1;
+                    }
+                    out.push_str("</tbody></table></div>");
+                    continue;
+                }
+            }
         }
 
         // --- horizontal rule ------------------------------------------------
@@ -171,6 +198,52 @@ pub fn markdown_to_html(src: &str) -> String {
     close_para!();
     close_list!();
     out
+}
+
+/// Split a pipe row, preserving escaped pipes and pipes inside code spans.
+fn table_cells(line: &str) -> Option<Vec<String>> {
+    let line = line.trim();
+    if line.is_empty() { return None; }
+    let mut cells = vec![String::new()];
+    let mut chars = line.chars().peekable();
+    let mut in_code = false;
+    let mut separators = 0;
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && chars.peek() == Some(&'|') {
+            chars.next();
+            cells.last_mut().unwrap().push('|');
+        } else if ch == '`' {
+            in_code = !in_code;
+            cells.last_mut().unwrap().push(ch);
+        } else if ch == '|' && !in_code {
+            separators += 1;
+            cells.push(String::new());
+        } else {
+            cells.last_mut().unwrap().push(ch);
+        }
+    }
+    if separators == 0 { return None; }
+    if line.starts_with('|') { cells.remove(0); }
+    if line.ends_with('|') && cells.last().is_some_and(|s| s.trim().is_empty()) { cells.pop(); }
+    Some(cells.into_iter().map(|s| s.trim().to_string()).collect())
+}
+
+fn table_delimiter(line: &str) -> Option<Vec<&'static str>> {
+    table_cells(line)?.iter().map(|cell| {
+        let dashes = cell.trim_matches(':');
+        if dashes.is_empty() || !dashes.chars().all(|c| c == '-') { return None; }
+        Some(match (cell.starts_with(':'), cell.ends_with(':')) {
+            (true, true) => "center",
+            (false, true) => "right",
+            (true, false) => "left",
+            _ => "",
+        })
+    }).collect()
+}
+
+fn table_cell(out: &mut String, tag: &str, cell: &str, alignment: &str) {
+    let class = if alignment.is_empty() { String::new() } else { format!(" class=\"md-align-{alignment}\"") };
+    out.push_str(&format!("<{tag}{class}>{}</{tag}>", inline(cell)));
 }
 
 /// `1. text` / `12) text` → the text.
@@ -384,6 +457,22 @@ fn wrap(s: &str, marker: &str, tag: &str) -> String {
 #[cfg(test)]
 mod md_tests {
     use super::*;
+
+    #[test]
+    fn pipe_tables_render_cells_alignment_and_inline_safely() {
+        let html = markdown_to_html("Before\n\n| Who | Meaning |\n|:---|---:|\n| **Alice** | <script> \\| `a|b` |\n| Bob |\n\nAfter");
+        assert!(html.contains("<th class=\"md-align-left\">Who</th>"));
+        assert!(html.contains("<td class=\"md-align-left\"><strong>Alice</strong></td>"));
+        assert!(html.contains("<td class=\"md-align-right\">&lt;script&gt; | <code>a|b</code></td>"));
+        assert!(html.contains("<td class=\"md-align-right\"></td>"));
+        assert!(html.ends_with("</tbody></table></div><p>After</p>"));
+    }
+
+    #[test]
+    fn malformed_tables_remain_paragraphs_and_fences_remain_code() {
+        assert!(!markdown_to_html("| a | b |\n|---|\n| x | y |").contains("<table>"));
+        assert!(!markdown_to_html("```\n| a | b |\n|---|---|\n```").contains("<table>"));
+    }
 
     #[test]
     fn html_in_the_source_is_escaped_not_executed() {

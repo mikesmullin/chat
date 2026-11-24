@@ -166,7 +166,8 @@ fn rows() -> Vec<Row> {
             last: true,
             text: "It points at `muse:opus`, with a **200k** context window.\n\n\
                    Nothing in the session overrides it, so that is what the \
-                   next turn will use. See https://example.com/models for details.",
+                   next turn will use. See https://example.com/models for details.\n\n\
+                   | Setting | Value |\n|---|---|\n| Model | `muse:opus` |\n| Context | **200k** |",
             ..BLANK
         },
         Row {
