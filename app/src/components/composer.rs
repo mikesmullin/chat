@@ -374,6 +374,15 @@ pub fn reset_history(st: &JsValue) {
     js::set_str(st, "historyDraft", "");
 }
 
+/// The model binding commits on change; a draft must also be current while
+/// typing, before Enter or a session switch can read it.
+pub fn draft_input(st: &JsValue, args: js_sys::Array) -> JsValue {
+    let event = js::arg(&args, 0);
+    js::set_str(st, "draft", &js::get_str(&js::get(&event, "target"), "value"));
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
 /// Navigate the user messages already loaded for the active session.
 pub fn history_move(st: &JsValue, args: js_sys::Array) -> JsValue {
     if js::get_str(st, "activeId").is_empty() { return JsValue::UNDEFINED; }
@@ -426,6 +435,7 @@ pub fn panel(st: &str) -> Node {
                 m("textarea")
                     .class("draft-ta")
                     .model(&format!("{st}.draft"))
+                    .on("input", &format!("{st}.draftInput($event)"))
                     .attr("placeholder", "Message… (Enter send, Shift+Enter newline)")
                     // Clicking into the composer is "I am looking at this
                     // session": its unread mark goes — the same rule the tab

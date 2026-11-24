@@ -9,28 +9,11 @@
 //! through reflection on `globalThis`, matching the kit's own approach. That
 //! keeps `web-sys` out of the dependency list for features we would use once.
 
-use std::cell::RefCell;
-
 use js_sys::{Array, Promise, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use rustex1_kit::js;
-
-thread_local! {
-    /// The open chat stream's `AbortController`, while there is one.
-    ///
-    /// Module-level because the thing that wants it — the composer's stop
-    /// button — is nowhere near the call that opened the stream, and
-    /// threading a handle back out through `chat_stream`'s callbacks would
-    /// put a lifetime on something the UI holds across turns. wasm is
-    /// single-threaded, so this is a global the borrow checker can still
-    /// see the edges of.
-    static STREAM: RefCell<Option<JsValue>> = const { RefCell::new(None) };
-}
-
-/// Whether this wasm instance owns the original streaming POST.
-pub fn chat_stream_active() -> bool { STREAM.with(|c| c.borrow().is_some()) }
 
 /// `POST /api/abort` — ask the server to stop this session's turn.
 ///
@@ -181,11 +164,6 @@ where
     let payload = payload.clone();
     spawn_local(async move {
         let out = read_stream(&payload, &mut on_row).await;
-        // Whatever happened, this stream is no longer the one to abort.
-        // Left behind, a stale controller would make the next stop press
-        // abort a request that has already finished — and, worse, report
-        // success for having done it.
-        STREAM.with(|c| *c.borrow_mut() = None);
         match out {
             Ok(()) => on_end(None),
             Err(e) => {
@@ -212,14 +190,6 @@ where
     let init = js::obj();
     js::set_str(&init, "method", "POST");
     js::set(&init, "headers", &headers);
-    // One controller per stream, published before the request is made so a
-    // stop pressed during the very first byte still has something to pull.
-    let ctl = js_sys::Reflect::construct(
-        &js::get(&global, "AbortController").into(),
-        &Array::new(),
-    )?;
-    js::set(&init, "signal", &js::get(&ctl, "signal"));
-    STREAM.with(|c| *c.borrow_mut() = Some(ctl.into()));
     let json = js::get(&global, "JSON");
     let text = js::call(&json, "stringify", &[payload.clone()]);
     js::set(&init, "body", &text);

@@ -276,6 +276,10 @@ fn history_move(_this: JsValue, args: js_sys::Array) -> JsValue {
     crate::components::composer::history_move(&mjs::store_ref(STORE), args)
 }
 
+fn draft_input(_this: JsValue, args: js_sys::Array) -> JsValue {
+    crate::components::composer::draft_input(&mjs::store_ref(STORE), args)
+}
+
 /// Open the hidden file picker (A5). The input does the choosing; this
 /// button is just its visible face.
 fn pick_image(_this: JsValue, _args: js_sys::Array) -> JsValue {
@@ -298,6 +302,7 @@ fn image_chosen(_this: JsValue, args: js_sys::Array) -> JsValue {
         return JsValue::UNDEFINED;
     }
     let name = js::get_str(&file, "name");
+    let session_id = js::get_str(&mjs::store_ref(STORE), "activeId");
     let global = js::global();
     let opts = js::obj();
     js::set_str(&opts, "method", "POST");
@@ -306,7 +311,12 @@ fn image_chosen(_this: JsValue, args: js_sys::Array) -> JsValue {
     let done = wasm_bindgen::closure::Closure::once_into_js(move |resp: JsValue| {
         let parsed = wasm_bindgen::closure::Closure::once_into_js(move |v: JsValue| {
             let s = mjs::store_ref(STORE);
-            js::set_str(&s, "image", &js::get_str(&v, "url"));
+            let url = js::get_str(&v, "url");
+            if js::get_str(&s, "activeId") == session_id {
+                js::set_str(&s, "image", &url);
+            } else {
+                COMPOSER_DRAFTS.with(|drafts| drafts.borrow_mut().entry(session_id).or_default().image = url);
+            }
             mjs::redraw();
         });
         let body = js::call(&resp, "json", &[]);
@@ -337,7 +347,7 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
         }
         content.push_str(&format!("![image]({image})"));
     }
-    if content.is_empty() || js::get_bool(&s, "waiting") || api::chat_stream_active() || OWN_TURN.with(|t| t.borrow().is_some()) {
+    if content.is_empty() || js::get_bool(&s, "waiting") || owns_turn(&js::get_str(&s, "activeId")) {
         return JsValue::UNDEFINED;
     }
     // A session you are talking in is one you mean to keep: submitting
@@ -361,7 +371,8 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set(&turn, "baseline", &baseline.into());
     js::set_str(&turn, "prompt", &content);
     js::set(&turn, "rows", &js_sys::Array::new().into());
-    OWN_TURN.with(|t| *t.borrow_mut() = Some(turn.into()));
+    let turn: JsValue = turn.into();
+    OWN_TURNS.with(|t| t.borrow_mut().push(turn.clone()));
 
     // Echo the prompt immediately: the turn is already durable server-side,
     // and waiting for the round trip would make the UI feel dead.
@@ -398,14 +409,14 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
         js::set_str(&payload, "sessionId", &active);
     }
 
+    let row_turn = turn.clone();
     api::chat_stream(
         &payload.into(),
-        |row| on_owned_row(&row),
-        |err| {
+        move |row| on_owned_row(&row_turn, &row),
+        move |err| {
             let s = mjs::store_ref(STORE);
-            let id = OWN_TURN.with(|t| t.borrow_mut().take())
-                .map(|turn| js::get_str(&turn, "sessionId"))
-                .unwrap_or_default();
+            let id = js::get_str(&turn, "sessionId");
+            OWN_TURNS.with(|t| t.borrow_mut().retain(|other| !js_sys::Object::is(other, &turn)));
             if js::get_str(&s, "activeId") != id {
                 load_sessions(JsValue::UNDEFINED, js_sys::Array::new());
                 return;
@@ -491,7 +502,8 @@ fn stop(_this: JsValue, _args: js_sys::Array) -> JsValue {
 
 thread_local! {
     static SESSION_LOADING: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
-    static OWN_TURN: std::cell::RefCell<Option<JsValue>> = const { std::cell::RefCell::new(None) };
+    static OWN_TURNS: std::cell::RefCell<Vec<JsValue>> = const { std::cell::RefCell::new(Vec::new()) };
+    static COMPOSER_DRAFTS: std::cell::RefCell<std::collections::HashMap<String, ComposerDraft>> = std::cell::RefCell::new(std::collections::HashMap::new());
     static TURNS: std::cell::RefCell<std::collections::HashMap<String, JsValue>> = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
@@ -548,7 +560,7 @@ pub(crate) fn receive_turn_event(event: JsValue) {
 /// Returns true if replay included the end of a turn and a fresh transcript
 /// should be loaded once more (the first read may have raced finalization).
 fn replay_active_turn(id: &str) -> bool {
-    let turn = OWN_TURN.with(|t| t.borrow().as_ref().filter(|turn| js::get_str(turn, "sessionId") == id).cloned())
+    let turn = OWN_TURNS.with(|t| t.borrow().iter().find(|turn| js::get_str(turn, "sessionId") == id).cloned())
         .or_else(|| TURNS.with(|t| t.borrow().get(id).cloned()));
     let Some(turn) = turn else { return false; };
     let s = mjs::store_ref(STORE);
@@ -569,17 +581,15 @@ fn replay_active_turn(id: &str) -> bool {
 }
 
 fn owns_turn(id: &str) -> bool {
-    OWN_TURN.with(|t| t.borrow().as_ref().is_some_and(|turn| js::get_str(turn, "sessionId") == id))
+    OWN_TURNS.with(|t| t.borrow().iter().any(|turn| js::get_str(turn, "sessionId") == id))
 }
 
 /// Record the POST stream independently of the currently selected session.
-fn on_owned_row(row: &JsValue) {
+fn on_owned_row(turn: &JsValue, row: &JsValue) {
     let s = mjs::store_ref(STORE);
     let active = js::get_str(&s, "activeId");
     let kind = js::get_str(row, "type");
-    let (id, was_active) = OWN_TURN.with(|t| {
-        let turn = t.borrow();
-        let Some(turn) = turn.as_ref() else { return (String::new(), false); };
+    let (id, was_active) = {
         let previous = js::get_str(turn, "sessionId");
         let was_active = active == previous;
         if kind == "session" {
@@ -590,7 +600,7 @@ fn on_owned_row(row: &JsValue) {
         rows.push(row);
         js::set(turn, "rows", &rows.into());
         (js::get_str(turn, "sessionId"), was_active)
-    });
+    };
     if kind == "session" && !id.is_empty() && !was_active {
         add_open_id(&id);
         rebuild_tabs(&s);
@@ -1121,6 +1131,7 @@ pub fn register() {
         .method("newSession", new_session)
         .method("closeTab", close_tab)
         .method("send", send)
+        .method("draftInput", draft_input)
         .method("pickImage", pick_image)
         .method("imageChosen", image_chosen)
         .method("dropImage", drop_image)
@@ -1350,8 +1361,26 @@ fn read_active_id() -> String {
     js::call(&store, "getItem", &[JsValue::from_str(ACTIVE_KEY)]).as_string().unwrap_or_default()
 }
 
+#[derive(Default)]
+struct ComposerDraft {
+    text: String,
+    image: String,
+}
+
 fn set_active(store: &JsValue, id: &str) {
-    if js::get_str(store, "activeId") != id {
+    let previous = js::get_str(store, "activeId");
+    if previous != id {
+        COMPOSER_DRAFTS.with(|drafts| {
+            let mut drafts = drafts.borrow_mut();
+            drafts.insert(previous, ComposerDraft {
+                text: js::get_str(store, "draft"),
+                image: js::get_str(store, "image"),
+            });
+            let next = drafts.get(id);
+            js::set_str(store, "draft", next.map_or("", |draft| &draft.text));
+            js::set_str(store, "image", next.map_or("", |draft| &draft.image));
+        });
+        crate::components::composer::reset_history(store);
         js::set_bool(store, "waiting", false);
         js::set_bool(store, "stopping", false);
         js::set_bool(store, "stopUnconfirmed", false);

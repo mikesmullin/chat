@@ -695,6 +695,10 @@ fn tree_choose_selected(_this: JsValue, _args: js_sys::Array) -> JsValue {
     tree_choose(JsValue::UNDEFINED, args)
 }
 
+fn draft_input(_this: JsValue, args: js_sys::Array) -> JsValue {
+    crate::components::composer::draft_input(&mjs::store_ref(STORE), args)
+}
+
 fn send_sample(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let text = js::get_str(&s, "draft");
@@ -1004,6 +1008,7 @@ pub fn register() {
         .method("onScroll", inert)
         .method("forkPrompt", inert)
         .method("send", send_sample)
+        .method("draftInput", draft_input)
         .method("historyMove", history_move)
         .method("treeEscape", tree_escape)
         .method("treeResetEscape", tree_reset_escape)
