@@ -1,5 +1,43 @@
 # AGENTS.md — how to work in this repo
 
+## The phrase: "start the server"
+
+When the user says **"start the server"**, ensure **both** of these are running — start the ones that aren't, leave the ones that are (check first, don't restart a healthy server):
+
+1. **Web service on :3020** — this repo's dev server (chat-server, `rustex1.json`):
+   ```bash
+   cd /workspace/psicom/chat && nohup ./dev.sh > /tmp/chat-server.log 2>&1 &
+   ```
+   (`./dev.sh` builds and serves on the port in `rustex1.json`. If the binary is stale after a path-dependency change, restart it: `pkill -x chat-server && nohup ./dev.sh > /tmp/chat-server.log 2>&1 &`.)
+2. **The `../sbox-b` service** — sandbox backend on :3000 (`127.0.0.1:3000`):
+   ```bash
+   cd /workspace/psicom/sbox-b && cargo build && nohup ./target/debug/sbox-b > /tmp/sbox-b.log 2>&1 &
+   ```
+   (Build first if `target/debug/sbox-b` is missing or stale. The wall UI is [`../sbox-a`](../sbox-a), not needed here.)
+
+Confirm both are listening afterwards (`ss -tlnp | grep -E ':3020|:3000'`, or `curl -s 127.0.0.1:3020/api/health` and `curl -s 127.0.0.1:3000/healthz`) and report what started. These are long-running foreground servers — always backgrounded, never blocking the session.
+
+**Example input commands** — tested as a sequence (each line, idle machine):
+
+```bash
+# check first — anything already listening?
+ss -tlnp | grep -E ':3020|:3000'
+
+# start the web service (:3020)
+cd /workspace/psicom/chat && nohup ./dev.sh > /tmp/chat-server.log 2>&1 &
+
+# start sbox-b (:3000) — cargo build is a no-op when up to date
+cd /workspace/psicom/sbox-b && cargo build && nohup ./target/debug/sbox-b > /tmp/sbox-b.log 2>&1 &
+
+# confirm both
+curl -s 127.0.0.1:3020/api/health   # {"ok":true,"port":3020,...}
+curl -s 127.0.0.1:3000/healthz      # {"ok":true}
+```
+
+Notes from the test run: `curl` on :3020 answered `{"ok":true,"port":3020,...}` and :3000 answered `{"ok":true}`; sbox-b's build prints 9 warnings — pre-existing, not errors — and the binary is fine. The `./dev.sh` build is blaze when on `PATH` (else cargo), already built here, so it boots in seconds.
+
+---
+
 The one rule everything else follows:
 
 > **The UI is a composable hierarchy of reusable parts. Every component is
