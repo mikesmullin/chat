@@ -1,19 +1,7 @@
 #!/usr/bin/env bash
-# chat dev server — Rust backend with angela embedded, Rust→wasm frontend,
-# on the rustex1 kit.
-#
-#   ./dev.sh                 build if needed, serve on the port in rustex1.json
-#   ./dev.sh 4000            override the port
-#   ./dev.sh --rebuild       force a fresh wasm build on start
-#
-# angela runs inside chat-server: there is no second daemon to start and no
-# port to coordinate. Its store is <ANGELA_ROOT>/.angela, defaulting to this
-# directory.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Honour exported credentials first; read the chat Muse key without
-# sourcing arbitrary shell commands from the .env file.
 if [[ -z "${META_API_KEY:-}" && -z "${MUSE_API_KEY:-}" ]]; then
   CHAT_ENV="${ANGELA_ROOT:-.}/.angela/.env"
   if [[ -r "$CHAT_ENV" ]]; then
@@ -36,13 +24,9 @@ if ! rustup target list --installed | grep -q wasm32-unknown-unknown; then
   rustup target add wasm32-unknown-unknown
 fi
 
-# Pin the wasm-bindgen version the kit pins — a mismatched CLI produces a
-# module the browser will not instantiate.
 V="$(grep -o 'wasm-bindgen = "=[0-9.]*"' vendor/rustex1/kit/Cargo.toml | grep -o '[0-9.]*' | head -1)"
 V="${V:-0.2.129}"
 
-# The dev server looks for a wasm-bindgen CLI in ./tools, vendor/rustex1/tools
-# and ../rustex1/tools before falling back to PATH. Keep that promise.
 have_cli() {
   ls tools/*/wasm-bindgen >/dev/null 2>&1 \
     || ls vendor/rustex1/tools/*/wasm-bindgen >/dev/null 2>&1 \
@@ -60,7 +44,6 @@ if ! have_cli; then
     | tar xz -C tools/
 fi
 
-# blaze if it is here (seconds off every incremental rebuild), cargo if not
 BUILD="${CHAT_BUILD:-}"
 if [[ -z "$BUILD" ]]; then
   BUILD=cargo

@@ -1,41 +1,3 @@
-//! Talking to **sbox-b**, the host daemon that owns sandboxes.
-//!
-//! ## The seam (PLAN55)
-//!
-//! Sandboxes are **agent-owned**: angela's `sandbox` module decides *which*
-//! (session, agent) runs in *which* container and *when* one is launched —
-//! one per pair, lazily, at that agent's first turn in that session. This
-//! module is the **seam**: where the image and the mounts are decided, and
-//! the only sbox-b client there is. `create` takes the image an agent's
-//! Containerfile names (`sbox-<dir>:latest`, PLAN55 D7), mounts the
-//! session's provisioned worktree at angela's fixed guest path (an empty
-//! path mounts nothing), and passes the host's GPU devices through
-//! (D8/D12). There are no friendly names
-//! (D3/D10): the container's id is the identity, full stop.
-//!
-//! ## Chat is a second front door, not a new API
-//!
-//! sbox-b's sandbox lifecycle was already HTTP — `POST`/`GET`/`DELETE` on
-//! `/api/orchestration/sandboxes` — and its MCP tools (`sandbox_create`,
-//! `sandbox_list`, `sandbox_destroy`) are a thin facade over the same
-//! functions, validator included. So nothing here re-implements a lifecycle:
-//! this module forwards, and the decisions stay where they already were.
-//!
-//! What chat adds is the half sbox-b has no concept of — the **worktree**.
-//! sbox-b takes host bind mounts and knows nothing about where one came
-//! from. The session owns its checkout: its path arrives from the session
-//! record and is never claimed or reaped by the container — a sandbox
-//! created from a worktree leaves the checkout alone when it dies.
-//! Reaping is `hostgit`'s half, at session delete.
-//!
-//! ## Why a hand-rolled client
-//!
-//! One loopback JSON call, no TLS, no redirects, no auth. Pulling in an HTTP
-//! client stack for that would add a dependency tree — and, with `reqwest`,
-//! a second async runtime to reason about inside a handler that is
-//! deliberately synchronous. sbox-b's own internal client is the same shape
-//! for the same reason.
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
@@ -45,8 +7,6 @@ use serde_json::{json, Value};
 
 use angela::sandbox::SandboxRow;
 
-/// Where sbox-b listens. Overridable because the port is sbox-b's choice,
-/// not ours, and a second instance on a dev box is a normal thing to want.
 fn base() -> (String, u16) {
     let host = std::env::var("SBOX_HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let port = std::env::var("SBOX_PORT")
@@ -56,14 +16,9 @@ fn base() -> (String, u16) {
     (host, port)
 }
 
-/// Creating a sandbox boots a container; listing one does not.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const READ_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// One request/response against sbox-b.
-///
-/// `Connection: close` so the body ends at EOF and there is no chunked
-/// decoding to get wrong — this talks to one service, once per call.
 pub(crate) fn request(method: &str, path: &str, body: Option<&Value>) -> Result<Value, String> {
     let (host, port) = base();
     let addr = format!("{host}:{port}");
@@ -112,10 +67,6 @@ pub(crate) fn request(method: &str, path: &str, body: Option<&Value>) -> Result<
     if (200..300).contains(&status) {
         return Ok(parsed);
     }
-    // sbox-b answers errors as `{"error": "<message>"}` (the plain string)
-    // or the `{code, message}` / `{error:{code,message}}` envelopes; surface
-    // its wording rather than inventing our own, because it is the half that
-    // knows why.
     let msg = parsed
         .get("message")
         .and_then(Value::as_str)
@@ -132,19 +83,6 @@ pub(crate) fn request(method: &str, path: &str, body: Option<&Value>) -> Result<
     Err(msg)
 }
 
-/// The driver library families a CUDA passthrough needs (PLAN55 D8/D12), by
-/// prefix. The raw device nodes carry no userspace, and on a new GPU arch
-/// (this box is a Blackwell 5090) cuBLAS must PTX-JIT — which needs the
-/// driver's ptxjitcompiler and nvvm. The NVIDIA container toolkit mounts
-/// this set implicitly; raw `--device` passthrough has to do it by hand.
-///
-/// Discovered by prefix, not a name list: driver generations rename these
-/// (`libnvidia-nvvm.so.4` vs `libnvidia-nvvm70.so.4` on the same box), and a
-/// stale hand-picked list breaks CUDA at inference time. Whole-directory
-/// mounts are worse in the other direction — `ld.so` searches directories,
-/// so mounting host `/usr/lib` into an Ubuntu container would make the
-/// host's libc/libstdc++ resolvable inside it. Per-file is the precise
-/// middle: exactly the driver libs, mounted read-only at /usr/local/lib.
 const GPU_DRIVER_LIB_PREFIXES: &[&str] = &[
     "libcuda.so.",
     "libnvidia-nvvm",
@@ -153,44 +91,13 @@ const GPU_DRIVER_LIB_PREFIXES: &[&str] = &[
     "libnvidia-allocator.so.",
 ];
 
-/// How many driver binds to mount at most — the volume budget is sbox-b's
-/// MAX_VOLUMES minus whatever the worktree bind needs.
 const MAX_GPU_LIBS: usize = 8;
 
-/// True for a **soname** (`libfoo.so.1`) rather than the dev symlink
-/// (`libfoo.so`) or the fully versioned real file (`libfoo.so.615.78.08`):
-/// the loader asks for sonames, so those are what the guest needs.
 fn is_soname(file: &str) -> bool {
     let Some((_, tail)) = file.split_once(".so.") else { return false };
     !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_sonames_pass_the_driver_lib_filter() {
-        assert!(is_soname("libcuda.so.1"));
-        assert!(is_soname("libnvidia-nvvm70.so.4"));
-        // The dev symlink and the fully versioned real file are not what
-        // `dlopen("libcuda.so.1")` looks for.
-        assert!(!is_soname("libcuda.so"));
-        assert!(!is_soname("libcuda.so.615.78.08"));
-        assert!(!is_soname("libnvidia-eglcore.so.615.78.08"));
-    }
-}
-
-/// GPU setup for `container create` (PLAN55 D8/D12): `(devices, driver_libs)`
-/// — the second as `(host path, guest path)` bind mounts.
-///
-/// Prefer the CDI handle (`nvidia.com/gpu`) when the host's container tooling
-/// knows one — it carries the driver libraries with it. Otherwise pass the raw
-/// `/dev/nvidia*` nodes — only those this process can actually open, because
-/// an unopenable node would make `podman create` fail, and a sandbox that
-/// cannot boot is worse than one that transcribes on the CPU — together with
-/// [`GPU_DRIVER_LIBS`], so the passthrough is actually usable (raw device
-/// nodes alone carry no driver library). Empty devices = no GPU.
 fn gpu_setup() -> (Vec<String>, Vec<(String, String)>) {
     for dir in ["/etc/cdi", "/usr/share/cdi", "/var/run/cdi"] {
         if let Ok(rd) = std::fs::read_dir(dir) {
@@ -212,8 +119,6 @@ fn gpu_setup() -> (Vec<String>, Vec<(String, String)>) {
         names.sort();
         for n in names {
             let p = format!("/dev/{n}");
-            // The node must be usable by this user; rootless podman passes it
-            // through only if it is.
             if std::fs::OpenOptions::new().read(true).write(true).open(&p).is_ok() {
                 devices.push(p);
             }
@@ -253,27 +158,12 @@ fn gpu_setup() -> (Vec<String>, Vec<(String, String)>) {
     (devices, libs)
 }
 
-/// The one place the create payload is built — the seam. `image` is the
-/// agent's image (a sandbox kind or an admin reference);
-/// `worktree_path` is the session's checkout (empty = mount nothing), and
-/// `repo_git_dir` is its repo's `.git` directory (empty = no git mount) —
-/// mounted at its own absolute path so the checkout's gitdir pointer, an
-/// absolute host path, resolves inside the guest and git works there.
-///
-/// The mounts are read-write: the point of attaching a worktree is that
-/// the agent works in it. Creation is **async** on sbox-b's side — it
-/// answers 202 and boots in the background — so this returns as soon as
-/// the record exists; angela's sandbox module blocks the turn until the
-/// box is `ready`.
 pub fn create(
     root: &Path,
     image: &str,
     worktree_path: &str,
     repo_git_dir: &str,
 ) -> Result<String, String> {
-    // 8 CPUs, not the 4-CPU default: the guest renders WebGL through
-    // SwiftShader (software), which scales with cores — a game recording at
-    // 4 cores is a slideshow, at 8 it is watchable.
     let payload = json!({ "image": image, "network": true, "resources": { "cpus": 8 } });
 
     let mut volumes: Vec<Value> = Vec::new();
@@ -284,10 +174,6 @@ pub fn create(
         volumes.push(json!({
             "type": "bind",
             "path": worktree_path,
-            // One fixed guest path, so an agent's instructions do not have
-            // to vary with which repo happens to be mounted. The constant
-            // is angela's because the other half of the bargain is there:
-            // the `## Environment` section tells the agent to work here.
             "mount": angela::harness::SANDBOX_MOUNT,
             "mode": "rw",
         }));
@@ -299,17 +185,11 @@ pub fn create(
         volumes.push(json!({
             "type": "bind",
             "path": repo_git_dir,
-            // At its OWN absolute path on purpose: the checkout's `.git`
-            // file names this directory by that exact host path, so the
-            // guest must see it there.
             "mount": repo_git_dir,
             "mode": "rw",
         }));
     }
 
-    // GPU (PLAN55 D8/D12): requested, never load-bearing. If the devices make
-    // the create fail, retry without them (the image falls back to CPU) rather
-    // than failing a turn over an optional accelerator.
     let (devices, gpu_libs) = gpu_setup();
     for (host, guest) in &gpu_libs {
         volumes.push(json!({
@@ -325,8 +205,6 @@ pub fn create(
         if !devices.is_null() {
             p["devices"] = devices;
         }
-        // Always written: the retry passes an explicit list (possibly empty)
-        // and must not inherit the first attempt's GPU bind.
         p["volumes"] = if volumes.is_null() { json!([]) } else { volumes };
         let created = request("POST", "/api/orchestration/sandboxes", Some(&p))?;
         created
@@ -341,7 +219,6 @@ pub fn create(
     let id = match create_with(dev_json, vol_json) {
         Ok(id) => id,
         Err(first) if had_devices => {
-            // The retry drops the GPU half (devices and the driver-lib binds).
             let plain: Vec<Value> = volumes
                 .iter()
                 .filter(|v| {
@@ -358,28 +235,19 @@ pub fn create(
         Err(e) => return Err(e),
     };
 
-    // The checkout is the session's — the path arrived from its record,
-    // and the container never owns or claims it, so the root is not used
-    // here: nothing is tied to the sandbox anymore.
     let _ = root;
     Ok(id)
 }
 
-/// `GET /api/containers/<id>/viewer` — a fresh viewer ticket URL for the
-/// container, for the caller to answer verbatim.
 pub(crate) fn viewer_url(id: &str) -> Result<Value, String> {
     request("GET", &format!("/api/containers/{id}/viewer"), None)
 }
 
-/// A sandbox's state as sbox-b reports it (`ready`, `starting`, …); `None`
-/// when sbox-b no longer tracks it (deleted, or it never came up).
 pub fn state(id: &str) -> Option<String> {
     let v = request("GET", &format!("/api/orchestration/sandboxes/{id}"), None).ok()?;
     v.get("state").and_then(Value::as_str).map(str::to_string)
 }
 
-/// Every container sbox-b tracks, as the menu's raw rows. The id is sbox-b's —
-/// the container's identity (PLAN55 D3/D10: no friendly names exist any more).
 pub fn rows() -> Result<Vec<SandboxRow>, String> {
     let v = request("GET", "/api/orchestration/sandboxes", None)?;
     let list = v.get("sandboxes").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -398,8 +266,6 @@ pub fn rows() -> Result<Vec<SandboxRow>, String> {
         .collect())
 }
 
-/// Destroy a sandbox. Destroying one sandbox never reaps the checkout —
-/// the session owns the worktree; `hostgit` reaps it at session delete.
 pub fn destroy(_root: &Path, id: &str) -> Result<(), String> {
     if id.trim().is_empty() {
         return Err("which sandbox?".into());
@@ -408,16 +274,10 @@ pub fn destroy(_root: &Path, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// angela's [`angela::sandbox::Backend`] over this client: the sandbox policy
-/// (PLAN55 D2) lives in angela; the seam lives here. Registered once at
-/// startup, beside the other chat-owned seams (`prompt_sender`).
 pub struct SboxBackend {
     pub root: std::path::PathBuf,
 }
 
-/// The container runtime binary (`SANDBOX_RUNTIME`, else the first of
-/// `container`/`podman`/`docker` on PATH) — the same detection sbox-b does,
-/// because the `exec` argv dialect is identical across the three.
 fn runtime_bin() -> String {
     if let Ok(bin) = std::env::var("SANDBOX_RUNTIME") {
         if !bin.trim().is_empty() {
@@ -442,9 +302,6 @@ impl angela::sandbox::Backend for SboxBackend {
         create(&self.root, image, worktree_path, repo_git_dir)
     }
     fn prepare_worktree(&self, id: &str) -> Result<(), String> {
-        // The host worktree is owned by the mapped sandbox user; Git inside
-        // the image may see another uid. Trust this one guest path for both
-        // desktop and sudo Git, rather than disabling the ownership check.
         let output = std::process::Command::new(runtime_bin())
             .args(["exec", id, "sudo", "git", "config", "--system", "--replace-all", "safe.directory", "/work", "^/work$"])
             .output().map_err(|e| format!("could not configure sandbox Git: {e}"))?;
@@ -461,9 +318,6 @@ impl angela::sandbox::Backend for SboxBackend {
     fn list(&self) -> Result<Vec<SandboxRow>, String> {
         rows()
     }
-    /// `<runtime> exec -i [-e K=V …] <id> <guest argv…>` — the host argv that
-    /// runs a guest command with its stdio piped back (PLAN55: an agent's
-    /// tool servers run inside its container).
     fn exec_argv(&self, container: &str, guest: &[String], env: &[(String, String)]) -> Vec<String> {
         let mut argv = vec![runtime_bin(), "exec".into(), "-i".into()];
         for (k, v) in env {

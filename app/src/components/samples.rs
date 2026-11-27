@@ -1,56 +1,25 @@
-//! `samples` — the design guide's conversation, as a store.
-//!
-//! The guide does not get its own markup. Every route under `/storybook`
-//! mounts the **same** builders the app mounts, pointed at this store instead
-//! of `live`. So a component has exactly one definition, and the guide is
-//! what that definition looks like with data in it.
-//!
-//! That is the whole reason this file exists. The alternative — a `card()`
-//! per component taking static text, beside a second rendering of the same
-//! card bound to the store — is two definitions of one thing, and the one
-//! nobody is looking at goes stale. It had: the guide was still drawing flat
-//! bubbles and `.tool-card` chrome long after the app had grown turn rails,
-//! dots, agent colours and fold cards.
-//!
-//! The store's shape is the live store's shape, so [`crate::components::session_panel::panel`]
-//! cannot tell the difference. Its **content** is built by the app's own
-//! renderers (`markdown_to_html`, `metrics_html`) rather than hand-written
-//! HTML, for the same reason: a sample that spells out its own markup is one
-//! more copy to keep in step.
-
 use wasm_bindgen::JsValue;
 
 use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
-/// The store's name, and the expression templates read it through.
 pub const STORE: &str = "samples";
 pub const EXPR: &str = "$store.samples";
 
-/// The expression naming the sample row of one kind — what a single card's
-/// demo is built over. The row carries that `kind`, so the card's own
-/// `x-if` is exercised by the demo rather than bypassed by it.
 pub fn row(kind: &str) -> String {
     format!("{EXPR}.row('{kind}')")
 }
 
-/// A transcript row, in the shape the cards read.
 struct Row {
     id: &'static str,
     kind: &'static str,
     text: &'static str,
-    /// Blank for the rows that are nobody's: the user's own, the app's.
     handle: &'static str,
-    /// Whether the row belongs to an inference — what draws the rail and dot.
     turn: bool,
     first: bool,
     last: bool,
-    /// Fold cards start shut in the app. The guide opens two of them so both
-    /// states are on the page at once.
     open: bool,
-    /// Tool rows only.
     name: &'static str,
-    /// User rows only: who said it (PLAN44 A6) — blank is "you".
     from: &'static str,
 }
 
@@ -67,10 +36,6 @@ const BLANK: Row = Row {
     from: "",
 };
 
-/// One turn, start to finish: the question, the paperwork, the thinking, a
-/// tool call and its result, the answer. Then the two rows that belong to
-/// nobody — an error and the room noting who arrived. Every kind the
-/// transcript can draw, in the order it draws them.
 fn rows() -> Vec<Row> {
     vec![
         Row {
@@ -79,8 +44,6 @@ fn rows() -> Vec<Row> {
             text: "Read https://example.com/config and tell me which model it points at.",
             ..BLANK
         },
-        // The same kind, another voice: a shared room's other human wears
-        // the `from-other` variant (left, teal) rather than the me-bubble.
         Row {
             id: "u2",
             kind: "user",
@@ -189,8 +152,6 @@ fn rows() -> Vec<Row> {
     ]
 }
 
-/// The queue card's sample: two messages waiting on the session's
-/// properties — exactly the shape the `queues` topic pushes.
 fn queue_sample() -> JsValue {
     let items = js_sys::Array::new();
     for (id, text) in [
@@ -213,10 +174,6 @@ fn queue_sample() -> JsValue {
     q.into()
 }
 
-/// `dequeue(itemId)` — the guide's dequeue really takes the message back:
-/// the row goes and its text returns to the draft, because that is what the
-/// card promises. (A demo that visibly did nothing would read as a broken
-/// component, not as an inert one.)
 fn dequeue_sample(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     let s = mjs::store_ref(STORE);
@@ -255,8 +212,6 @@ fn messages() -> JsValue {
         if r.kind == "system" { js::set_bool(&o, "commandNotice", true); }
         js::set_str(&o, "text", r.text);
         js::set_str(&o, "handle", r.handle);
-        // The byline's time runs through the same formatter the app uses, so
-        // the guide reads "just now" the way a live transcript would.
         js::set_str(&o, "ts", &now);
         js::set_bool(&o, "turn", r.turn);
         js::set_bool(&o, "turnFirst", r.first);
@@ -273,8 +228,6 @@ fn messages() -> JsValue {
             js::set(&o, "args", &args);
         }
         if r.kind == "approval" {
-            // `command` is what the allowlist was matched against — the
-            // reason the card can answer "why was this not permitted?".
             js::set_str(&o, "command", r.text);
             js::set_str(&o, "status", if r.id == "ap-done" { "always" } else { "pending" });
         }
@@ -291,7 +244,6 @@ fn messages() -> JsValue {
             js::set_str(&o, "reason", "addressed by name");
             js::set_num(&o, "confidence", 0.92);
         }
-        // Message bodies use the same renderer as the live store.
         if matches!(r.kind, "user" | "assistant" | "reasoning") {
             js::set_str(&o, "html", &crate::helpers::markdown_to_html(r.text));
         }
@@ -300,26 +252,7 @@ fn messages() -> JsValue {
     out.into()
 }
 
-/// The sessions the guide's project tree and tab strip show.
-///
-/// `(ordinal, id, title, status)` — the same fields the live list carries,
-/// because the tree and the strip are the live ones.
-/// The last field is the folder it is filed under — `""` for unfiled, which
-/// the tree draws in its own group at the bottom. One of each, so the guide
-/// exercises a nested folder, a sibling, and the unfiled case rather than
-/// just the happy one.
-/// The guide's conversations.
-///
-/// `turns` and the age are here because the project tree renders both: a
-/// sample missing a field the tree reads is a guide that shows less than the
-/// app does, which is how the two versions of one component drift. The same
-/// goes for `contextWindow` and `totalTokens` — the pair the context ring
-/// (and the composer's context pie) fills by. The open
-/// conversation's numbers match the store's own `totalTokens` /
-/// `session.contextWindow`, so the guide's pie and its ring agree.
 const SESSIONS: &[(f64, &str, &str, &str, &str, f64, f64, f64, f64)] = &[
-    // ordinal, id, title, status, project, turns, minutes since it started,
-    // context window, tokens used
     (
         1.0,
         "samples",
@@ -366,7 +299,6 @@ const SESSIONS: &[(f64, &str, &str, &str, &str, f64, f64, f64, f64)] = &[
     ),
 ];
 
-/// The models the guide's picker offers.
 fn models() -> JsValue {
     let a = js_sys::Array::new();
     for m in ["muse:opus", "muse:sonnet", "llama-server:default"] {
@@ -391,8 +323,6 @@ fn sessions() -> JsValue {
         js::set_num(&o, "turns", *turns);
         js::set_num(&o, "contextWindow", *context_window);
         js::set_num(&o, "totalTokens", *total_tokens);
-        // Started `minutes` ago, so the tree's age reads the way a real one
-        // does rather than every row saying "just now".
         let created = js_sys::Date::new_0();
         created.set_time(now.get_time() - minutes * 60_000.0);
         js::set_str(&o, "createdAt", &iso(&created));
@@ -403,13 +333,6 @@ fn sessions() -> JsValue {
     out.into()
 }
 
-/// The guide's instances for the three composer pickers: `{ id, name, icon,
-/// hint }`, which is the shape [`crate::components::picker`] reads.
-///
-/// Enough of each to exercise the menu rather than illustrate it — more rows
-/// than fit without scrolling in one case, a hint on every branch, and a
-/// selection already made in three of the four so the check has somewhere to
-/// land.
 fn targets(rows: &[(&str, &str, &str, &str)]) -> JsValue {
     let out = js_sys::Array::new();
     for (id, name, icon, hint) in rows {
@@ -429,10 +352,6 @@ fn targets(rows: &[(&str, &str, &str, &str)]) -> JsValue {
     out.into()
 }
 
-/// The guide's sandboxes for the menu (PLAN55 rows): `{ id, image, state,
-/// session, agent }` — the shape the listing reads. Two live `sbox-video`
-/// containers so the per-image rollup has something to count, and one
-/// unassigned stopped box so the "unassigned" label and a zero count show.
 fn sandbox_rows() -> JsValue {
     const ROWS: &[(&str, &str, &str, &str, &str)] = &[
         ("sandbox2-4f1e88a1", "sbox-video:latest", "ready", "s-2", "video"),
@@ -452,7 +371,6 @@ fn sandbox_rows() -> JsValue {
     out.into()
 }
 
-/// (id, name, cron, prompt, agent, model, timeoutMin, enabled)
 const AUTOMATIONS: &[(&str, &str, &str, &str, &str, &str, f64, bool)] = &[
     ("a-triage", "issue-triage", "0 9 * * 1-5", "Triage new issues", "scout", "", 60.0, true),
     ("a-sweep", "nightly-sweep", "0 2 * * *", "Sweep stale branches", "", "", 30.0, false),
@@ -476,8 +394,6 @@ fn sample_automations() -> JsValue {
     out.into()
 }
 
-/// The id **is** the name, as `/api/projects` returns it: a project has no
-/// identity apart from its label, and the hierarchy is the `/` in it.
 const PROJECTS: &[(&str, &str, &str, &str)] = &[
     ("psicom/chat", "psicom/chat", "brackets-angle", ""),
     ("psicom/sbox", "psicom/sbox", "brackets-angle", ""),
@@ -494,8 +410,6 @@ const WORKTREES: &[(&str, &str, &str, &str)] = &[
     ("wt-billing", "billing-replay", "tree-structure", "psicom/chat"),
 ];
 
-/// The hint carries the repo, because the name is only a branch — two repos
-/// both having `main` is the normal case, not the edge one.
 const BRANCHES: &[(&str, &str, &str, &str)] = &[
     ("br-chat-main", "main", "git-branch", "psicom/chat"),
     ("br-chat-sbox", "sbox-a", "git-branch", "psicom/chat"),
@@ -504,9 +418,6 @@ const BRANCHES: &[(&str, &str, &str, &str)] = &[
     ("br-agl-rust", "rust", "git-branch", "agl-rs"),
 ];
 
-/// The guide's pickers open the same inspector form the app's do, pointed
-/// back at this store — so the form saves nothing, because `saveProject`
-/// here is inert.
 fn create_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::call(
         &mjs::store_ref("tform"),
@@ -520,8 +431,6 @@ fn create_target(_this: JsValue, args: js_sys::Array) -> JsValue {
 }
 
 fn edit_target(_this: JsValue, args: js_sys::Array) -> JsValue {
-    // Opening the form is the one other interaction the armed trash button
-    // yields to: the rail's armed state is one row's worth, never two.
     let s = mjs::store_ref(STORE);
     js::set_str(&s, "sboxConfirmId", "");
     js::set_str(&s, "sboxError", "");
@@ -537,9 +446,6 @@ fn edit_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `dropSession(id, project)` — the guide's drag-and-drop really moves the
-/// row. Inert here would be worse than absent: a drag that visibly snaps
-/// back reads as a broken component rather than as a disabled one.
 fn drop_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     let project = js::arg_str(&args, 1);
@@ -556,8 +462,6 @@ fn drop_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `pickTarget(kind, id)` — the guide's pickers really do select, because a
-/// menu whose check never moves teaches nothing about the check.
 fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     let field = match js::arg_str(&args, 0).as_str() {
         "project" => "projectId",
@@ -567,15 +471,11 @@ fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     };
     let s = mjs::store_ref(STORE);
     js::set_str(&s, field, &js::arg_str(&args, 1));
-    // Picking is also a dismissal: the menu has done its job.
     js::call(&mjs::store_ref("picker"), "close", &[]);
     mjs::redraw();
     JsValue::UNDEFINED
 }
 
-/// `pickBrowserSandbox(id)` — the pane's dropdown in the guide really
-/// selects (the check moves), but nothing streams: the guide shows the
-/// static states.
 fn pick_browser_sandbox(_this: JsValue, args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     js::set_str(&s, "browserSandboxId", &js::arg_str(&args, 0));
@@ -584,9 +484,6 @@ fn pick_browser_sandbox(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// The pane's demo rows: two ready headed boxes, picker-shaped like the
-/// app's (the app derives these rows from `sandboxes`; a sample spells
-/// them because a sample has no feed).
 fn browser_rows() -> JsValue {
     let rows = js_sys::Array::new();
     for id in ["sbox-sample-1", "sbox-sample-2"] {
@@ -600,15 +497,11 @@ fn browser_rows() -> JsValue {
     rows.into()
 }
 
-/// The automation form behaves like the app without reaching the real
-/// service: writes land in the samples store so the guide's rail redraws.
 fn save_target_sample(_this: JsValue, args: js_sys::Array) -> JsValue {
     let action = js::arg_str(&args, 0);
     let payload = args.get(1);
     let host = mjs::store_ref(STORE);
     if action == "sandbox-remove" {
-        // The guide's Destroy behaves like the app: the row goes, the
-        // groups recompute, the form closes.
         let id = js::get_str(&payload, "id");
         let rows = js_sys::Array::new();
         for row in js_sys::Array::from(&js::get(&host, "sandboxes")).iter() {
@@ -623,7 +516,6 @@ fn save_target_sample(_this: JsValue, args: js_sys::Array) -> JsValue {
         );
         js::set_bool(&mjs::store_ref("tform"), "open", false);
     } else if action == "automation-save" {
-        // Mirror the server: an id replaces, no id mints one.
         let id = js::get_str(&payload, "id");
         let id = if id.trim().is_empty() { "a-sample-created" } else { &id };
         let rows = js_sys::Array::from(&js::get(&host, "automations"));
@@ -670,9 +562,6 @@ fn save_target_sample(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `openSession(id)` — the guide's rail and strip really do switch tabs.
-/// Interactive where the app is interactive, inert where the app would reach
-/// the network: a guide that cannot be clicked teaches half the component.
 fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let id = js::arg_str(&args, 0);
@@ -840,9 +729,6 @@ fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `row(what)` — the sample row with that **id**, or failing that the first
-/// of that **kind**. Most cards want "the approval row"; a card with two
-/// states to show wants one specific one.
 fn row_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     let want = js::arg_str(&args, 0);
     let s = mjs::store_ref(STORE);
@@ -860,8 +746,6 @@ fn row_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::obj().into()
 }
 
-/// `decideApproval(id, verdict)` — the guide's card answers for real, so the
-/// three buttons and the resolved state can both be seen without a session.
 fn decide_approval(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     let verdict = js::arg_str(&args, 1);
@@ -877,8 +761,6 @@ fn decide_approval(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `toggleCard(id)` — the guide's fold cards open and shut like the app's,
-/// because the component under test is the app's, click handler included.
 fn toggle_card(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     let s = mjs::store_ref(STORE);
@@ -894,8 +776,6 @@ fn toggle_card(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// The accent and glyph a byline is drawn with, read from this store's own
-/// roster maps — the same lookup the live store does.
 fn accent_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     let found = js::get_str(
         &js::get(&mjs::store_ref(STORE), "accents"),
@@ -920,9 +800,6 @@ fn icon_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     })
 }
 
-/// The bell flips, because being clickable is the point of showing it — but
-/// it writes to the guide's own store, so nothing is persisted and no real
-/// notification is armed.
 fn toggle_notifications(this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_bool(&this, "notifyEnabled", !js::get_bool(&this, "notifyEnabled"));
     JsValue::UNDEFINED
@@ -937,10 +814,6 @@ fn mark_session_read(this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// Everything the guide has no business doing: no turn to send, no request to
-/// stop, nothing to persist. A no-op rather than an omission, because a
-/// missing method is a template error, not a quiet nothing — and a guide that
-/// throws teaches nothing.
 fn inert(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
@@ -960,10 +833,6 @@ pub fn register() {
     js::set_str(&icons, "fish", "fish");
     js::set_str(&icons, "joker", "mask-happy");
 
-    // The room `session::messages` renders against: you, the agent answering,
-    // and the one who just joined (the transcript ends on "joker joined the
-    // conversation"). Same shape `store_roster` writes, so the roster template
-    // reads the guide exactly the way it reads the app.
     let others = js_sys::Array::new();
     for (i, (handle, icon, accent)) in
         [("fish", "fish", "#38bdf8"), ("joker", "mask-happy", "#be5cff")]
@@ -987,8 +856,6 @@ pub fn register() {
         bytes: 9400.0,
     });
 
-    // The session meta the editor demo seeds from — the same shape the
-    // server's `load` answers, so `sessionDraft.seed` reads it unchanged.
     let session = js::obj();
     js::set_num(&session, "contextWindow", 200000.0);
     js::set_str(&session, "id", "s-1");
@@ -1015,19 +882,13 @@ pub fn register() {
 
     let mut d = Def::new().named("store samples");
     d
-        // ── the conversation ───────────────────────────────────────
         .val("messages", &messages())
-        // Pending work, drawn by the "waiting for" card — live state in the
-        // app, a sample here.
         .val("queue", &queue_sample())
         .val("threads", &js_sys::Array::new().into())
-        // Nothing is waiting in a still picture; the guide's approvals are
-        // rows in the transcript, in both of their states.
         .val("approvals", &js_sys::Array::new().into())
         .val("session", &session.into())
         .val("accents", &accents.into())
         .val("icons", &icons.into())
-        // ── the composer's target row ─────────────────────────────
         .val("sandboxes", &sandbox_rows())
         .val("browserSandboxes", &browser_rows())
         .str("browserSandboxId", "sbox-sample-1")
@@ -1035,8 +896,6 @@ pub fn register() {
         .bool("viewerFetching", false)
         .val("sandboxGroups", &crate::components::sandboxes_menu::group_rows(&sandbox_rows()))
         .val("sandboxOpen", &js::obj().into())
-        // The rail's per-row destroy button: which container is armed, and
-        // the last failure (the guide never fails — the note stays empty).
         .str("sboxConfirmId", "")
         .str("sboxError", "")
         .val("automations", &sample_automations())
@@ -1047,7 +906,6 @@ pub fn register() {
         .bool("sboxUp", true)
         .val("repoBranches", &targets(BRANCHES))
         .str("projectId", "psicom/chat")
-        // Nothing chosen, so the guide shows the null row checked too.
         .str("worktreeId", "")
         .str("branchId", "br-chat-main")
         .str("activeId", "samples")
@@ -1065,14 +923,12 @@ pub fn register() {
         .num("treeIndex", 4.0)
         .val("treeRows", &sample_tree())
         .str("cursor", "four")
-        // ── the room ───────────────────────────────────────────────
         .val("others", &others.clone().into())
         .val("activeOthers", &others.into())
         .str("userName", "Bob")
         .num("agentCount", 2.0)
         .bool("isGroup", true)
         .bool("compacting", false)
-        // ── the composer ───────────────────────────────────────────
         .str("draft", "")
         .num("historyPosition", -1.0)
         .str("historyDraft", "")
@@ -1086,12 +942,10 @@ pub fn register() {
         .str("lastMetrics", &metrics)
         .num("promptTokens", 1761.0)
         .num("totalTokens", 1975.0)
-        // ── nothing is streaming in a still picture ────────────────
         .str("streamText", "")
         .str("streamReasoning", "")
         .str("streamHandle", "")
         .bool("streamReasoningOpen", false)
-        // ── methods ────────────────────────────────────────────────
         .method("row", row_of)
         .method("decideApproval", decide_approval)
         .method("openSession", open_session)
@@ -1102,9 +956,6 @@ pub fn register() {
         .method("deleteSession", inert)
         .method("closeTab", close_tab)
         .method("newSession", inert)
-        // The same clock *and* the same rendering the app uses: the guide's
-        // project tree is the same component, so its ages must read `12m`,
-        // not `12min ago`. `relAgo` is the prose form, for bylines.
         .method("toggleCard", toggle_card)
         .method("accentOf", accent_of)
         .method("iconOf", icon_of)
@@ -1141,29 +992,22 @@ pub fn register() {
         .method("refreshModels", inert)
         .method("loadProjects", inert)
         .method("loadTargets", inert)
-        // The guide's form opens and validates; it persists nothing.
         .method("saveTarget", save_target_sample)
         .method("saveProject", inert)
         .method("renameTreeRow", rename_tree_row)
         .method("pickTarget", pick_target)
         .method("dequeue", dequeue_sample)
         .method("pickBrowserSandbox", pick_browser_sandbox)
-        // A sample mints no tickets and streams nothing.
         .method("loadViewerUrl", inert)
         .method("editTarget", edit_target)
         .method("createTarget", create_target)
         .method("persistComposerSettings", inert)
-        // The guide's rail heads have buttons; the guide creates nothing.
         .method("noop", inert)
         .method("toggleSandboxGroup", crate::components::sandboxes_menu::toggle_group)
         .method("sboxRemove", sbox_remove_sample);
     mjs::store(STORE, &d.finish());
 }
 
-/// `sboxRemove(id)` — the guide's rail row trash button, behaving exactly
-/// like the app's: first press arms, second press removes the row locally.
-/// Inert here would be worse than absent: the guide's rows really arm-and-
-/// confirm, and the row really goes.
 fn sbox_remove_sample(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     if id.is_empty() {
@@ -1176,8 +1020,6 @@ fn sbox_remove_sample(_this: JsValue, args: js_sys::Array) -> JsValue {
     }
     js::set_str(&s, "sboxConfirmId", "");
     js::set_str(&s, "sboxError", "");
-    // The guide's listing recomputes from the rows, exactly like the live
-    // store's.
     let rows = js_sys::Array::new();
     for row in js_sys::Array::from(&js::get(&s, "sandboxes")).iter() {
         if js::get_str(&row, "id") != id { rows.push(&row); }

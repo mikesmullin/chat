@@ -1,4 +1,3 @@
-//! Project settings use the same field builder as the session editor.
 use wasm_bindgen::JsValue;
 use rustex1_kit::h::{lit, m, Node};
 use rustex1_kit::{js, mjs};

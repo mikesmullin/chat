@@ -29,8 +29,6 @@
   <button>Sign in</button>
 </form>
 <script>
-  // A light fingerprint — enough to tell one device from another in the
-  // profile's device list, never anything identifying.
   const fp = [navigator.userAgent, screen.width + "x" + screen.height,
               Intl.DateTimeFormat().resolvedOptions().timeZone,
               navigator.language].join("|");
@@ -50,7 +48,6 @@
     });
     const body = await r.json().catch(() => ({}));
     if (r.ok && body.ok) {
-      // The app, now as whoever just signed in — not a reload of the form.
       location.href = '/';
     } else {
       err.textContent = body.error || "that did not work";

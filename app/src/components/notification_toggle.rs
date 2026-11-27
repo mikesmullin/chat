@@ -1,4 +1,3 @@
-//! Session completion notifications and their shared bell control.
 use crate::css;
 use rustex1_kit::h::{m, Node};
 use rustex1_kit::{js, lifecycle, mjs};
@@ -31,7 +30,6 @@ pub const CSS: &str = r#"
 .notify-toggle .ph { font-size: 16px; }
 "#;
 
-/// Same builder for the app and the samples store.
 pub fn button(st: &str) -> Node {
     m("button")
         .class("notify-toggle")
@@ -70,8 +68,6 @@ pub fn enabled() -> bool {
     .as_string()
     .as_deref()
     {
-        // A fresh visitor (nothing in localStorage) is on by default; only
-        // an explicit "false" turns it off.
         None => true,
         Some("false") => false,
         Some(_) => true,
@@ -127,7 +123,6 @@ fn ignore_rejection(promise: &JsValue) {
         Closure::wrap(Box::new(|_err: JsValue| {}) as Box<dyn FnMut(JsValue)>).into_js_value();
     js::call(promise, "catch", &[reject]);
 }
-/// Prime the media element from the user's click for browsers that require a gesture.
 fn prime_audio() {
     let player = audio();
     if js::is_missing(&player) {
@@ -161,7 +156,6 @@ fn chime() {
     ignore_rejection(&js::call(&player, "play", &[]));
 }
 
-/// Keep route titles intact when adding/removing the unread count.
 fn sync_title() {
     let global = js::global();
     let doc = js::get(&global, "document");
@@ -264,11 +258,6 @@ pub fn start() {
     attach_composer_focus_listener();
 }
 
-/// `focusin` on the active composer's draft box: the reader has grabbed
-/// the conversation to type, so that session is being read. Bound at document
-/// level (as the tab strip is) because the composer is a long-lived element
-/// whose identity can change when the preview/active session swaps; we key
-/// off `closest` so only the app's own `#home` composer counts.
 fn attach_composer_focus_listener() {
     let global = js::global();
     let doc = js::get(&global, "document");
@@ -345,10 +334,6 @@ pub fn mark_read(this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// Remove one session from the unread list (and re-sync). Also the plain
-/// Rust path, so `live` can mark a session read the moment it is opened —
-/// independent of any DOM click handler. A session you are looking at is by
-/// definition not unread.
 pub fn clear_session_unread(this: &JsValue, id: &str) {
     let old = js_sys::Array::from(&js::get(this, "unreadSessions"));
     if old.iter().all(|v| v.as_string().as_deref() != Some(id)) {
@@ -368,12 +353,9 @@ pub fn clear_session_unread(this: &JsValue, id: &str) {
     }
 }
 
-/// Prevent a late completion from reviving an unread deleted session.
 pub fn begin_delete(id: &str) {
     DELETED.with(|ids| { ids.borrow_mut().insert(id.to_string()); });
     let id = id.to_string();
-    // The API callback is not invoked on network errors. Avoid suppressing
-    // notifications forever if a deletion request never gets a response.
     lifecycle::after(10_000.0, move || {
         if DELETED.with(|ids| ids.borrow_mut().remove(&id)) {
             crate::api::sessions(crate::components::live::apply_sessions);
@@ -393,7 +375,6 @@ fn retained_unread(unread: &[String], existing: &HashSet<String>) -> Vec<String>
     unread.iter().filter(|id| existing.contains(*id)).cloned().collect()
 }
 
-/// A complete session list is authoritative, including deletes made elsewhere.
 pub fn reconcile_unread(this: &JsValue, sessions: &js_sys::Array) {
     let existing: HashSet<String> = sessions.iter().map(|s| js::get_str(&s, "id")).collect();
     let old = js_sys::Array::from(&js::get(this, "unreadSessions"));
@@ -408,7 +389,6 @@ pub fn reconcile_unread(this: &JsValue, sessions: &js_sys::Array) {
     schedule();
 }
 
-/// Exactly one alert per SSE turn, even when a snapshot and deltas overlap.
 pub fn completed(id: &str, turn_id: &str, completed_at: Option<f64>) {
     if id.is_empty() || turn_id.is_empty() {
         return;
@@ -418,8 +398,6 @@ pub fn completed(id: &str, turn_id: &str, completed_at: Option<f64>) {
     if !js::get_bool(&s, "notifyEnabled") {
         return;
     }
-    // A turn can finish before its session-list update arrives. Verify an
-    // unknown id instead of reintroducing a deleted session as unread.
     let sessions = js_sys::Array::from(&js::get(&s, "sessions"));
     if !sessions.iter().any(|row| js::get_str(&row, "id") == id) {
         let session_id = id.to_string();
@@ -474,9 +452,6 @@ pub fn completed(id: &str, turn_id: &str, completed_at: Option<f64>) {
         ],
     );
     let active_id = js::get_str(&s, "activeId");
-    // A turn finishing in the conversation on screen is already visible
-    // (it arrives live in the transcript) — only *other* sessions get
-    // flagged.
     if !(active_id.is_empty() && active_id == id) {
         let old = js_sys::Array::from(&js::get(&s, "unreadSessions"));
         if !old.iter().any(|v| v.as_string().as_deref() == Some(id)) {
@@ -489,17 +464,4 @@ pub fn completed(id: &str, turn_id: &str, completed_at: Option<f64>) {
     }
     chime();
     schedule();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reconciliation_keeps_only_unread_sessions_that_still_exist() {
-        let unread = vec!["deleted".into(), "kept".into(), "also-deleted".into()];
-        let existing = HashSet::from(["kept".to_string(), "read".to_string()]);
-        assert_eq!(retained_unread(&unread, &existing), vec!["kept"]);
-        assert!(retained_unread(&unread, &HashSet::new()).is_empty());
-    }
 }

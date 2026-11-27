@@ -1,4 +1,3 @@
-//! Subscribe once per wasm boot. EventSource reconnects and receives a fresh snapshot.
 use rustex1_kit::{js, lifecycle};
 use wasm_bindgen::{prelude::*, JsCast};
 
@@ -144,9 +143,6 @@ pub fn start() {
                         crate::components::live::apply_sandboxes(&value);
                     }
                     "sandboxes-delta" => sandbox_delta(&value),
-                    // The message queue: what the "waiting for" card draws.
-                    // One snapshot per change, keyed by session — the
-                    // transcript reads the active one.
                     "queues" => crate::components::live::apply_queue(value),
                     "turn-snapshot" => crate::components::live::receive_turn_snapshot(value),
                     "turn-event" => crate::components::live::receive_turn_event(value),

@@ -1,16 +1,3 @@
-//! `share dialog` — who else can reach this (PLAN44 Layer 2).
-//!
-//! Google-Drive-shaped on purpose: pick a person, pick what they may do.
-//! The four presets are exactly the catalog's bundles — `viewer` = read,
-//! `chatter` = + post, `operator` = + steer/seat/edit_meta, `editor` = +
-//! edit — and choosing one rewrites that person's grant rows on the
-//! resource. The owner appears read-only (the owner is not a grant); the
-//! admin needs no row at all.
-//!
-//! The dialog speaks the `/api/acl` endpoints and nothing else: the server
-//! is the only thing that decides who may share (owner, or a grant carrying
-//! `with_grant`), so the UI can stay a form.
-
 use rustex1_kit::h::{lit, m, Node};
 use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
@@ -21,8 +8,6 @@ use crate::css;
 const STORE: &str = "share";
 const ST: &str = "$store.share";
 
-/// The preset ladder (PLAN44 catalog, "share-dialog shorthand"). Order is
-/// weakest first — the select reads as a ladder, and `none` removes.
 const PRESETS: &[(&str, &[&str])] = &[
     ("none", &[]),
     ("viewer", &["read"]),
@@ -34,11 +19,6 @@ const PRESETS: &[(&str, &[&str])] = &[
 pub const CSS: &str = r#"
 :is(#sb, #home) .share-panel {
   display: flex; flex-direction: column; gap: 14px;
-  /* A sibling form, not a card: the aside supplies the horizontal padding,
-     exactly like `.agent-editor`, so the rows keep the same grid. The rule
-     across the top is what says "a new form starts here" — kept brighter
-     than the faint in-form dividers (which stay `--line-soft`), with air
-     on both sides so it reads as a seam and not a stray mark. */
   border-top: 1px solid #363636;
   margin: 14px 0;
   padding-top: 14px;
@@ -74,12 +54,9 @@ pub const CSS: &str = r#"
 .share-demo .mjs-chat.mode-sidebar { border-left: 0; }
 "#;
 
-/// The panel — one of the inspector's surfaces.
 pub fn panel() -> Node {
     m("div")
         .class("share-panel")
-        // The share form lives below the Profile form — it appears with
-        // it, and nowhere else (for now).
         .show("$store.ident.panelOpen")
         .kids(vec![
             m("div").class("share-head").kids(vec![
@@ -88,7 +65,6 @@ pub fn panel() -> Node {
                 m("span").class("share-name").text(&format!("{ST}.name")),
             ]),
             m("div").class("share-rows").kids(vec![
-                // The owner is a fact, not a grant.
                 m("div").class("share-row").kids(vec![
                     m("span").class("share-who").text(&format!("{ST}.ownerName")),
                     m("span").class("share-owner").child(lit("owner")),
@@ -141,8 +117,6 @@ pub fn panel() -> Node {
         ])
 }
 
-/// standalone demo — the panel over a seeded row set (the guide shows the
-/// shape, not the server).
 pub fn demo() -> Node {
     let s = mjs::store_ref(STORE);
     js::set_str(&s, "name", "session · demo-room");
@@ -191,8 +165,6 @@ fn redraw() -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// The share action on whatever is open — the session in the middle
-/// column. Only sessions for now; `open(kind, name)` is the general door.
 fn open_for_active(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let live = mjs::store_ref("live");
     let id = js::get_str(&live, "activeId");
@@ -212,8 +184,6 @@ fn open(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::set_str(&s, "kind", &js::arg_str(&args, 0));
     js::set_str(&s, "name", &js::arg_str(&args, 1));
     js::set_str(&s, "error", "");
-    // Below the Profile form means *with* the Profile form: a Share…
-    // button opens that page too (one panel at a time).
     js::set_bool(&mjs::store_ref("agents"), "open", false);
     js::set_str(&mjs::store_ref("agents"), "selected", "");
     js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
@@ -230,16 +200,12 @@ fn close(_this: JsValue, _args: js_sys::Array) -> JsValue {
     redraw()
 }
 
-/// The current grants and the people who could be granted.
 fn load(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let kind = js::get_str(&s, "kind");
     let name = js::get_str(&s, "name");
     rustex1_kit::api::get("/api/users", None, |v| {
         let s = mjs::store_ref(STORE);
-        // Everyone starts at `none`; the grants call below paints the
-        // presets on top. The owner is filtered out of the rows there —
-        // only that call knows who the owner is.
         let rows = js_sys::Array::new();
         for u in js_sys::Array::from(&js::get(&v, "users")).iter() {
             let row = js::obj();
@@ -255,7 +221,6 @@ fn load(_this: JsValue, _args: js_sys::Array) -> JsValue {
     rustex1_kit::api::get(&url, None, |v| {
         let s = mjs::store_ref(STORE);
         let owner_id = js::get(&v, "ownerId").as_f64().unwrap_or(0.0);
-        // Name the owner from the users list; fall back to "unknown".
         let mut owner_name = String::from("unknown");
         for u in js_sys::Array::from(&js::get(&s, "users")).iter() {
             if js::get_num(&u, "id") == owner_id {
@@ -264,8 +229,6 @@ fn load(_this: JsValue, _args: js_sys::Array) -> JsValue {
             }
         }
         js::set_str(&s, "ownerName", &owner_name);
-        // Fold grant rows into per-user presets (the strongest bundle whose
-        // privileges are all present wins).
         let mut by_user: std::collections::BTreeMap<String, Vec<String>> =
             std::collections::BTreeMap::new();
         for g in js_sys::Array::from(&js::get(&v, "grants")).iter() {
@@ -279,7 +242,7 @@ fn load(_this: JsValue, _args: js_sys::Array) -> JsValue {
         for row in rows.iter() {
             let name = js::get_str(&row, "name");
             if name == owner_name {
-                continue; // the owner is the fact above, not a grant row
+                continue;
             }
             if let Some(p) = by_user.get(&name.to_lowercase()) {
                 let preset = PRESETS
@@ -298,12 +261,6 @@ fn load(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// Grant a preset to one person: their existing privileges on the resource
-/// are replaced by the bundle, exactly as the share dialog promises.
-///
-/// The preset is read from the select itself — what the user picked — not
-/// from `g.preset`, which the model binding may still be carrying the old
-/// value of when this handler runs.
 fn set_preset(_this: JsValue, args: js_sys::Array) -> JsValue {
     let name = js::arg_str(&args, 0);
     let preset = if args.length() > 1 {
@@ -320,7 +277,6 @@ fn set_preset(_this: JsValue, args: js_sys::Array) -> JsValue {
         .find(|(n, _)| *n == preset)
         .map(|(_, v)| *v)
         .unwrap_or(&[]);
-    // Revoke everything first (the server keeps only what we re-grant).
     for p in [
         "read", "post", "steer", "seat", "edit_meta", "edit", "grant", "delete",
     ] {
@@ -347,8 +303,6 @@ fn set_preset(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// The value of one person's preset select. Row order in the DOM is row
-/// order in the store, so the name finds its row without ids.
 fn preset_from_dom(name: &str) -> String {
     let store = mjs::store_ref(STORE);
     let names: Vec<String> = js_sys::Array::from(&js::get(&store, "rows"))
@@ -378,7 +332,6 @@ fn preset_from_dom(name: &str) -> String {
     js::get_str(&sel, "value")
 }
 
-/// Share with the person picked in the add row.
 fn invite(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let who = js::get_str(&s, "who");

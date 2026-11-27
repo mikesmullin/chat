@@ -1,4 +1,3 @@
-//! Shared Simple / Advanced display mode and its toggle.
 use rustex1_kit::h::{m, Node};
 use rustex1_kit::{js, mjs};
 use rustex1_kit::mjs::Def;
@@ -28,9 +27,6 @@ pub fn button() -> Node {
         .child(Node::icon_dyn("($store.mode.advanced ? 'tree-view' : 'tree')"))
 }
 
-/// Where the mode is remembered. It is a preference of this person at this
-/// machine — not of the conversation, which is why it is here and not in
-/// the session's meta.
 const MODE_KEY: &str = "mjs-chat.mode";
 
 fn saved_advanced() -> bool {
@@ -70,7 +66,6 @@ fn toggle(_this: JsValue, _args: js_sys::Array) -> JsValue {
 pub fn register() {
     css::inject("mode-toggle", CSS);
     let mut d = Def::new().named("store mode");
-    // First paint is the mode this browser was left in, not a default.
     d.bool("advanced", saved_advanced()).method("toggle", toggle);
     mjs::store("mode", &d.finish());
 }

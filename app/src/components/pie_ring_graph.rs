@@ -1,19 +1,3 @@
-//! `uiPieRing` — a generic cooldown/progress ring (the storybook's
-//! `/pie-ring-graph` component).
-//!
-//! Two SVG circles on a `pathLength="1"` normalisation: a faint full-circle
-//! track and a fill arc whose length is the `fraction` prop. Colour is
-//! `currentColor`, so it tints to whatever state it sits in (or the host's
-//! `color` prop).
-//!
-//! props (host-provided, with defaults):
-//! - `fraction` — fill fraction 0..1 (default 0.68)
-//! - `color`    — explicit CSS colour; empty => inherit (currentColor) (default "")
-//!
-//! The shared `.pie-ring` base (22px disc, the seat-disc size) lives in the
-//! global layer — the same ring is the roster's context gauge. The
-//! showcase chrome (`.demo-ring`, the looping pulse) is owned here.
-
 use rustex1_kit::h::m;
 use rustex1_kit::mjs::{self, Def};
 use crate::css;
@@ -21,8 +5,6 @@ use crate::css;
 const NAME: &str = "uiPieRing";
 
 const CSS: &str = r#"
-/* standalone ring showcase: 64px, accent, loops 0% → 100% → 0%
-   (fill circle only; the static track is the first circle) */
 .demo-ring { width: 64px; height: 64px; color: var(--accent); }
 .demo-ring svg, .demo-ring .pie-ring svg { width: 100%; height: 100%; display: block; }
 @keyframes ringfill {
@@ -47,7 +29,6 @@ fn def() -> Def {
                 .attr("aria-hidden", "true")
                 .bind("style", "color ? 'color:' + color : ''")
                 .kids(vec![
-                    // track: faint, full circumference.
                     m("circle")
                         .attr("cx", "8")
                         .attr("cy", "8")
@@ -57,7 +38,6 @@ fn def() -> Def {
                         .attr("stroke-opacity", ".22")
                         .attr("stroke-width", "2")
                         .attr("pathLength", "1"),
-                    // fill arc: dasharray = fraction (pathLength normalised to 1).
                     m("circle")
                         .attr("cx", "8")
                         .attr("cy", "8")

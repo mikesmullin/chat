@@ -68,10 +68,6 @@ pub mod tool_response_card;
 pub mod user_card;
 pub mod validation_info;
 
-/// register the storybook's leaf widgets.
-///
-/// Widget CSS is injected inside each widget's `register()`. Route-tree CSS
-/// (no widget registration) is injected here, from each tree's own `CSS` const.
 pub fn register() {
     samples::register();
     agent_editor::register();

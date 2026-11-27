@@ -1,14 +1,3 @@
-//! `/api/*` — angela, running **in this process**.
-//!
-//! This used to forward to a separate angela daemon over HTTP, which is what
-//! you do when the agent half is written in another language. It is a Rust
-//! crate now, so the chat app is one server: one process to start, one set of
-//! logs, no port to coordinate, and no proxy hop to buffer a stream.
-//!
-//! The adapter below is the whole seam. angela's router writes through its
-//! `ResponseSink`; this maps that onto the dev server's `Stream`, so the same
-//! routes serve both here and from the standalone `angela-serve` binary.
-
 use std::sync::Arc;
 
 use angela::http::{Request as ARequest, ResponseSink};
@@ -16,8 +5,6 @@ use angela::serve::{AppState, Server as AngelaServer};
 use rustex1_devserver::{Request, State, Stream};
 use serde_json::Value;
 
-/// Where sessions live. `ANGELA_ROOT` overrides; otherwise the directory the
-/// server was started from, which is the chat project itself.
 pub fn project_root() -> std::path::PathBuf {
     match std::env::var("ANGELA_ROOT") {
         Ok(v) if !v.trim().is_empty() => std::path::PathBuf::from(v.trim()),
@@ -25,45 +12,24 @@ pub fn project_root() -> std::path::PathBuf {
     }
 }
 
-/// Built once: it owns the session store and the tokio runtime that turns
-/// drive agl on. Rebuilding per request would spin up a runtime per call.
 pub(crate) fn angela(port: u16) -> &'static AngelaServer {
     use std::sync::OnceLock;
     static SERVER: OnceLock<AngelaServer> = OnceLock::new();
     SERVER.get_or_init(|| {
         let root = project_root();
-        // The reported port is this server's: embedded angela has no port of
-        // its own, and `/api/health` saying 0 would just be a lie.
         let mut state = AppState::new(&root, port).expect("angela state");
-        // The chat-control tools (`chat__sessions_prompt`) enqueue turns
-        // through the host, so rows reach the live event feed exactly like
-        // a typed prompt. Wired here because the bridging (the event feed)
-        // is the host's, not angela's.
         state.prompt_sender = Some(Arc::new(|session: &str, content: String, agent: String, model: String| {
             crate::automations::submit_prompt(session, content, agent, model);
         }));
-        // A roster change hits the event feed the moment it happens: the
-        // person just invited sees the session appear in their sidebar in
-        // real time (PLAN: an invite is an SSE event, not a 4s-later poll).
         state.seat_sender = Some(Arc::new(|_session: &str| {
             crate::events::bump_sessions();
         }));
-        // The "waiting for" card is live state, not history: a queued
-        // message must appear in it — and leave it — the moment it happens.
         state.queue_sender = Some(Arc::new(|| {
             crate::events::bump_queues();
         }));
-        // Agent-owned sandboxes (PLAN55): angela owns the policy (one
-        // container per session → agent, lazily launched), this module owns
-        // the seam (the sbox-b client).
         angela::sandbox::set_backend(Box::new(crate::sbox::SboxBackend {
             root: root.clone(),
         }));
-        // The session-properties gate: a session is turn-ready only when
-        // its workspace root is set and its worktree is provisioned —
-        // checked here, repaired here (the hook may re-provision a
-        // vanished checkout). The deletion hook reaps the session's
-        // checkout: a sandbox is disposable, a worktree is not.
         let root_check = root.clone();
         let root_delete = root.clone();
         angela::session_props::set_check(Arc::new(move |meta, def| {
@@ -80,8 +46,6 @@ pub(crate) fn angela(port: u16) -> &'static AngelaServer {
     })
 }
 
-/// Add chat-owned status events to angela's reconstructed transcript in
-/// branch order. They are not model messages and are not sent as prompts.
 fn chat_messages(store: &angela::conv_store::ConvStore, id: &str) -> Vec<Value> {
     let mut messages = angela::serve::reconstruct_messages(store, id);
     let path = store.path(id);
@@ -97,7 +61,6 @@ fn chat_messages(store: &angela::conv_store::ConvStore, id: &str) -> Vec<Value> 
     messages
 }
 
-/// Bridges angela's `ResponseSink` onto the dev server's `Stream`.
 struct DevSink<'s, 'a> {
     out: &'s mut Stream<'a>,
     streaming: bool,
@@ -110,12 +73,7 @@ struct DevSink<'s, 'a> {
     disconnected: bool,
     port: u16,
     assistant_filter: crate::assistant_text::StreamFilter,
-    /// When set, a session this request creates is owned by this user
-    /// (PLAN44: ownership is claimed at creation, never at first touch —
-    /// a stranger's first message must not make them the owner).
     claim_owner: Option<i64>,
-    /// The acting user, for listings the response must filter (PLAN44 C4):
-    /// `None` is the dev/admin zone — unfiltered.
     viewer: Option<i64>,
 }
 
@@ -124,8 +82,6 @@ impl DevSink<'_, '_> {
         if self.chat {
             if let Some(id) = self.turn_id { crate::events::turn_row(id, value); }
         }
-        // A new session announces itself as `{"type":"session","sessionId"}`.
-        // Claim it for the creator exactly once.
         if let (Some(owner), Some(sid)) = (
             self.claim_owner,
             value.get("sessionId").and_then(Value::as_str),
@@ -150,8 +106,6 @@ impl DevSink<'_, '_> {
 impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
     fn json(&mut self, status: u16, body: &Value) {
         let mut body = body.clone();
-        // A JSON answer that names a fresh session id claims it too
-        // (`/api/session/new`).
         if let (Some(owner), Some(sid)) = (
             self.claim_owner,
             body.get("id").and_then(Value::as_str),
@@ -168,8 +122,6 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
                 body["messages"] = Value::Array(chat_messages(&angela(self.port).state.store, &id));
             }
         }
-        // Agent listings ride this path (angela's /api/agents): only agents
-        // shared with this viewer survive (PLAN44 C4).
         if let Some(uid) = self.viewer {
             if let Some(rows) = body.get_mut("agents").and_then(Value::as_array_mut) {
                 let names: Vec<String> = rows
@@ -196,9 +148,6 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
     }
 
     fn begin_ndjson(&mut self) {
-        // The dev server adds its own chunked framing, so only the content
-        // type is ours to set. `no-cache` matters: a buffering intermediary
-        // is exactly what makes a token stream arrive as one lump.
         let _ = self.out.start(
             200,
             &[
@@ -217,9 +166,6 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
             if self.turn_id.is_none() && value.get("type").and_then(Value::as_str) == Some("session") {
                 if let Some(id) = value.get("sessionId").and_then(Value::as_str) {
                     self.session_id = id.to_string();
-                    // The transcript as it stood before this turn. The
-                    // prompt is not in it: a queued message becomes a row
-                    // only when its turn starts.
                     let baseline = chat_messages(&angela(self.port).state.store, id);
                     self.turn_id = Some(crate::events::begin_turn(id, baseline, self.prompt.clone()));
                 }
@@ -227,8 +173,6 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
         }
         let rows = if self.chat { self.assistant_filter.process(value) } else { vec![value.clone()] };
         for row in rows { self.publish_row(&row); }
-        // A browser reload closes its POST socket; the turn still belongs to
-        // the server and its SSE subscribers, so do not cancel inference.
         self.chat || !self.disconnected
     }
 
@@ -243,16 +187,10 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
     }
 }
 
-/// Every session's message queue, for the event feed's `queues` topic.
-///
-/// The messages a conversation is holding before they run — pending work,
-/// live state, and carrying text, so the feed filters this per viewer
-/// exactly as it does the sessions themselves.
 pub fn queues_topic(port: u16) -> Value {
     serde_json::json!({ "queues": angela::queue::snapshot_all(&angela(port).state.store) })
 }
 
-/// Current model configuration, shared by the on-demand endpoint and event feed.
 pub fn models() -> Value {
     let cfg = agl::config::read_user_config();
     let default = cfg.get("default_model").and_then(|v| v.to_scalar_string()).unwrap_or_default();
@@ -271,11 +209,6 @@ pub fn models() -> Value {
     serde_json::json!({"default_model": default, "models": models})
 }
 
-/// Session metadata plus the newest event's timestamp on any branch, and the
-/// last generation's token counts. `updatedAt` also changes for settings
-/// edits, so it is not an event timestamp; `totalTokens` is what the context
-/// gauges (the composer's pie, the state symbol's ring) divide by the row's
-/// `contextWindow`.
 pub(crate) fn sessions(port: u16) -> Value {
     let mut data = angela(port).sessions_list_for_test();
     let path = project_root().join(".angela").join("conversations.db");
@@ -287,10 +220,6 @@ pub(crate) fn sessions(port: u16) -> Value {
     data
 }
 
-/// The row contract's `seats`: how many active seats the conversation has —
-/// the roster fingerprint that makes an invite change this snapshot at all.
-/// Without it, seating someone rewrites nothing here and no SSE fires: the
-/// session would reach their sidebar only after an unrelated row edit.
 fn add_seat_counts(data: &mut Value, db: &rusqlite::Connection) {
     let Some(rows) = data.get_mut("sessions").and_then(Value::as_array_mut) else { return; };
     let Ok(mut query) = db.prepare_cached(
@@ -319,11 +248,6 @@ fn add_latest_events(data: &mut Value, db: &rusqlite::Connection) {
     }
 }
 
-/// The row contract's `totalTokens`: the newest `gen_info` node's generation
-/// total — the same number the `usage` rows stream and the full session meta
-/// carries as `lastTotalTokens`. Derived here for the same reason as
-/// `lastEventAt` above: the sessions list is a projection for the sidebar,
-/// and this is what its state symbols fill their ring with.
 fn add_token_counts(data: &mut Value, db: &rusqlite::Connection) {
     let Some(rows) = data.get_mut("sessions").and_then(Value::as_array_mut) else { return; };
     let Ok(mut query) = db.prepare_cached(
@@ -340,8 +264,6 @@ fn add_token_counts(data: &mut Value, db: &rusqlite::Connection) {
     }
 }
 
-/// The existence check and deletion are one SQLite statement, so events on
-/// any branch protect the conversation even if the client has stale data.
 fn delete_empty_session(db: &rusqlite::Connection, id: &str) -> rusqlite::Result<bool> {
     db.execute_batch("PRAGMA foreign_keys = ON")?;
     Ok(db.execute(
@@ -351,9 +273,6 @@ fn delete_empty_session(db: &rusqlite::Connection, id: &str) -> rusqlite::Result
     )? == 1)
 }
 
-/// The acting user's id, or 1 for the dev zone — the gate only lets
-/// loopback through without a cookie, and loopback is the developer on
-/// this machine (D12), acting with the admin's authority.
 fn actor_id(req: &Request) -> i64 {
     crate::auth::current_user(req).map(|u| u.id).unwrap_or(1)
 }
@@ -362,11 +281,6 @@ fn is_admin(req: &Request) -> bool {
     crate::auth::current_user(req).map(|u| u.is_admin()).unwrap_or(true)
 }
 
-/// PLAN44 C4 + the roster: a session is the viewer's to see or speak in when
-/// the ACL says so **or when they are seated in it** — being invited into a
-/// room (a named `user` seat, from a `@mention` or `/invite`) is what makes
-/// it appear in their Projects tree and lets them talk in it. The dev zone
-/// and the admin see everything.
 pub(crate) fn session_open_to(uid: Option<i64>, sid: &str, privilege: &str) -> bool {
     let Some(uid) = uid else {
         return true;
@@ -385,8 +299,6 @@ pub(crate) fn session_open_to(uid: Option<i64>, sid: &str, privilege: &str) -> b
         .unwrap_or(false)
 }
 
-/// [`session_open_to`] for a whole listing: which of these sessions may
-/// this viewer see?
 pub(crate) fn visible_session_ids(uid: Option<i64>, names: &[String]) -> Vec<String> {
     let Some(uid) = uid else {
         return names.to_vec();
@@ -409,11 +321,6 @@ pub(crate) fn visible_session_ids(uid: Option<i64>, names: &[String]) -> Vec<Str
         .collect()
 }
 
-/// PLAN55 listing gate: a sandbox holds its agent's work, so a row is
-/// visible — and its container destroyable — only to the admin and to users
-/// who may **edit** the agent inhabiting it. `None` viewer is the dev zone,
-/// which acts as the admin. An uninhabited row has no agent to authorize
-/// against: admin-only (fail closed).
 fn sandbox_visible_with(
     ident: &angela::identity::Identity<'_>,
     viewer: Option<i64>,
@@ -428,14 +335,11 @@ fn sandbox_visible_with(
     !agent.is_empty() && ident.can(uid, "agent", agent, "edit")
 }
 
-/// [`sandbox_visible_with`] for the one viewer a request or a feed stream
-/// carries.
 pub(crate) fn sandbox_visible(viewer: Option<i64>, agent: &str) -> bool {
     let ident = angela(0).state.store.identity();
     sandbox_visible_with(&ident, viewer, agent)
 }
 
-/// The sandboxes rows one viewer may see (the listing gate applied).
 fn visible_sandboxes(viewer: Option<i64>, rows: Value) -> Value {
     let ident = angela(0).state.store.identity();
     let Value::Array(list) = rows else {
@@ -450,7 +354,6 @@ fn visible_sandboxes(viewer: Option<i64>, rows: Value) -> Value {
     )
 }
 
-/// Project settings are visible only through sessions the viewer can read.
 fn visible_projects(req: &Request, store: &angela::conv_store::ConvStore) -> Value {
     let mut body = store.projects_detail();
     if let Some(user) = crate::auth::current_user(req) {
@@ -475,7 +378,6 @@ fn visible_projects(req: &Request, store: &angela::conv_store::ConvStore) -> Val
     body
 }
 
-/// Layer 1 in one call: the dev zone and the admin hold everything.
 fn actor_may(req: &Request, cap: &str) -> bool {
     match crate::auth::current_user(req) {
         Some(u) => angela(0).state.store.identity().has_capability(u.id, cap),
@@ -483,8 +385,6 @@ fn actor_may(req: &Request, cap: &str) -> bool {
     }
 }
 
-/// The capability a mutating request needs (PLAN44 catalog, Layer 1).
-/// Reads are per-resource (Layer 2) and checked where the resource is named.
 fn required_capability(req: &Request) -> Option<&'static str> {
     if req.method == "GET" || req.method == "HEAD" {
         return None;
@@ -505,13 +405,6 @@ fn required_capability(req: &Request) -> Option<&'static str> {
     if p.starts_with("/api/sessions/") && p.ends_with("/participants") {
         return Some("session.invite");
     }
-    // The real mutating checkout routes are `/api/targets/*` (repo-add,
-    // repo-remove, branch-add, worktree-add, worktree-remove) and they
-    // get no Layer-1 capability today: the plan's catalog has no
-    // `worktree.*` verb, and the surrounding table leaves the target
-    // routes ungated — with the sandbox destroy gate applied where the
-    // resource is named (PLAN55). The dead entries this replaced used
-    // routes (`/api/projects/*-add`) that never matched anything.
     None
 }
 
@@ -547,7 +440,6 @@ fn query_int(req: &Request, key: &str) -> Option<i64> {
     query_str(req, key).parse().ok()
 }
 
-/// The share dialog's data for one resource: `{grants, ownerId}`.
 fn acl_rows(
     ident: &angela::identity::Identity<'_>,
     kind: &str,
@@ -557,12 +449,6 @@ fn acl_rows(
     (rows, owner)
 }
 
-/// Validate a workspace root the client sent with a session settings body.
-///
-/// A non-empty absolute path that is a directory and carries no
-/// mount-spec characters (`:` and `,`) — the same refusal the worktree
-/// paths get, because the workspace root is a path a container runtime
-/// may be told to mount.
 fn validate_workspace_root(raw: &str) -> Result<std::path::PathBuf, String> {
     let t = raw.trim();
     if t.is_empty() {
@@ -583,23 +469,9 @@ fn validate_workspace_root(raw: &str) -> Result<std::path::PathBuf, String> {
     Ok(p)
 }
 
-/// The dev server's raw `/api/` handler.
 pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
-    // The routes below may pre-process the request body and then fall
-    // through to angela's dispatch with the rewritten body — e.g. the
-    // settings route rewrites a session's worktree CONFIG into a resolved
-    // record before the write lands.
     let mut pre_processed_body: Option<Vec<u8>> = None;
-    // ---- identity, admin and ACL (PLAN44) -------------------------------
-    //
-    // The gate has already turned anonymous non-loopback traffic away; what
-    // arrives here is either a logged-in user or the dev zone (loopback, no
-    // cookie — the developer on this machine, D12). The dev zone passes
-    // every check below as the admin would.
     if req.path == "/api/profile" && req.method == "POST" {
-        // Per-user profile (PLAN44): the location is yours to set. The
-        // name is *not* here — it is fixed at login, and only re-creating
-        // the account changes it.
         let Some(u) = crate::auth::current_user(req) else {
             let _ = out.json(401, &serde_json::json!({"ok": false, "error": "login required"}));
             return;
@@ -618,11 +490,7 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         let ident = angela(state.config.port).state.store.identity();
         let body = match crate::auth::current_session(req) {
             Some((u, dev)) => {
-                // A masked session keeps its switcher (D4): the chip must
-                // know it is wearing one, and who stands behind it.
                 let real = crate::auth::real_actor(&ident, &u, &dev);
-                // The *effective* list: the admin holds everything
-                // implicitly, so the UI can gate on membership alone.
                 let caps: Vec<String> = if u.is_admin() {
                     angela::identity::CAPABILITIES.iter().map(|s| s.to_string()).collect()
                 } else {
@@ -635,8 +503,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                     "capabilities": caps,
                     "masquerade": crate::auth::is_masked(&u, &dev),
                     "realName": real.name,
-                    // Every user sees the perimeter's state (PLAN44 D12):
-                    // the page glows while the door is open.
                     "shields": if crate::auth::instance().shields_down() { "down" } else { "up" },
                 })
             }
@@ -701,9 +567,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     }
     if req.path == "/api/users" && req.method == "GET" {
         let ident = angela(state.config.port).state.store.identity();
-        // Names and ids are public inside the house (the share dialog needs
-        // them); capability lists are nobody's business but your own — and
-        // the admin's.
         let admin_view = is_admin(req);
         let me = actor_id(req);
         let users: Vec<Value> = ident
@@ -772,9 +635,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     }
     if req.path == "/api/devices" && req.method == "GET" {
         let ident = angela(state.config.port).state.store.identity();
-        // A user lists their own devices. Peeking at anyone else's is
-        // admin work — and "anyone else" includes the face an admin
-        // masquerades as: the acting user decides, always.
         let target = if is_admin(req) {
             query_int(req, "userId").or_else(|| crate::auth::current_user(req).map(|u| u.id))
         } else {
@@ -785,11 +645,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 ident
                     .list_devices(uid)
                     .into_iter()
-                    // Masquerade acts are not the user's recognized
-                    // devices: they are the admin's acts, recorded in the
-                    // audit log, and nothing here can delete or block
-                    // them — so they do not appear here. (The `ip` check
-                    // retires rows from before the provenance mark.)
                     .filter(|d| {
                         !d.fingerprint.starts_with("masquerade:by:") && d.ip != "masquerade"
                     })
@@ -808,8 +663,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
         let ident = angela(state.config.port).state.store.identity();
         let device_id = body.get("deviceId").and_then(Value::as_i64).unwrap_or(0);
-        // Scope: a user revokes their own devices (user_id filter), the
-        // admin any (0 = no filter).
         let scope = if is_admin(req) { 0 } else {
             crate::auth::current_user(req).map(|u| u.id).unwrap_or(-1)
         };
@@ -821,8 +674,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         return;
     }
     if req.path == "/api/acl" && req.method == "GET" {
-        // The share dialog's data: the grants on one resource. Owners, the
-        // admin, and anyone with `grant` may look.
         let ident = angela(state.config.port).state.store.identity();
         let (kind, name) = (query_str(req, "kind"), query_str(req, "name"));
         let actor_id = actor_id(req);
@@ -840,8 +691,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
         let ident = angela(state.config.port).state.store.identity();
         let s = |k: &str| body.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        // The grantee may be an id or a login name — the share dialog
-        // speaks names, the table stores ids.
         let grantee = body.get("grantee").and_then(Value::as_i64).unwrap_or(0);
         let grantee = if grantee > 0 {
             grantee
@@ -849,17 +698,11 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
             ident.user_by_name(&s("grantee")).map(|u| u.id).unwrap_or(0)
         };
         let with_grant = body.get("withGrant").and_then(Value::as_bool).unwrap_or(false);
-        // A resource older than the ACL has no row yet. The admin sharing
-        // it is what materialises one — owned by the admin, not by the
-        // first person to touch it.
         if ident.resource(&s("kind"), &s("name")).is_none() && actor_id(req) == 1 {
             let _ = ident.ensure_resource(&s("kind"), &s("name"), 1);
         }
         let r = ident.grant(grantee, &s("kind"), &s("name"), &s("privilege"), actor_id(req), with_grant);
         if r.is_ok() && s("kind") == "session" && matches!(s("privilege").as_str(), "read" | "post" | "seat") {
-            // Sharing a conversation seats the person in it (PLAN44 A4):
-            // the roster says who is in the room, the grant is what lets
-            // them in — one action, one truth.
             let name = s("grantee");
             let handle = name.to_lowercase().replace(' ', "-");
             let _ = angela(state.config.port).state.store.add_participant(
@@ -898,10 +741,7 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         return;
     }
 
-    // ---- media (PLAN44 A5): text and images only -----------------------
     if req.path == "/api/upload" && req.method == "POST" {
-        // Raw bytes, name in the query, kept under `.angela/media`. The
-        // extension allowlist is the whole content policy.
         let name = query_str(req, "name");
         let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
         if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp") || req.body.is_empty() {
@@ -931,7 +771,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     if req.method == "GET" && req.path.starts_with("/media/") {
         let f = req.path.trim_start_matches("/media/");
         let path = project_root().join(".angela").join("media").join(f);
-        // One directory, no separators: the name is ours, not the caller's.
         let safe = !f.is_empty() && !f.contains('/') && !f.contains('\\') && !f.contains("..");
         let bytes = if safe { std::fs::read(&path).ok() } else { None };
         match bytes {
@@ -953,11 +792,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         return;
     }
 
-    // ---- Layer 1: what this user may do at all --------------------------
-    //
-    // Capability checks on mutating routes, before angela sees anything.
-    // Reads are per-resource (Layer 2) and checked where the resource is
-    // named; creation verbs are global and checked here.
     if let Some(cap) = required_capability(req) {
         if !actor_may(req, cap) {
             let _ = out.json(403, &serde_json::json!({
@@ -968,8 +802,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         }
     }
 
-    // New sessions may only inherit a group visible to this user. Otherwise
-    // guessing a name would expose another group's settings and mounts.
     if req.method == "POST" && req.path == "/api/session/new" {
         if let Some(user) = crate::auth::current_user(req) {
             if !user.is_admin() {
@@ -989,13 +821,10 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         }
     }
 
-    // ---- Layer 2: reads and posts on named resources --------------------
     if req.method == "POST" && req.path == "/api/chat" {
         let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
         if let Some(sid) = body.get("sessionId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
             if let Some(u) = crate::auth::current_user(req) {
-                // Seated counts as speaking too — a person invited into a
-                // room who cannot answer is not in the room.
                 if !session_open_to(Some(u.id), sid, "post") {
                     let _ = out.json(403, &serde_json::json!({
                         "ok": false, "error": "you may not post in this conversation",
@@ -1071,15 +900,8 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         });
         match result {
             Some(Ok(true)) => {
-                // The row is going away; the worktree the session owned is
-                // not. Reap it before the delete (store.delete also fires
-                // the deletion hook, which reaps again — idempotently).
                 crate::hostgit::reap_session_worktree(&project_root(), id);
                 let server = angela(state.config.port);
-                // Finish the ordinary deletion cleanup, including legacy files.
-                // The PLAN55 sandbox cascade rides `store.delete` — a no-op on
-                // this path by construction: a session with no events has never
-                // had a turn, and a container only exists from a turn on.
                 server.state.store.delete(id);
                 server.state.tabs.forget_session(id);
                 server.state.cancels.forget(id);
@@ -1093,10 +915,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     }
     if req.path == "/api/sessions" && req.method == "GET" {
         let mut body = sessions(state.config.port);
-        // "Unshared resources are invisible" (PLAN44 C4): a real,
-        // non-admin user sees only conversations they may read — or are
-        // seated in (the roster is what makes a room appear in their tree).
-        // The dev zone and the admin see everything.
         if let Some(u) = crate::auth::current_user(req) {
             if !u.is_admin() {
                 if let Some(rows) = body.get_mut("sessions").and_then(Value::as_array_mut) {
@@ -1118,7 +936,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         return;
     }
     if req.path == "/api/events" && req.method == "GET" {
-        // The feed is shared; the *window* on it is per-user (PLAN44 C4).
         crate::events::stream(out, crate::auth::current_user(req).map(|u| u.id));
         return;
     }
@@ -1128,27 +945,15 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         let _ = out.json(200, &body);
         return;
     }
-    // ── sandboxes, repos and worktrees ─────────────────────────────────
-    // The other pickers, plus the sandboxes menu's data. `/api/targets` is
-    // one GET for all of them: they are read together on every redraw, and
-    // separate round-trips would let the menus disagree about what exists.
-    //
-    // Sandboxes are agent-owned now (PLAN55 D2): the rows come from angela's
-    // sandbox policy — each container with the (session, agent) it serves —
-    // plus a per-image live rollup (D6, D13: there is no per-container
-    // session count; it is always 1).
     if req.path == "/api/targets" && req.method == "GET" {
         let root = project_root();
         let mut body = crate::hostgit::everything(&root);
         let store = &angela(state.config.port).state.store;
         let (sandboxes, up) = match angela::sandbox::list_for_menu(store) {
             Ok(rows) => (rows, true),
-            // An empty list and a dead service look identical in a menu, so
-            // the flag travels with it and the menu can say which.
             Err(_) => (serde_json::json!([]), false),
         };
         if let Value::Object(m) = &mut body {
-            // PLAN55 listing gate: only admin-visible rows travel per viewer.
             let viewer = crate::auth::current_user(req).map(|u| u.id);
             m.insert("sandboxes".into(), visible_sandboxes(viewer, sandboxes));
             m.insert("sboxUp".into(), serde_json::json!(up));
@@ -1167,8 +972,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         };
         let flag = |k: &str, dflt: bool| body.get(k).and_then(Value::as_bool).unwrap_or(dflt);
         let action = req.path.trim_start_matches("/api/targets/").trim_matches('/');
-        // PLAN55 listing gate: destroying a sandbox is at least as privileged
-        // as seeing it — admin, or edit on the inhabiting agent.
         if action == "sandbox-remove" {
             let viewer = crate::auth::current_user(req).map(|u| u.id);
             let id = f("id");
@@ -1198,15 +1001,10 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 crate::hostgit::add_worktree(&root, &f("repoId"), &f("branch"), flag("create", false))
             }
             "worktree-remove" => crate::hostgit::remove_worktree(&root, &f("id")),
-            // Sandboxes have no hand-driven create/rename (PLAN55 D2/D4/D10):
-            // an agent's container is launched at its first turn and dies with
-            // its session. Destroy stays, for the Sandbox form's Delete.
             "sandbox-remove" => crate::sbox::destroy(&root, &f("id")).map(|_| serde_json::json!({})),
             other => Err(format!("unknown target action: {other}")),
         };
         match result {
-            // Same contract as `/api/projects`: every write answers with the
-            // fresh listing, so the caller never has to ask twice.
             Ok(mut v) => {
                 if let Value::Object(map) = &mut v {
                     map.insert("ok".into(), serde_json::json!(true));
@@ -1230,14 +1028,8 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         return;
     }
 
-    // ── automations ──────────────────────────────────────────────────
-    // Named prompts on a cron schedule. Chat-app concept (angela knows
-    // sessions and turns, not schedules), so the registry and the firing
-    // live here; firing itself reuses angela's dispatch, so a run is a
-    // real turn in every consumer's eyes.
     if req.path == "/api/automations" && req.method == "GET" {
         let mut body = crate::automations::list(&project_root());
-        // Only automations explicitly shared to this user (PLAN44 C4).
         if let Some(u) = crate::auth::current_user(req) {
             if !u.is_admin() {
                 let ident = angela(state.config.port).state.store.identity();
@@ -1281,8 +1073,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
             other => Err(format!("unknown automation action: {other}")),
         };
         match result {
-            // Same contract as targets: every write answers with the fresh
-            // listing, so the caller never has to ask twice.
             Ok(mut v) => {
                 if let Value::Object(map) = &mut v {
                     map.insert("ok".into(), serde_json::json!(true));
@@ -1316,11 +1106,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         return;
     }
 
-    // ── projects ───────────────────────────────────────────────────────
-    // The folders conversations are filed under. Served here rather than
-    // from angela's router because they are a chat-app concept: angela
-    // stores the label and owns the operations, this decides what the UI
-    // may ask for.
     if req.path.starts_with("/api/projects") {
         let root = project_root();
         let Ok(store) = angela::conv_store::ConvStore::new(root) else {
@@ -1343,8 +1128,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 .unwrap_or_default()
                 .to_string()
         };
-        // The sub-path is the verb. `assign` is the one the sidebar's
-        // drag-and-drop uses; the other three come from the inspector form.
         let action = req
             .path
             .trim_start_matches("/api/projects")
@@ -1352,8 +1135,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
             .to_string();
         let result: Result<Value, String> = match action.as_str() {
             "" | "create" => store.create_project(&field("name")).map(|n| {
-                // Same contract as the target actions: the response names
-                // the row the picker should land on.
                 serde_json::json!({"name": n, "select": n, "selectKind": "project"})
             }),
             "settings" => {
@@ -1415,10 +1196,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
             other => Err(format!("unknown project action: {other}")),
         };
         match result {
-            // Every write answers with the new listing as well as the
-            // result: the sidebar and the picker both redraw from it, and a
-            // second round-trip to find out what just happened is a window
-            // in which they disagree.
             Ok(mut v) => {
                 if let Value::Object(map) = &mut v {
                     map.insert("ok".into(), serde_json::json!(true));
@@ -1447,10 +1224,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 "allowlist",
                 "allowlistMode",
                 "allowlistSource",
-                // The checkout is no longer a composer setting: it rides
-                // the session settings route, where it is provisioned and
-                // gated, and the project rides the projects route — neither
-                // is a bare id here.
             ] {
                 if let Some(value) = payload.get(key) { patch.insert(key.into(), value.clone()); }
             }
@@ -1468,13 +1241,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         let _ = out.json(status, &body);
         return;
     }
-    // ── session settings: the properties gate's input ─────────────────────
-    //
-    // POST /api/sessions/<id>/settings carries the session's workspace
-    // root and its worktree config. The workspace root is validated here;
-    // the worktree CONFIG is resolved here — provisioned, or kept as a
-    // current, still-provisioned record — so the write angela lands is a
-    // record the gate can answer yes to.
     if req.method == "POST"
         && req.path.starts_with("/api/sessions/")
         && req.path.ends_with("/settings")
@@ -1495,10 +1261,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                     .trim()
                     .to_string();
                 if ws.is_empty() {
-                    // Blank means cleared: a session need not name a root
-                    // (its tools fall back to the project root), so the form
-                    // must be able to take one back — an empty box is not a
-                    // validation error.
                     body["workspaceRoot"] = Value::Null;
                 } else {
                     if let Err(e) = validate_workspace_root(&ws) {
@@ -1512,13 +1274,9 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 let repo_id = wt.get("repoId").and_then(Value::as_str).unwrap_or_default().trim().to_string();
                 let branch_pattern = wt.get("branchPattern").and_then(Value::as_str).unwrap_or_default().trim().to_string();
                 let path_pattern = wt.get("pathPattern").and_then(Value::as_str).unwrap_or_default().trim().to_string();
-                // A CONFIG from the client carries repoId + branchPattern.
                 if !repo_id.is_empty() && !branch_pattern.is_empty() {
                     let store = &angela(state.config.port).state.store;
                     let Some(current_session) = store.load(id) else {
-                        // Nothing to configure — refuse before provisioning,
-                        // so a worktree never outlives the session that
-                        // owns it.
                         let _ = out.json(404, &serde_json::json!({"ok": false, "error": "not found"}));
                         return;
                     };
@@ -1536,8 +1294,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                         })
                     }).unwrap_or(false);
                     let resolved = if keep {
-                        // Same CONFIG, same checkout — keep the record
-                        // as it stands; no re-provision, no new {{hex}} draw.
                         current.unwrap()
                     } else {
                         match crate::hostgit::provision_session_worktree(&root, id, &repo_id, &branch_pattern, &path_pattern) {
@@ -1550,35 +1306,22 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                     };
                     body["worktree"] = resolved;
                 } else {
-                    // A config with no repo chosen is "No repo": this
-                    // session does not manage git, so it keeps no checkout
-                    // around either.
                     body["worktree"] = Value::Null;
                     if angela(state.config.port).state.store.load(id).and_then(|s| s.get("worktree").cloned()).is_some_and(|w| !w.is_null()) {
                         crate::hostgit::reap_session_worktree(&root, id);
                     }
                 }
             } else if body.get("worktree").is_some_and(|w| w.is_null()) {
-                // "No repo" again, in its other spelling.
                 if angela(state.config.port).state.store.load(id).and_then(|s| s.get("worktree").cloned()).is_some_and(|w| !w.is_null()) {
                     crate::hostgit::reap_session_worktree(&root, id);
                 }
             }
             pre_processed_body = Some(serde_json::to_vec(&body).unwrap_or_default());
-            // fall through — the rewritten body reaches angela below
         }
     }
 
-    // ── deletion: the session owns its worktree ────────────────────────────
-    //
-    // Both delete routes reap the checkout before angela sees the request:
-    // the store's own deletion hook fires on `delete`, but a status-less
-    // row and the bulk clean have no other reap, so the route does it once
-    // and the hook reaps idempotently.
     if req.method == "DELETE" && req.path.starts_with("/api/sessions/") {
         let rest = &req.path["/api/sessions/".len()..];
-        // Exactly the session id: deeper paths are not this session's
-        // delete.
         if !rest.is_empty() && !rest.contains('/') {
             crate::hostgit::reap_session_worktree(&project_root(), rest);
         }
@@ -1587,9 +1330,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         crate::hostgit::reap_all_session_worktrees(&project_root());
     }
 
-    // ── the browser viewer ─────────────────────────────────────────────────
-    // Thin forward to sbox-b's viewer-ticket endpoint: the URL is sbox-b's
-    // to mint, and this route only carries it back.
     if req.method == "GET"
         && req.path.starts_with("/api/browser/")
         && req.path.ends_with("/viewer")
@@ -1625,9 +1365,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     };
     let chat = req.method == "POST" && req.path == "/api/chat";
     let mut body: Value = if chat { serde_json::from_slice(&req.body).unwrap_or(Value::Null) } else { Value::Null };
-    // Who said it comes from the session, never from the client body
-    // (PLAN44 A6): a multi-human room's transcript is only truthful if the
-    // sender is the authenticated one. The dev zone renders as "You".
     if chat {
         if let Some(u) = crate::auth::current_user(req) {
             if let Some(obj) = body.as_object_mut() {
@@ -1645,7 +1382,6 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         out, streaming: false, ended: false, chat, session_id, prompt, baseline,
         turn_id: None, disconnected: false, port: state.config.port,
         assistant_filter: crate::assistant_text::StreamFilter::default(),
-        // A session made by this request belongs to its maker (PLAN44).
         claim_owner: if req.path == "/api/session/new"
             || (chat && body.get("sessionId").and_then(Value::as_str).unwrap_or("").is_empty())
         {
@@ -1657,103 +1393,4 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
     };
     angela(state.config.port).dispatch(&areq, &mut sink);
     sink.end();
-}
-
-#[cfg(test)]
-mod latest_event_tests {
-    use super::*;
-
-    #[test]
-    fn roster_statuses_survive_reconstruction_in_branch_order() {
-        use angela::session_store::{NewEvent, NewSession};
-        let store = angela::conv_store::ConvStore::memory("/tmp/chat-status-test").unwrap();
-        let id = store.create(NewSession::default()).unwrap()["id"].as_str().unwrap().to_string();
-        let status = store.append_event(&id, NewEvent::new("chat_status", serde_json::json!({"text":"Invited @agent"}))).unwrap();
-        store.append_event(&id, NewEvent::new("context_window", serde_json::json!({"role":"user", "content":"hi"}))).unwrap();
-        store.append_event(&id, NewEvent::new("context_window", serde_json::json!({"role":"assistant", "content":"hello"}))).unwrap();
-        store.append_event(&id, NewEvent::new("chat_status", serde_json::json!({"text":"Removed @agent"}))).unwrap();
-        let rows = chat_messages(&store, &id);
-        assert_eq!(rows.iter().map(|r| r["text"].as_str().unwrap_or("")).collect::<Vec<_>>(), ["Invited @agent", "hi", "hello", "Removed @agent"]);
-        assert_eq!(rows[0]["eventId"], status.event_id);
-        assert_eq!(rows[0]["ts"], status.ts);
-        assert_eq!(rows[0]["commandNotice"], true);
-    }
-
-    #[test]
-    fn only_sessions_without_events_are_deleted() {
-        let db = rusqlite::Connection::open_in_memory().unwrap();
-        db.execute_batch("CREATE TABLE conversation (id TEXT PRIMARY KEY); \
-            CREATE TABLE nodes (conversation_id TEXT REFERENCES conversation(id) ON DELETE CASCADE, seq INTEGER, kind TEXT, payload TEXT); \
-            INSERT INTO conversation VALUES ('empty'), ('with-events'); \
-            INSERT INTO nodes VALUES ('empty', 1, 'session', '{\"kind\":\"created\"}'), \
-            ('with-events', 1, 'session', '{}');").unwrap();
-        assert!(delete_empty_session(&db, "empty").unwrap());
-        assert!(!delete_empty_session(&db, "with-events").unwrap());
-        assert!(!delete_empty_session(&db, "missing").unwrap());
-        assert_eq!(db.query_row("SELECT COUNT(*) FROM conversation", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-    }
-
-    #[test]
-    fn latest_event_is_taken_from_the_latest_sequence_not_metadata() {
-        let db = rusqlite::Connection::open_in_memory().unwrap();
-        db.execute_batch("CREATE TABLE nodes (conversation_id TEXT, seq INTEGER, ts TEXT);
-            INSERT INTO nodes VALUES ('a', 1, '2020-01-01T00:00:00Z');
-            INSERT INTO nodes VALUES ('a', 2, '2020-02-01T00:00:00Z');
-            INSERT INTO nodes VALUES ('b', 1, '2020-03-01T00:00:00Z');").unwrap();
-        let mut sessions = serde_json::json!({"sessions": [
-            {"id":"a", "updatedAt":"2025-01-01T00:00:00Z"},
-            {"id":"b"}, {"id":"empty"}
-        ]});
-        add_latest_events(&mut sessions, &db);
-        assert_eq!(sessions["sessions"][0]["lastEventAt"], "2020-02-01T00:00:00Z");
-        assert_eq!(sessions["sessions"][1]["lastEventAt"], "2020-03-01T00:00:00Z");
-        assert!(sessions["sessions"][2].get("lastEventAt").is_none());
-    }
-
-    #[test]
-    fn token_counts_are_taken_from_the_newest_generation() {
-        let db = rusqlite::Connection::open_in_memory().unwrap();
-        db.execute_batch("CREATE TABLE nodes (conversation_id TEXT, seq INTEGER, kind TEXT, gen_total_tokens INTEGER);
-            INSERT INTO nodes VALUES ('a', 1, 'gen_info', 1200);
-            INSERT INTO nodes VALUES ('a', 2, 'gen_info', 4800);
-            INSERT INTO nodes VALUES ('a', 3, 'tool_result', NULL);
-            INSERT INTO nodes VALUES ('b', 1, 'session', NULL);").unwrap();
-        let mut sessions = serde_json::json!({"sessions": [{"id":"a"}, {"id":"b"}]});
-        add_token_counts(&mut sessions, &db);
-        assert_eq!(sessions["sessions"][0]["totalTokens"], 4800);
-        assert!(sessions["sessions"][1].get("totalTokens").is_none());
-    }
-}
-
-#[cfg(test)]
-mod sandbox_gate_tests {
-    use super::*;
-
-    /// PLAN55 listing gate: a sandbox holds its agent's work, so only the
-    /// admin and whoever may edit the inhabiting agent see its row — and an
-    /// uninhabited instance, having no agent to authorize against, is
-    /// admin-only.
-    #[test]
-    fn a_sandbox_is_visible_only_to_whoever_may_edit_its_agent() {
-        let store = angela::conv_store::ConvStore::memory("/tmp/sandbox-gate-test").unwrap();
-        let ident = store.identity();
-        // The first user is the admin; the second is nobody in particular.
-        let bob = ident.create_user("Bob", "Bob").unwrap();
-        let alice = ident.create_user("alice", "Alice").unwrap();
-        ident.ensure_resource("agent", "video", bob.id).unwrap();
-        ident
-            .grant(alice.id, "agent", "video", "edit", bob.id, false)
-            .unwrap();
-
-        // The dev zone (no viewer) and the admin see everything.
-        assert!(sandbox_visible_with(&ident, None, ""));
-        assert!(sandbox_visible_with(&ident, Some(bob.id), "video"));
-        assert!(sandbox_visible_with(&ident, Some(bob.id), ""));
-
-        // Alice may edit `video`, so its sandbox is hers to see — and nothing
-        // else's is.
-        assert!(sandbox_visible_with(&ident, Some(alice.id), "video"));
-        assert!(!sandbox_visible_with(&ident, Some(alice.id), "chewy"));
-        assert!(!sandbox_visible_with(&ident, Some(alice.id), ""));
-    }
 }

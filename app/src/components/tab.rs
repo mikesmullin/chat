@@ -1,23 +1,3 @@
-//! `uiTab` — one tab of a tab bar. The tab's **state** lives in the store
-//! store (same shape as the chat app's own tabs: a list + an `activeId` +
-//! `addTab`/`pickTab`/`closeTab` store methods).
-//!
-//! ## Structure
-//! The display (icon + title) is the reusable `uiTab` unit: a session
-//! glyph by default (the same chat-circle the project-tree rows use) and a
-//! title that may be a number or text. No state symbol — a session's status is the ball on the
-//! projects list items, and its context is the session header's ring; a tab
-//! is neither. The *actions* (pick / close) live on the `x-for` **row**, as
-//! direct children, matching the chat app's tab row exactly — mjs reliably
-//! handles `@click` handlers on row-level elements, but not on elements
-//! nested inside a sub-component (that nesting is what made the close
-//! button inert).
-//!
-//! - `.tab` row: `@click` → `pickTab(tab.id)`
-//! - `.tab-x` button (direct row child): `@click.stop` → `closeTab(tab.id)`
-//! - `uiTab` (display host): icon + title
-
-
 use rustex1_kit::h::{m, Node};
 use rustex1_kit::mjs;
 use rustex1_kit::mjs::Def;
@@ -30,8 +10,6 @@ pub const NAME: &str = "uiTab";
 
 
 const CSS: &str = r#"
-/* ---- the tab strip ----
-   Out of `web/styles.css` with the demo page it used to share. */
 .mjs-chat .tabs {
   display: flex;
   align-items: center;
@@ -41,12 +19,6 @@ const CSS: &str = r#"
   min-width: 0;
 }
 
-/* ---- the tab chip ----
-   Out of `web/styles.css`, where these were the only rules dressing
-   this component — a look kept in a global sheet outlives the markup
-   it was written for. Copied unchanged, still scoped under
-   `.mjs-chat`, so neither specificity nor the cascade moved with
-   them. */
 .mjs-chat .tab {
   display: flex;
   align-items: center;
@@ -98,23 +70,17 @@ const CSS: &str = r#"
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-/* active tab — accent border, indigo-tint fill, indigo-soft ink */
 .tab.active {
   border-color: var(--accent);
   background: var(--accent-tint);
   color: var(--accent-soft);
 }
-/* the display unit: icon + title. A true flex row — the title stretches,
-   the icon is fixed-size, so the title never squashes the glyph in a tight
-   row. */
 .ui-tab {
   display: flex; align-items: center;
   gap: 6px;
   width: 100%;
   min-height: 1.3em;
 }
-/* the icon is the shared session glyph (`.ptree-icon`, defined in
-   `project_tree`): the same look the project-tree rows use. */
 .ui-tab .ui-tab-title {
   flex: 1 1 0;
   min-width: 0;
@@ -124,7 +90,6 @@ const CSS: &str = r#"
   white-space: nowrap;
 }
 .tab.is-preview .ui-tab-title { font-style: italic; }
-/* the close button: bare glyph, inherits the tab's ink, indigo hover */
 .tab-x {
   flex: 0 0 auto;
   border: 0; background: transparent;
@@ -139,7 +104,6 @@ const CSS: &str = r#"
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-/* the live bar (tab-bar): rows + plus button */
 .tab-bar { display: inline-flex; align-items: center; gap: 8px; }
 .tab-plus {
   height: 30px; padding: 0 8px;
@@ -161,12 +125,9 @@ const CSS: &str = r#"
   outline-offset: 2px;
 }
 .tab-plus .ph { font-size: 14px; line-height: 1.3; }
-/* demo chrome: the static row of three on /storybook/tab */
 .tab-demo { display: flex; gap: 8px; }
 "#;
 
-/// One tab DISPLAY host for the STATIC feature demo. Strings are wrapped in
-/// single quotes so m-js reads a JS string literal.
 pub fn tab_display(icon: &str, label: &str) -> Node {
     Node::host_bound("uiTab", &[
         ("class", "ui-tab"),
@@ -175,9 +136,6 @@ pub fn tab_display(icon: &str, label: &str) -> Node {
     ])
 }
 
-/// Feature demo: three static tabs — one active numeric, one numeric, one
-/// text-titled; each shows the full composition (icon + title + close), the
-/// close button being inert in this static sample (no store).
 pub fn demo() -> Node {
     let close = m("button")
         .class("tab-x")
@@ -204,16 +162,11 @@ pub fn demo() -> Node {
         ])
 }
 
-/// The live bar: `x-for` over the store's `tabs`. The row is a direct element
-/// (no sub-component boundary) so its `@click` and the child close button's
-/// `@click.stop` both reliably fire — the chat-app pattern.
-/// register the widget.
 pub fn register() {
     css::inject(NAME, CSS);
     mjs::component(NAME, &def().finish());
 }
 
-/// Focus events are delegated because m-js does not bind them on these rows.
 pub fn start() {
     let global = js::global();
     let doc = js::get(&global, "document");
@@ -234,13 +187,6 @@ pub fn start() {
     js::set(&global, "__chatTabFocusListener", &callback);
 }
 
-/// Props (host-provided, with defaults). Prop names are HTML attributes,
-/// so they are single lowercase words — a camelCase name like `titleHint`
-/// is lowercased by the parser and silently never reaches the component.
-/// - `icon`  — phosphor glyph name; empty string means the chat-circle icon (default "")
-/// - `label` — the tab's short text; a number or text (default "")
-/// - `title` — the label's tooltip: the full session title behind the
-///   short label (default "")
 fn def() -> Def {
     let mut d = Def::new().named(NAME);
     d.prop_str("icon", "")
@@ -250,13 +196,8 @@ fn def() -> Def {
             m("span")
                 .class("ui-tab")
                 .kids(vec![
-                    // icon: chat-circle by default, otherwise a named phosphor glyph.
-                    // Parens are required: without them the ternary binds looser
-                    // than `+`/`===` and m-js evaluates it to just the glyph.
                     Node::icon_dyn("(icon === '' ? 'chat-circle' : icon)")
                         .class("ph ptree-icon"),
-                    // label: number or text, ellipsised when it overflows;
-                    // its tooltip is the full title it cannot show.
                     m("span")
                         .class("ui-tab-title")
                         .text("label")
@@ -266,12 +207,6 @@ fn def() -> Def {
     d
 }
 
-/// The tab strip, over whichever store holds the open tabs.
-///
-/// One definition: `/` passes the live store, the design guide passes the
-/// samples, where opening a tab really does switch it. A tab carries no state
-/// symbol: the ball lives on the projects list, the ring lives in the session
-/// header, and a tab simply labels the panel below it.
 pub fn tab_bar(st: &str) -> Node {
     m("div").class("tab-bar").kids(vec![
         m("span")
@@ -293,12 +228,7 @@ pub fn tab_bar(st: &str) -> Node {
                     &[
                         ("class", "ui-tab"),
                         ("icon", "'chat-circle'"),
-                        // The tab shows its session's stable 1-based number,
-                        // not the prompt: a title is far too long for a tab,
-                        // and the number is what the user counts by.
                         ("label", "(s.ordinal || '?') + ''"),
-                        // …and its tooltip is the full session title the
-                        // short label cannot show.
                         ("title", "(s.title || s.id)"),
                     ],
                 ),
@@ -314,8 +244,6 @@ pub fn tab_bar(st: &str) -> Node {
             .class("tab-plus")
             .attr("type", "button")
             .attr("aria-label", "new session")
-            // Creating sessions is a capability (PLAN44 Layer 1): no
-            // `session.create`, no button.
             .show("$store.ident.can('session.create')")
             .on("click", &format!("{st}.newSession()"))
             .child(Node::icon("plus")),

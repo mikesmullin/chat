@@ -1,18 +1,3 @@
-//! `automation form` — the "New automation" form: nine `field` rows
-//! (label + bare input + hint) plus a submit row hosting the kit `uiButton`
-//! and the live `validation info` line, all bound to the `automationDraft`
-//! store.
-//!
-//! Row → control map: name / schedule / repo → `text input`; worktree →
-//! `toggle button`; sandbox / model → `radio input` (sandbox options reuse
-//! three sandbox names from the Sandboxes Menu, so the two agree); prompt →
-//! `text area`; timeout → `range input`; tool allowlist → `tag input` (its
-//! comma-joined value stays a plain string).
-//!
-//! Depth 10: ten distinct storybook components (field + its eight parts +
-//! validation info). Owns only the form layout CSS; the kit field-chrome
-//! retint lives in the global layer (`web/storybook.css`).
-
 use rustex1_kit::h::{lit, m, Node};
 use rustex1_kit::{js, mjs};
 use rustex1_kit::mjs::Def;
@@ -124,9 +109,6 @@ pub fn automation_form() -> Node {
             true,
         ),
         m("div").class("automation-actions").kids(vec![
-            // the click lives on this wrapper (route-tree element, like a
-            // tab-bar row) — the button inside is the kit widget, whose
-            // template m-js owns, so a handler there would be inert.
             m("span")
                 .class("automation-submit")
                 .on("click", CREATE)
@@ -139,8 +121,6 @@ pub fn automation_form() -> Node {
     ])
 }
 
-/// `create`: require a name, else confirm the queue. Writes `message` +
-/// `messageTone`, which the validation line shows.
 fn create(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let name = js::get_str(&s, "name").trim().to_string();
@@ -173,7 +153,6 @@ fn store_register() {
     mjs::store(STORE, &d.finish());
 }
 
-/// inject the layout CSS and register the `automationDraft` store.
 pub fn register() {
     css::inject("automation-form", CSS);
     store_register();

@@ -1,22 +1,3 @@
-//! `thread` — a collapsed stretch of conversation, and the control that
-//! opens it.
-//!
-//! A thread is one line of the memory tree standing in for everything it
-//! covers: "8 messages" plus a summary of them. Clicking it fetches its two
-//! halves and nests them underneath, so you descend by halving — coarse,
-//! then finer, then finer, until a row is a real message and renders as the
-//! card it always was.
-//!
-//! The reason to show a summary rather than hide the old messages is that a
-//! collapsed thread is **not** an archive: everything under it is still
-//! there, and the line you are reading is an index into it. So the affordance
-//! has to say "open me", not "this is all that is left".
-//!
-//! Rows arrive as a flat list, each carrying its own `depth`; the indent is
-//! `--d`, set per row. A recursive component would have been the obvious
-//! shape and the wrong one — m-js diffs a keyed flat list much more cheaply,
-//! and the nesting is only ever visual.
-
 use rustex1_kit::h::{lit, m, Node};
 
 use crate::css;
@@ -24,7 +5,6 @@ use crate::css;
 pub const CSS: &str = r#"
 :is(#sb, #home) .thread-row {
   display: flex; gap: 8px; align-items: flex-start;
-  /* one indent step per level descended */
   padding-left: calc(var(--d, 0) * 20px);
   margin-bottom: 6px;
 }
@@ -34,8 +14,6 @@ pub const CSS: &str = r#"
   padding: 8px 12px;
   border-radius: 10px;
   background: var(--panel-2);
-  /* The rule on the left is the "there is more under this" cue, and it is
-     the only thing distinguishing a thread from a message card. */
   border-left: 2px solid var(--gray-dim);
   cursor: pointer;
   text-align: left;
@@ -57,8 +35,6 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .thread-count { font-variant-numeric: tabular-nums; }
 :is(#sb, #home) .thread-ref { opacity: .6; font-family: var(--mono, monospace); }
-/* A clipped line is a summary the model never managed to shorten, so the
-   source was truncated instead. Worth saying, quietly. */
 :is(#sb, #home) .thread-clipped { color: var(--warn, #c9a227); }
 :is(#sb, #home) .thread-text { font-size: 13px; line-height: 1.5; }
 :is(#sb, #home) .thread-text.unbuilt { color: var(--gray-dim); font-style: italic; }
@@ -66,10 +42,6 @@ pub const CSS: &str = r#"
 
 "#;
 
-/// One thread row: the toggle, the count, and the summary line.
-///
-/// Rendered for `!t.leaf`; a width-1 row is a real message and the
-/// transcript draws its card instead.
 pub fn row(st: &str) -> Node {
     m("button")
         .bind("class", "('thread-card ' + (t.expanded ? 'is-open' : ''))")
@@ -89,9 +61,6 @@ pub fn row(st: &str) -> Node {
                         .iff("t.loading")
                         .child(lit("opening…")),
                 ]),
-                // The summary is prose a model wrote, so it renders as
-                // markdown like any other answer. Safe for `x-html`: the
-                // renderer escapes its input before emitting any tag.
                 m("div")
                     .bind("class", "('thread-text md-body ' + (t.built ? '' : 'unbuilt'))")
                     .inner_html("t.html || t.text"),

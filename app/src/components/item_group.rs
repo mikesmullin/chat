@@ -1,17 +1,5 @@
-//! `item-group` — a labelled group: state-coloured name + inline counter,
-//! then a list of rows.
-//!
-//! Each row = robot icon + bold name + truncated summary + relative time.
-//! The group carries the state colour in its own name — no per-row symbol:
-//! the status ball lives on the projects list items, never here.
-//!
-//! `tone` is `done` / `working` / `idle`; it drives the group's colour.
-//!
-//! Owns its CSS; injected at boot by `components::register`.
-
 use rustex1_kit::h::{lit, m, Node};
 
-/// the item group's styles (group + head + list + rows).
 pub const CSS: &str = r#"
 .item-group { color: var(--muted); margin-bottom: 18px; max-width: 480px; width: 100%; }
 .item-group.idle { color: var(--gray-dim); }
@@ -48,7 +36,6 @@ pub const CSS: &str = r#"
 .item-meta { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 "#;
 
-/// one agent row.
 fn row(name: &str, summary: &str, reltime: &str) -> Node {
     m("li")
         .class("item-row")
@@ -62,7 +49,6 @@ fn row(name: &str, summary: &str, reltime: &str) -> Node {
         ])
 }
 
-/// the group header: state-coloured name + the inline counter widget.
 fn head(label: &str, count: &str) -> Node {
     m("div")
         .class("item-head")
@@ -72,7 +58,6 @@ fn head(label: &str, count: &str) -> Node {
         ])
 }
 
-/// build one item-group tree.
 pub fn item_group(tone: &str, label: &str, count: &str, rows: &[(String, String, String)]) -> Node {
     m("div")
         .class(&format!("item-group {}", tone))

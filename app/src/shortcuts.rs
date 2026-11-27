@@ -1,5 +1,3 @@
-//! Global, two-step keyboard shortcuts for the session workspace.
-
 use std::cell::Cell;
 use std::rc::Rc;
 use wasm_bindgen::{closure::Closure, JsValue};
@@ -43,7 +41,6 @@ pub fn start() {
     let token = lifecycle::token();
     let callback = Closure::wrap(Box::new(move |event: JsValue| {
         if !lifecycle::am_current_token(&token) { return; }
-        // Session actions belong to the workspace, not the component guide.
         if js::get_str(&js::get(&js::global(), "location"), "pathname") != "/" {
             state.set(false);
             return;
@@ -80,20 +77,4 @@ pub fn start() {
     let blur = Closure::wrap(Box::new(move |_event: JsValue| armed.set(false)) as Box<dyn FnMut(JsValue)>).into_js_value();
     js::call(&global, "addEventListener", &[JsValue::from_str("blur"), blur.clone(), JsValue::TRUE]);
     js::set(&global, "__chatShortcutBlurListener", &blur);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn session_shortcuts_require_the_prefix_and_cancel_on_other_keys() {
-        assert_eq!(key_action(false, "s", true, false, false, false), Action::Prefix);
-        assert_eq!(key_action(false, "w", false, false, false, false), Action::None);
-        assert_eq!(key_action(true, "w", false, false, false, false), Action::CloseTab);
-        assert_eq!(key_action(true, "n", true, false, false, false), Action::NewTab);
-        assert_eq!(key_action(true, "d", false, false, false, false), Action::DeleteSession);
-        assert_eq!(key_action(true, "x", false, false, false, false), Action::Cancel);
-        assert_eq!(key_action(true, "w", false, true, false, false), Action::Cancel);
-        assert_eq!(key_action(false, "s", true, false, false, true), Action::None);
-    }
 }

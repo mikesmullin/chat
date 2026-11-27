@@ -1,11 +1,3 @@
-//! chat server — the frontend web app shell, served by the rustex1 dev
-//! server (static + HMR + wasm rebuild + self-restart).
-//!
-//! angela runs **inside this process** (`mod api`): sessions, the chat NDJSON
-//! stream and the agl turn loop are all served from here. The chat app is one
-//! server — there is no second daemon to start and no port to coordinate.
-//! Sessions live under `<cwd>/.angela/sessions`, or `ANGELA_ROOT` if set.
-
 mod api;
 mod assistant_text;
 mod auth;
@@ -22,33 +14,15 @@ fn main() {
     let root = std::env::current_dir().expect("current dir");
     let (config, rebuild) = args_to_config(&args, Config::discover(&root));
 
-    // Drop worktree registrations whose directory is gone. A crash between
-    // `git worktree add` and the registry write, or a checkout removed by
-    // hand, otherwise leaves a row the picker offers and every mount of
-    // which fails.
     hostgit::sweep(&api::project_root());
 
-    // /api/ is answered in-process by the embedded angela. The NDJSON chat
-    // stream is written frame by frame, so a turn reaches the browser as the
-    // model produces it.
-    //
-    // angela is initialised eagerly (not on first request) so the
-    // automation scheduler below can never win the race to build it with a
-    // placeholder port.
     let _ = api::angela(config.port);
-    // Messages left in the queue by the last run: their request threads are
-    // gone, so they are re-submitted through the normal pipeline here or
-    // they would wait forever.
     automations::recover_queue();
-    // The perimeter gate runs in front of every route (PLAN44 D12): session
-    // cookies, the login form, Shields Up/Down and the ban list.
     let perimeter = std::sync::Arc::new(auth::Perimeter::load(&root));
     auth::init(std::sync::Arc::clone(&perimeter));
     let mut server = Server::new(config)
         .gate(perimeter.gate())
         .raw("/api/", api::handle_api)
-        // Message images (PLAN44 A5) live outside /api/ but in the same
-        // handler — one choke point, one auth story.
         .raw("/media/", api::handle_api)
         .on_start(|state| {
             events::start(state);

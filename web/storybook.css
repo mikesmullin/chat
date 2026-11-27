@@ -1,28 +1,5 @@
-/* ================================================================
-   Storybook - global layer.
-   Rules that apply to the storybook page as a whole or to rules
-   shared by many components:
-     - the #sb-scoped token retint (charcoal over the app skin)
-     - the two-column shell (#sb, .sb-content, .feature)
-     - shared type tokens used by several components:
-         .counter           (nav rail, item heads, demo)
-         .relative-timestamp (item rows + reltime demo set)
-         .pie-ring          (pie route + the roster's context ring)
-     - the responsive page breakpoint
-   Each component's own rules live in its .rs file (see
-   app/src/css.rs) and are injected into <head> at boot.
-   ================================================================ */
-
-/* retint the app skin to neutral charcoal, scoped to the storybook shell
-   (not :root - the storybook is a route inside the app, so a global
-   override would leak the charcoal theme onto the chat view) */
 #sb,
 #home {
-  /* Three-step neutral ramp. The base is the page itself (the rail is
-     part of it, with no surface of its own); --panel is the content
-     column's card; --panel-2 is anything raised ON that card (message
-     cards, the composer envelope, inputs, menus). Pure neutral greys —
-     no blue cast. */
   --bg: #080808;
   --panel: #161616;
   --panel-2: #242424;
@@ -32,13 +9,11 @@
   --text: #f1f3f6;
   --muted: #8e94a2;
 
-  /* indigo - the only cool accent */
   --accent: #7c7ef8;
   --accent-soft: #a9accf;
   --accent-tint: color-mix(in srgb, var(--accent) 10%, transparent);
   --accent-glow: color-mix(in srgb, var(--accent) 6%, transparent);
 
-  /* pastel family - soft, low-chroma, for non-semantic roles */
   --pastel-indigo: #b9bcd9;
   --pastel-violet: #c9bde0;
   --pastel-pink: #f0b8ce;
@@ -49,14 +24,9 @@
   --pastel-red: #f2adab;
   --mjs-yellow: var(--pastel-amber);
 
-  /* dim gray, near #666 - the idle state + its ball */
   --gray-dim: #6e717a;
 }
 
-/* ---- shell ----
-   The page is the black base; the rail sits directly on it with no
-   surface of its own, and the content column is a rounded card floating
-   on top. */
 #sb {
   display: grid;
   grid-template-columns: 264px 1fr;
@@ -67,7 +37,6 @@
 #sb.collapsed { grid-template-columns: 56px 1fr; }
 #sb { transition: grid-template-columns .3s ease-in-out; }
 
-/* ---- content (right) ---- */
 .sb-content {
   min-width: 0; overflow-y: auto;
   background: var(--panel);
@@ -78,12 +47,7 @@
 }
 .feature { margin: auto; display: flex; align-items: center; justify-content: center; width: 100%; }
 
-/* ================================================================
-   Shared component classes (used by multiple components)
-   ================================================================ */
 
-/* counter - inline item count; also rendered by the live rail and
-   item-group heads, so the base type lives here. */
 .counter {
   font-family: var(--mono);
   font-size: 12px;
@@ -94,8 +58,6 @@
   white-space: nowrap;
 }
 
-/* relative timestamp - the short state duration. Shared between static
-   spans in item-group rows and the reltime demo set. */
 .relative-timestamp {
   font-family: var(--mono);
   font-size: 12px;
@@ -104,8 +66,6 @@
   white-space: nowrap;
 }
 
-/* generic cooldown ring - used by the pie-ring route AND the roster's
-   context ring. The 22px disc matches the seat disc. */
 .pie-ring {
   width: 22px; height: 22px;
   display: inline-block;
@@ -113,23 +73,11 @@
   vertical-align: bottom;
 }
 
-/* ================================================================
-   Scrollbars — thin, rounded, dark (apple-style), scoped to #sb
-   (transparent track, muted-translucent thumb, 8px / 4px visible).
-   Token-routed: no raw hexes, so a palette change stays one edit.
-   ================================================================ */
-/* Firefox has no scrollbar pseudo-elements, so it gets the standard
-   properties. `thin` draws no stepper arrows there. */
 :is(#sb, #home), :is(#sb, #home) * {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--muted) 32%, transparent) transparent;
 }
 
-/* Chromium/WebKit: the standard properties and the pseudo-elements are
-   mutually exclusive — setting `scrollbar-width` makes the engine IGNORE
-   every `::-webkit-scrollbar-*` rule, which silently killed the no-arrows
-   rule below. Hand the standard properties back to `auto` here so the
-   pseudo-elements take effect and we keep full control of the shape. */
 @supports selector(::-webkit-scrollbar) {
   :is(#sb, #home), :is(#sb, #home) * {
     scrollbar-width: auto;
@@ -164,8 +112,6 @@
 :is(#sb, #home) *::-webkit-scrollbar-corner {
   background: transparent;
 }
-/* No stepper arrows. Both `display:none` and a zero size are needed: some
-   builds still reserve the button box with only one of them. */
 :is(#sb, #home)::-webkit-scrollbar-button,
 :is(#sb, #home) *::-webkit-scrollbar-button {
   display: none;
@@ -173,15 +119,6 @@
   height: 0;
 }
 
-/* ================================================================
-   Chat components — remap the app's `--mjs-*` tokens to storybook
-   tokens, scoped to #sb. The chat classes (.history, .bubble-*,
-   .tool-card, .composer…) stay verbatim — the contract — and surfaces
-   that resolve through tokens pick up charcoal + indigo automatically.
-   Only the accents the app hard-codes (user blue, ok/err/wait) are
-   re-pointed; raw content colors (reasoning violet, approval amber)
-   stay as the app paints them.
-   ================================================================ */
 :is(#sb, #home) .mjs-chat {
   --mjs-accent-2: var(--accent-soft);
   --mjs-ok: var(--pastel-green);
@@ -192,12 +129,6 @@
   --mjs-tool: var(--panel-2);
 }
 
-/* ================================================================
-   Form field chrome — charcoal retint of the kit widgets, scoped to #sb.
-   The kit defaults are dark-blue with an orange focus glow, both
-   off-palette here; these rules route everything through storybook
-   tokens. Shared by every input component and the automation form.
-   ================================================================ */
 :is(#sb, #home) input[type="text"],
 :is(#sb, #home) input[type="number"],
 :is(#sb, #home) textarea,
@@ -214,10 +145,6 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-tint);
 }
-/* The kit hardcodes a blue-slate `#55697d` for placeholders (kit.css:453),
-   which is a raw hex no token can reach. Route it through the palette so it
-   reads as grey like the rest of the dim text. `opacity: 1` because some
-   engines dim a placeholder further on top of the colour. */
 :is(#sb, #home) input::placeholder,
 :is(#sb, #home) textarea::placeholder {
   color: var(--gray-dim);
@@ -260,18 +187,8 @@
 }
 :is(#sb, #home) .btn.primary:hover { background: var(--accent-glow); }
 
-/* ================================================================
-   Page-level responsive rules
-   ================================================================ */
 @media (max-width: 860px) {
-  /* Narrow viewports (e.g. the fire, ~600px CSS width): the storybook rail is
-     too long (~90 items) to sit as a horizontal bar, so keep the two-column
-     layout and just narrow the rail instead of stacking content below it. */
   #sb { grid-template-columns: 220px 1fr; }
-  /* #sb-prefixed (id selector) beats the component <style> tags injected at
-     boot, so the narrow-rail width and 0 margin survive the cascade. */
-  /* The rail fills its (now narrower) grid column. No width/flex overrides —
-     a grid item should size to its track, not a flex basis. */
   #sb .sb-rail {
     grid-column: 1 / 1;
     margin-right: 0;
@@ -280,4 +197,3 @@
   #sb .sb-content { padding: 16px; margin: 10px 10px 10px 0; }
   #sb .nav-demo { width: 100%; height: 340px; }
 }
-

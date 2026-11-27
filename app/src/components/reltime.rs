@@ -1,29 +1,3 @@
-//! `uiRelTime` — the storybook's relative timestamp, short form, no "ago".
-//!
-//! `3m 20m 45m 1h` plus a live slot that counts up `0s 1s 2s …`.
-//!
-//! ## Shape
-//!
-//! Port of the kit's `ui_reltime` fast-update pattern (one shared 1 Hz tick per
-//! boot, direct `textContent` writes, no `x-text` on the node), with the
-//! storybook's short grammar in place of the kit's long "2sec ago / 3hr ago"
-//! form. The kit's `fmt_rel_short` is hard-coded with " ago" and takes no
-//! format prop, so the storybook needs its own widget to hit its spec.
-//!
-//! ## Redraw-safety
-//!
-//! The app calls a *global* `mjs::redraw()` on every store poll (~4s). A
-//! redraw re-evaluates every bound expression on every live template, so a
-//! `:at` bind that reads `Date.now()` would re-derive a fresh instant on each
-//! redraw and the live slot would jump back to "0s" every few seconds.
-//!
-//! Fix: the *epoch* (the instant everything ages from) is pinned to
-//! `window.__rtEpoch` on first evaluation. Each slot's `at` derives from that
-//! pinned number plus a static per-slot offset, so the `:at` bind is
-//! deterministic — the same value on every redraw — and the live slot keeps
-//! aging from the original epoch. Away-and-back is free: the epoch survives on
-//! `window`, and the DOM is the authority on which instances exist.
-
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::cell::RefCell;
@@ -41,7 +15,6 @@ pub const NAME: &str = "uiRelTime";
 const TICK_MS: f64 = 1000.0;
 const ATTR: &str = "data-reltime";
 
-/// The widget's own label styles + the demo-set showcase chrome.
 const CSS: &str = r#"
 .ui-reltime {
   font-family: var(--mono);
@@ -53,22 +26,15 @@ const CSS: &str = r#"
 }
 .relative-timestamp.demo-set { display: flex; gap: 6px; align-items: baseline; }
 .relative-timestamp.demo-set span { white-space: nowrap; }
-/* live instances in the demo set: reserve width so labels grow without
-   shifting the neighbours (the shared tick is the sole writer of text) */
 .relative-timestamp.demo-set [data-reltime] { min-width: 8ch; }
 "#;
 
 thread_local! {
-    /// tag -> instance scope. The shared tick walks the DOM and resolves scopes
-    /// by tag (same shape as the kit's `ui_reltime`).
     static SCOPES: RefCell<HashMap<String, JsValue>> = RefCell::new(HashMap::new());
     static NEXT_ID: Cell<u64> = const { Cell::new(0) };
-    /// The boot whose shared tick is running; keyed on the lifecycle token so a
-    /// hot swap starts a fresh chain rather than concluding one is already going.
     static TICK_FOR: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-/// Factory form: called per instance, which mints a unique tag per node.
 pub fn register() {
     css::inject(NAME, CSS);
     mjs::component_factory(NAME, |_props| {
@@ -90,18 +56,13 @@ fn def(id: &str) -> Def {
         m("span")
             .class("ui-reltime")
             .attr(ATTR, id)
-            // no x-text on the node: the tick is the sole writer of the label.
-            // The tooltip is the host's to supply (the tree row sends the
-            // `created … modified …` instants); the default stays the empty
-            // title, which keeps the row's own hover text off the age.
             .bind("title", "title"),
     );
     d.method("init", |this, _args| {
         let tag = js::get_str(&this, "tag");
         SCOPES.with(|s| s.borrow_mut().insert(tag.clone(), this.clone()));
-        // subscribe, do not schedule: one chain serves every instance on the page.
         ensure_tick();
-        write_tag(&tag); // first paint now, not up to a second from now.
+        write_tag(&tag);
         JsValue::UNDEFINED
     })
     .method("destroy", |this, _args| {
@@ -112,7 +73,6 @@ fn def(id: &str) -> Def {
     d
 }
 
-/// Start the page's single tick, once per boot.
 fn ensure_tick() {
     let token = lifecycle::token();
     if TICK_FOR.with(|t| *t.borrow() == Some(token.clone())) {
@@ -128,14 +88,11 @@ fn ensure_tick() {
     });
 }
 
-/// One tick for every instance on the page: one DOM walk, one `Date.now()`.
 fn tick_all() {
     let Some(nodes) = js::query_all(&format!("[{ATTR}]")) else {
         return;
     };
     let now = js_sys::Date::now();
-    // A NodeList is array-like, not an Array, so length and index come through
-    // Reflect.
     let count = js_sys::Reflect::get(&nodes, &JsValue::from_str("length"))
         .ok()
         .and_then(|v| v.as_f64())
@@ -163,7 +120,6 @@ fn tick_all() {
     });
 }
 
-/// Write one instance's label from the tick's single `now`.
 fn write_node(node: &JsValue, at: &str, now: f64) {
     let text = fmt_short(at, now);
     if js::get_str(node, "textContent") != text {
@@ -171,21 +127,17 @@ fn write_node(node: &JsValue, at: &str, now: f64) {
     }
 }
 
-/// Single-instance write, used for first paint before the tick next fires.
 fn write_tag(tag: &str) {
     let at = SCOPES
         .with(|s| s.borrow().get(tag).map(|scope| js::get_str(scope, "at")))
         .unwrap_or_default();
     let Some(node) = js::query(&format!("[{ATTR}=\"{tag}\"")) else {
-        return; // not mounted yet
+        return;
     };
     write_node(&node, &at, js_sys::Date::now());
 }
 
-// --- short form, no "ago": 1s 2m 3h 4d --------------------------------
 
-/// Relative short form, storybook grammar: `1s 2m 3h 4d` — no trailing text
-/// (no " ago" and no " in "), so the slot is unambiguous in either direction.
 fn fmt_short(at: &str, now_ms: f64) -> String {
     if at.is_empty() {
         return "…".to_string();
@@ -210,11 +162,7 @@ fn fmt_short(at: &str, now_ms: f64) -> String {
     unit
 }
 
-// --- parsing (Rust-only; the tick path never calls into JS) -------------
 
-/// `YYYY-MM-DD` or `YYYY-MM-DD[THH:MM:SS[.fff][Z|±hh:mm]]` -> epoch ms.
-/// Date-only reads as UTC midnight. The tail must be fully consumed; a stray
-/// character is a parse failure, never a silent tolerance.
 fn parse_iso_to_ms(iso: &str) -> Option<f64> {
     let v = iso.trim();
     let (y, m, d) = (digits(v, 0..4)?, digits(v, 5..7)?, digits(v, 8..10)?);
@@ -240,11 +188,8 @@ fn parse_iso_to_ms(iso: &str) -> Option<f64> {
             return None;
         }
         secs = hh * 3600 + mm * 60 + ss;
-        // Tail: optional fraction, optional zone. JS `toISOString()` always
-        // yields `.mmmZ`; anything with leftover is not a shape this widget reads.
         let tail = &rest[8..];
         let tail = if tail.starts_with('.') {
-            // optional fraction: one-or-more digits, then the zone (or nothing)
             let frac = &tail[1..];
             let (frac_len, rest) = {
                 let mut i = 0;
@@ -263,13 +208,11 @@ fn parse_iso_to_ms(iso: &str) -> Option<f64> {
         let offset = if tail.is_empty() {
             0
         } else if tail.as_bytes()[0] == b'Z' || tail.as_bytes()[0] == b'z' {
-            // Z: UTC — require exactly one marker, nothing else.
             if !tail.as_bytes()[1..].is_empty() {
                 return None;
             }
             0
         } else {
-            // ±hh:mm
             if tail.len() != 6 || tail.as_bytes()[3] != b':' {
                 return None;
             }
@@ -300,7 +243,6 @@ fn digits(v: &str, range: std::ops::Range<usize>) -> Option<i64> {
     slice.parse().ok()
 }
 
-/// Howard Hinnant's `days_from_civil`, inlined to stay dependency-free.
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let (y, era) = if m <= 2 {
         (y - 1, (y - 1) / 400)

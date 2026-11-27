@@ -1,21 +1,3 @@
-//! `agent-editor` — an agent definition, in the inspector column.
-//!
-//! The third column is contextual: what it shows is whatever is selected
-//! elsewhere on the page. Selecting an agent in the rail puts its definition
-//! here, and `+` puts an empty one here.
-//!
-//! The form's shape follows what the fields *are*, not what type they have.
-//! `soul`, `goals` and `memory` are three boxes rather than one, because they
-//! are three different kinds of writing with three different authors: the
-//! soul is written once by whoever defined the agent, the goals are the
-//! user's steering, and the memory is the agent's own notes — which it may
-//! rewrite and you may read. Flattening them into one "system prompt" box
-//! would lose exactly that distinction.
-//!
-//! `engagement` is a three-way switch with its meaning spelled out under it,
-//! because it is the field that decides whether the agent ever speaks, and a
-//! bare word like "relevant" does not say what will happen.
-
 use rustex1_kit::h::{lit, m, Node};
 
 use crate::css;
@@ -36,10 +18,6 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .ae-field { display: flex; flex-direction: column; gap: 5px; }
 :is(#sb, #home) .ae-label {
   font-size: 11px; color: var(--gray-dim); line-height: 16px;
-  /* Title + hint belong on different lines: the label box dissolves
-     (display: contents) so its two spans join the field's column, and the
-     hint is ordered below every control in the field — the same
-     label/control/hint stacking the shared `field` brick already does. */
   display: contents;
 }
 :is(#sb, #home) .ae-label .hint {
@@ -55,8 +33,6 @@ pub const CSS: &str = r#"
   resize: vertical;
 }
 :is(#sb, #home) .ae-field textarea { min-height: 64px; font-size: 12px; }
-/* A turn count is two or three digits; a full-width box for it reads as a
-   text field and invites prose. The spinner is noise at this size. */
 :is(#sb, #home) .ae-field input.ae-num { width: 7em; }
 :is(#sb, #home) .ae-field input.ae-num::-webkit-outer-spin-button,
 :is(#sb, #home) .ae-field input.ae-num::-webkit-inner-spin-button {
@@ -70,7 +46,6 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .ae-field input::placeholder,
 :is(#sb, #home) .ae-field textarea::placeholder { color: var(--gray-dim); }
 
-/* the three-way engagement switch */
 :is(#sb, #home) .ae-modes { display: flex; gap: 4px; }
 :is(#sb, #home) .ae-mode {
   flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
@@ -96,13 +71,11 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .ae-color-hex { flex: 1; font-family: var(--mono, monospace); }
 
-/* the icon row: a live glyph the size of the colour swatch, then its name */
 :is(#sb, #home) .ae-icon { display: flex; gap: 8px; align-items: center; }
 :is(#sb, #home) .ae-icon .ae-icon-preview {
   width: 38px; height: 30px; flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--panel-2); border-radius: 8px;
-  /* Drawn in the agent's own colour, so the two fields preview together. */
   color: var(--agent-accent, var(--accent));
   font-size: 17px; line-height: 1;
 }
@@ -122,15 +95,9 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .ae-btn.danger:hover { color: var(--danger, #d9534f); }
 :is(#sb, #home) .ae-btn.is-confirm { color: var(--danger, #d9534f); }
 :is(#sb, #home) .ae-btn[disabled] { opacity: .5; cursor: default; }
-/* The shields switch (PLAN44 D12), per the Switch Anatomy reference: a
-   pill track ~2× its white handle, a green check in the handle, and the
-   state word outside on the right. The track is the alarm — quiet gray
-   while the door is shut, red while it stands open. Colours sampled from
-   the reference: #34c671 (green), #d4d4d7 (track gray). */
 :is(#sb, #home) .shields-switch {
   appearance: none; border: 0; background: transparent; cursor: pointer;
   display: inline-flex; align-items: center; gap: 8px; padding: 0;
-  /* The field column stretches its children; hug the control instead. */
   align-self: flex-start;
 }
 :is(#sb, #home) .shields-track {
@@ -140,7 +107,6 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .shields-knob {
   position: absolute; top: 50%; margin-top: -8px;
-  /* Handle right = Up, handle left = Down. */
   left: 15px;
   width: 16px; height: 16px; border-radius: 50%; background: #fff;
   box-shadow: 0 1px 2px rgba(0,0,0,.3);
@@ -148,8 +114,6 @@ pub const CSS: &str = r#"
   transition: left 160ms cubic-bezier(.2,.8,.2,1);
 }
 :is(#sb, #home) .shields-icon {
-  /* Same hue as the track. Up wears the Fill face (a solid glyph); Down
-     wears Bold (a warned glyph) — the weight changes with the state. */
   font-size: 10px; color: #00ad0d;
 }
 :is(#sb, #home) .shields-label {
@@ -159,9 +123,6 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .shields-switch.is-down .shields-track { background: #ef4444; }
 :is(#sb, #home) .shields-switch.is-down .shields-knob { left: 1px; }
 :is(#sb, #home) .shields-switch.is-down .shields-icon { color: #b91c1c; }
-/* Field prefix icons (PLAN44 UI): white, bold phosphor glyphs. The globe
-   is inset in the input (absolute, so the field keeps its height); the
-   device glyph is each row's bullet; the shield stands by the switch. */
 :is(#sb, #home) .ae-input-icon { position: relative; display: flex; align-items: center; }
 :is(#sb, #home) .ae-input-glyph {
   position: absolute; left: 10px; z-index: 1; pointer-events: none;
@@ -172,7 +133,6 @@ pub const CSS: &str = r#"
   color: #fff; font-size: 12px; line-height: 1.6; flex: 0 0 auto;
 }
 :is(#sb, #home) .shields-glyph { color: #fff; font-size: 13px; line-height: 1; }
-/* Recognized devices (PLAN44 A2): one row per issued session cookie. */
 :is(#sb, #home) .ae-devices {
   display: flex; flex-direction: column; gap: 4px;
   padding: 8px 10px; border: 1px solid var(--line-soft, var(--line));
@@ -193,8 +153,6 @@ pub const CSS: &str = r#"
   border: 0; background: transparent; color: var(--gray-dim);
   cursor: pointer; padding: 2px; border-radius: 6px; font-size: 12px;
   line-height: 1;
-  /* The row's action, not its content: hidden until the row is hovered —
-     same idiom as the transcript's fork button. Keyboard still reaches it. */
   opacity: 0; pointer-events: none; transition: opacity 100ms ease;
 }
 :is(#sb, #home) .ae-device:hover .ae-device-del,
@@ -248,14 +206,12 @@ fn mode(value: &str, label: &str, icon: &str) -> Node {
         ])
 }
 
-/// The editor, shown when an agent is selected or being created.
 pub fn agent_editor() -> Node {
     m("div")
         .class("agent-editor")
         .show(&format!("{ST}.open"))
         .kids(vec![
             m("div").class("agent-editor-head").kids(vec![
-                // The agent being edited, drawn as itself.
                 Node::icon_dyn(&format!("({ST}.draft.icon || 'robot')")),
                 m("span")
                     .class("agent-editor-title")
@@ -263,8 +219,6 @@ pub fn agent_editor() -> Node {
                         "({ST}.creating ? 'New agent' : ({ST}.draft.name || 'Agent'))"
                     )),
             ]),
-            // The verdict banner: always at the top of the form, just above
-            // the first field — one brick, every aside form.
             validation_info::live(
                 &format!("({ST}.error ? 'error' : 'ok')"),
                 &format!("({ST}.error ? {ST}.error : {ST}.saved)"),
@@ -278,7 +232,6 @@ pub fn agent_editor() -> Node {
                 2,
             ),
 
-            // --- engagement ------------------------------------------------
             m("div").class("ae-field").kids(vec![
                 m("label").class("ae-label").kids(vec![
                     m("span").child(lit("Engagement")),
@@ -289,13 +242,11 @@ pub fn agent_editor() -> Node {
                     mode("relevant", "Relevant", "ph-funnel"),
                     mode("engaged", "Engaged", "ph-chats-circle"),
                 ]),
-                // Spelled out, because "relevant" does not say what happens.
                 m("p")
                     .class("ae-mode-note")
                     .text(&format!("{ST}.engagementLabel({ST}.draft.engagement)")),
             ]),
 
-            // --- the three prompt parts ------------------------------------
             field(
                 "Soul",
                 "who it is",
@@ -318,9 +269,6 @@ pub fn agent_editor() -> Node {
                 3,
             ),
 
-            // The glyph this agent is drawn with, above the colour it is
-            // drawn in: the two together are what you recognise it by in
-            // the rail, the roster and every byline.
             m("div").class("ae-field").kids(vec![
                 m("label").class("ae-label").kids(vec![
                     m("span").child(lit("Icon")),
@@ -330,8 +278,6 @@ pub fn agent_editor() -> Node {
                 ]),
                 m("div")
                     .class("ae-icon")
-                    // The preview wears the draft's colour, which is also
-                    // how the colour field gets a shape to show itself on.
                     .bind(
                         "style",
                         &format!(
@@ -339,10 +285,6 @@ pub fn agent_editor() -> Node {
                         ),
                     )
                     .kids(vec![
-                        // The preview *is* the validation: a name the set
-                        // does not have draws nothing, which is the only
-                        // way to tell a typo from a real icon without
-                        // shipping the whole catalogue in a dropdown.
                         m("span")
                             .class("ae-icon-preview")
                             .child(Node::icon_dyn(&format!(
@@ -357,7 +299,6 @@ pub fn agent_editor() -> Node {
                     ]),
             ]),
 
-            // The colour this agent is drawn in, everywhere it appears.
             m("div").class("ae-field").kids(vec![
                 m("label").class("ae-label").kids(vec![
                     m("span").child(lit("Accent colour")),
@@ -367,8 +308,6 @@ pub fn agent_editor() -> Node {
                     m("input")
                         .attr("type", "color")
                         .model(&format!("{ST}.draft.accentColor")),
-                    // The hex beside the swatch, because a swatch alone
-                    // cannot be copied, pasted or read out.
                     m("input")
                         .attr("type", "text")
                         .class("ae-color-hex")
@@ -398,17 +337,9 @@ pub fn agent_editor() -> Node {
                     .attr("min", "1")
                     .attr("max", "1000")
                     .attr("step", "1")
-                    // Each tool call spends one. An agent that reads a few
-                    // files before answering needs more than a chat reply
-                    // does, which is why this is per-agent.
                     .attr("placeholder", "5")
                     .model(&format!("{ST}.draft.maxTurns")),
             ]),
-            // PLAN55 D1: the agent's Containerfile (absolute host path).
-            // Set, and every turn of this agent runs in a container from
-            // that image — one per session, launched at its first turn
-            // there (the file's parent dir names the image; `headed` and
-            // `headless` name the sandbox matrix rows). Empty = the host.
             field(
                 "Containerfile",
                 "absolute host path; empty = runs on the host",
@@ -441,8 +372,6 @@ pub fn agent_editor() -> Node {
                         Node::icon("check").class("ph ph-check"),
                         m("span").text(&format!("({ST}.saving ? 'Saving…' : 'Save')")),
                     ]),
-                // Who else may reach this agent (PLAN44 C4) — the same
-                // share dialog sessions use; the dialog is kind-agnostic.
                 m("button")
                     .class("ae-btn")
                     .attr("type", "button")
@@ -461,8 +390,6 @@ pub fn agent_editor() -> Node {
                     .on("click", &format!("{ST}.remove()"))
                     .kids(vec![
                         Node::icon("trash").class("ph ph-trash"),
-                        // The second press is the destructive one, and it
-                        // says so rather than opening a dialog over a panel.
                         m("span").text(&format!(
                             "({ST}.confirmDelete ? 'Really delete?' : 'Delete')"
                         )),
@@ -471,18 +398,9 @@ pub fn agent_editor() -> Node {
         ])
 }
 
-/// The app's own settings, in the same column.
-///
-/// Reuses the editor's field and button styles rather than growing a second
-/// set: an inspector panel is an inspector panel, and two that look
-/// different for no reason is the sort of thing nobody decides but everyone
-/// notices.
 pub fn settings_panel() -> Node {
     let st = "$store.settings";
     m("div")
-        // Shares the editor's styles, keeps its own name: two panels that
-        // are indistinguishable in the DOM are two panels nothing can
-        // target — a test, a stylesheet or a later feature.
         .class("agent-editor settings-panel")
         .show(&format!("{st}.open"))
         .init(&format!("{st}.load()"))
@@ -491,20 +409,12 @@ pub fn settings_panel() -> Node {
                 Node::icon("gear").class("ph ph-gear"),
                 m("span").class("agent-editor-title").child(lit("Settings")),
             ]),
-            // The verdict banner: always at the top of the form, just above
-            // the first field — one brick, every aside form. This form
-            // auto-saves, so the banner is only ever the bad news.
             validation_info::live("'error'", "$store.ident.error"),
-            // ---- admin: the perimeter (PLAN44 D12) --------------------
             m("div").class("ae-field").show("$store.ident.admin").kids(vec![
                 m("label").class("ae-label").kids(vec![
                     m("span").child(lit("Shields")),
                     m("span").class("hint").child(lit("up: strangers are firewalled · down: invite by name")),
                 ]),
-                // The anatomy (Switch Anatomy reference): one pill track
-                // ~2× the handle, white handle with a green check icon,
-                // state word *outside* on the right — with its shield
-                // prefixed: check when the door is shut, plain when open.
                 m("button")
                     .attr("type", "button")
                     .attr("title", "Toggle shields")
@@ -517,17 +427,12 @@ pub fn settings_panel() -> Node {
                         m("span").class("shields-track").child(
                             m("span")
                                 .class("shields-knob")
-                                // Check-fat in the Fill face when the
-                                // door is shut (solid); x in the Bold face
-                                // when it is open. ONE class binding —
-                                // stacked binds clobber each other.
                                 .child(m("i").bind(
                                     "class",
                                     "($store.ident.shields === 'down' ? 'ph ph-bold ph-x shields-icon' : 'ph ph-fill ph-check-fat shields-icon')",
                                 )),
                         ),
                         m("span").class("shields-label").kids(vec![
-                            // The state shield prefixes the word.
                             m("i").bind(
                                 "class",
                                 "($store.ident.shields === 'down' ? 'ph ph-bold ph-shield shields-glyph' : 'ph ph-bold ph-shield-check shields-glyph')",

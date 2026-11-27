@@ -1,26 +1,3 @@
-//! `dropdown` — a themed select: an icon (tinted on hover) + the current
-//! value in mono + a
-//! caret, opening a dark menu that matches the page (a native `<select>`
-//! popup is OS chrome and cannot be themed, which is the whole reason this
-//! exists).
-//!
-//! ## Why a builder, not an `x-component`
-//! m-js does not fire `@click` on elements nested inside a sub-component
-//! template (the lesson the tab-bar's close button taught). The menu items
-//! *are* clickable, so this ships as a Rust builder — the markup is owned
-//! by the host route's tree, m-js binds the handlers directly, and a
-//! composite calling `dropdown(...)` gets literally the same markup the
-//! standalone route shows.
-//!
-//! ## State
-//! The `dropdown` store holds one key per instance plus a single `open`
-//! key naming the dropdown currently showing its menu (so opening one
-//! closes the other). `@click.outside` dismisses, via `closeIf(key)` —
-//! which no-ops unless *this* dropdown is the open one, so clicking
-//! straight from one dropdown to the other does not race: the button's own
-//! `@click` fires at the element before the document-level outside
-//! listener.
-
 use wasm_bindgen::JsValue;
 
 use rustex1_kit::h::{lit, m, Node};
@@ -32,7 +9,6 @@ use crate::css;
 const STORE: &str = "dropdown";
 
 pub const CSS: &str = r#"
-/* ---- trigger: chrome, not a boxed control ---------------------- */
 .dropdown { position: relative; display: inline-flex; flex: 0 0 auto; }
 .dropdown-btn {
   display: inline-flex;
@@ -43,12 +19,8 @@ pub const CSS: &str = r#"
   border-radius: 7px;
   background: transparent;
   color: var(--text);
-  /* The page's own face, not mono: these are labels, and the only reason
-     they were mono was that the reference screenshot happened to be. */
   font-family: var(--sans);
   font-size: 12px;
-  /* One line-height for the whole trigger, so the label's box is the
-     reference the icon and caret centre against. */
   line-height: 18px;
   cursor: pointer;
   white-space: nowrap;
@@ -58,13 +30,6 @@ pub const CSS: &str = r#"
 .dropdown-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .dropdown.open .dropdown-btn { background: var(--panel-2); border-color: var(--border); }
 
-/* the icon carries the role colour, and only while the dropdown is
-   hovered — at rest it is muted, like the caret. */
-/* Everything in the trigger is centred on the line box — icon, label and
-   caret share one centre line. (An earlier revision nudged the glyphs down
-   0.18em to sit on the text's x-height instead; that is optically truer for
-   the word but leaves the glyph off-centre in its own row, which reads worse
-   beside the other controls. Box centring wins here.) */
 .dropdown-icon {
   font-size: 14px;
   line-height: 18px;
@@ -73,11 +38,7 @@ pub const CSS: &str = r#"
   transition: color .13s;
 }
 .dropdown:hover .dropdown-icon.tone-green { color: var(--pastel-green); }
-/* the same indigo the send button and the context ring are painted with */
 .dropdown:hover .dropdown-icon.tone-accent { color: var(--accent); }
-/* Policy: muted while the allowlist is enforced, warning-red once every
-   tool is permitted. Unlike the other two this is NOT hover-only — an
-   unrestricted session must announce itself at rest. */
 .dropdown:hover .dropdown-icon.tone-policy { color: var(--muted); }
 .dropdown .dropdown-icon.tone-policy.unrestricted,
 .dropdown:hover .dropdown-icon.tone-policy.unrestricted { color: var(--pastel-red); }
@@ -90,10 +51,8 @@ pub const CSS: &str = r#"
   flex: 0 0 auto;
   transition: transform .13s;
 }
-/* Keep the nudge in the rotated state too, else the caret jumps on open. */
 .dropdown.open .dropdown-caret { transform: rotate(180deg); }
 
-/* ---- menu: the page's own dark surface -------------------------- */
 .dropdown-menu {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -140,15 +99,9 @@ pub const CSS: &str = r#"
   flex: 0 0 auto;
 }
 
-/* standalone demo: the pair from the design reference, on one line */
 .dropdown-demo { display: flex; align-items: center; gap: 18px; }
 "#;
 
-/// one menu row: the value, plus a check when it is the current one.
-///
-/// `after` is an optional expression run once the value is set, with `{}`
-/// replaced by the chosen option — the seam that lets a dropdown *do*
-/// something rather than only record a choice.
 fn item(key: &str, value: &str, after: Option<&str>) -> Node {
     let is_on = format!("$store.{STORE}.{key} === '{value}'");
     let mut click = format!("$store.{STORE}.pick('{key}', '{value}')");
@@ -176,18 +129,10 @@ fn model_item(st: &str) -> Node {
                    m("i").class("ph ph-check dropdown-item-check").show("$store.dropdown.model === modelOption")])
 }
 
-/// a themed dropdown bound to `$store.dropdown.<key>`.
-///
-/// - `key`     — the store key it reads and writes; also its open-state id
-/// - `icon`    — phosphor glyph name (verified present before use)
-/// - `tone`    — `green` / `accent`; the icon tints on hover/open only
-/// - `extra`   — extra class on the root, for host layout (e.g. `dd-model`)
-/// - `options` — the menu, in order
 pub fn dropdown(key: &str, icon: &str, tone: &str, extra: &str, options: &[&str], st: &str) -> Node {
     dropdown_ex(key, icon, tone, extra, options, None, st)
 }
 
-/// [`dropdown`] plus a side effect on pick. See [`item`] for `after`.
 pub fn dropdown_ex(
     key: &str,
     icon: &str,
@@ -195,8 +140,6 @@ pub fn dropdown_ex(
     extra: &str,
     options: &[&str],
     after: Option<&str>,
-    // `st`: the store a pick is persisted to — the live session, or the
-    // design guide's samples, which persist nothing.
     st: &str,
 ) -> Node {
     let is_open = format!("$store.{STORE}.open === '{key}'");
@@ -241,7 +184,6 @@ pub fn dropdown_ex(
 
 pub const LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
-/// Agent editor picker: an empty value inherits the session setting.
 pub fn agent_option(field: &str, icon: &str) -> Node {
     let key = format!("agent-{field}");
     let current = format!("$store.agents.draft.{field}");
@@ -276,12 +218,10 @@ pub fn agent_option(field: &str, icon: &str) -> Node {
             m("div").class("dropdown-menu").show(&open).kids(rows)])
 }
 
-/// the model dropdown — cpu glyph, pastel green.
 pub fn model(extra: &str, st: &str) -> Node {
     dropdown("model", "cpu", "green", extra, &[], st)
 }
 
-/// the reasoning-level dropdown — brain glyph, the accent indigo.
 pub fn level(extra: &str, st: &str) -> Node {
     dropdown_ex(
         "level", "brain", "accent", extra, LEVELS,
@@ -292,11 +232,6 @@ pub fn level(extra: &str, st: &str) -> Node {
 
 pub const POLICIES: &[&str] = &["Allowlist", "Unrestricted"];
 
-/// The tool-policy picker that replaces the composer's bare shield button.
-///
-/// `Allowlist` reveals the rules editor; `Unrestricted` runs with `*`. The
-/// shield turns pastel-red while unrestricted, because "every tool is
-/// permitted" should not look like the resting state.
 pub fn policy(extra: &str, st: &str) -> Node {
     dropdown_ex(
         "policy",
@@ -309,7 +244,6 @@ pub fn policy(extra: &str, st: &str) -> Node {
     )
 }
 
-/// standalone demo: the pair, as the design reference shows them.
 pub fn demo() -> Node {
     m("div")
         .class("dropdown-demo")
@@ -319,7 +253,6 @@ pub fn demo() -> Node {
         ])
 }
 
-/// `toggle(key)`: open this one, or close it if it is already open.
 fn toggle(_this: JsValue, args: js_sys::Array) -> JsValue {
     let key = js::arg_str(&args, 0);
     let s = mjs::store_ref(STORE);
@@ -329,7 +262,6 @@ fn toggle(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `pick(key, value)`: set the value and close the menu.
 fn pick(_this: JsValue, args: js_sys::Array) -> JsValue {
     let key = js::arg_str(&args, 0);
     let value = js::arg_str(&args, 1);
@@ -343,8 +275,6 @@ fn pick(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `closeIf(key)`: dismiss, but only when *this* dropdown is the open one —
-/// so a click that moves straight to the other dropdown cannot close it.
 fn close_if(_this: JsValue, args: js_sys::Array) -> JsValue {
     let key = js::arg_str(&args, 0);
     let s = mjs::store_ref(STORE);

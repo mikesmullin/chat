@@ -1,10 +1,3 @@
-/* chat shell — the demo IS the app (parity with m-js-cmp-chat/demo/index.html).
-   Theme tokens match the demo :root exactly; kit.css loads first so these
-   win. chat.css consumes them via var(--bg, #0f1419) etc.
-   --accent-2 / --bg-2 are NOT in the demo :root; they are set here to the
-   values the demo's fallback chains produce, so the kit skin (which defines
-   both: orange --accent-2, dark --bg-2) cannot leak in through
-   --mjs-accent-2 (active tab) and --mjs-tool (tool cards). */
 :root {
   --bg: #0f1419;
   --panel: #1a2332;
@@ -21,29 +14,18 @@
   --sans: ui-sans-serif, system-ui, sans-serif;
 }
 * { box-sizing: border-box; }
-/* kit.css sets `html { font: 14px/... }`; the demo leaves html alone, so
-   rem-based rules (.welcome h1, bubble widths) resolve against the 16px
-   browser default. Restore that. */
 html { font-size: 16px; }
 html, body, #app { height: 100%; margin: 0; }
 body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
-  /* The demo sets no body type, so chat text inherits the 16px/normal
-     browser default. Stated explicitly because kit.css says
-     `html, body { font: 14px/1.55 ... }`, which would otherwise win. */
   font-size: 16px;
   line-height: normal;
   overflow: hidden;
 }
-/* kit.css says `textarea { font-family: mono; font-size: 12px }`; the demo
-   has no such rule, so its draft inherits .mjs-chat. This restores that. */
 .mjs-chat textarea { font-family: inherit; font-size: inherit; }
 
-/* m-js-cmp-chat — cowork chat UI. Host themes via these tokens (or
-   --bg/--panel/--text/--border/--muted/--accent already used by cowork
-   and agent-desktop). All rules are scoped to .mjs-chat. */
 
 .mjs-chat {
   --mjs-bg: var(--bg, #0f1419);
@@ -120,17 +102,10 @@ body {
   background: var(--mjs-panel);
 }
 
-/* The tab strip the app's columns share. */
 
-/* Transcript */
 
 @keyframes mjs-chat-caret { 50% { opacity: 0; } }
 
-/* ---- the legacy transcript's own cards ----------------------------------
-   Only `/chat-demo` draws these now. The app's transcript builds its
-   evidence rows from `fold_card` and its bubbles from the card
-   components, each of which carries its own CSS — so what is left here
-   is the old shape, kept because the demo page still renders it. */
 
 .mjs-chat .tool-call-progress.is-streaming {
   border-color: var(--mjs-wait);
@@ -152,21 +127,13 @@ body {
 .mjs-chat .font-mono { font-family: var(--mjs-mono); }
 .mjs-chat .font-semibold { font-weight: 600; }
 
-/* Composer */
 
 .mjs-chat .ph { display: inline-block; vertical-align: -0.125em; line-height: 1; }
 
-/* Shields Down (PLAN44 D12): the *viewport* glows red — slowly,
-   persistently — until the admin raises them again. The point is to be
-   impossible to forget: a registration window left open is a house with
-   the door standing open, and the page says so to everyone in the room.
-   It is a fixed overlay, not a body shadow: the app's own background
-   paints over body's inset shadow, which is why the glow was invisible. */
 body.shields-down::after {
   content: "";
   position: fixed; inset: 0;
   pointer-events: none;
-  /* Above every app layer (they sit at z 30-ish); below hilite's tools. */
   z-index: 2147482999;
   animation: shields-pulse 2.6s ease-in-out infinite;
 }
@@ -180,4 +147,3 @@ body.shields-down::after {
                 inset 0 0 26px rgba(239, 68, 68, .95);
   }
 }
-

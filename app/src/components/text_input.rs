@@ -1,7 +1,3 @@
-//! `text input` — a bare single-line input: the kit `uiText` with no
-//! label or hint of its own (`field` provides those). Model-free instances
-//! stay typeable through the widget's `localValue` fallback.
-
 use rustex1_kit::h::{m, Node};
 
 use crate::css;
@@ -13,17 +9,14 @@ pub const CSS: &str = r#"
 }
 "#;
 
-/// bare control for composition (the form binds name + model onto it).
 pub fn bare(placeholder: &str) -> Node {
     Node::host("uiText", &[("placeholder", placeholder)])
 }
 
-/// form-bound control.
 pub fn input(name: &str, model: &str, placeholder: &str) -> Node {
     bare(placeholder).attr("name", name).bind("model", model)
 }
 
-/// standalone demo: two bound inputs.
 pub fn demo() -> Node {
     use crate::components::demo::MODEL;
     m("div")

@@ -1,9 +1,3 @@
-//! `tool call card` — a tool the agent asked for, and the arguments it sent.
-//!
-//! A [`fold_card`](crate::components::fold_card): the name rides the
-//! collapsed line as the note, so a shut card still says *which* tool, and
-//! the arguments are the thing you open it for.
-
 use rustex1_kit::h::{m, Node};
 
 use crate::components::{fold_card, samples, session};
@@ -14,7 +8,6 @@ pub const CSS: &str = r#"
 .tool-call-demo .mjs-chat.mode-sidebar { border-left: 0; }
 "#;
 
-/// What this kind contributes to a message block.
 pub fn parts(st: &str, v: &str) -> Vec<Node> {
     vec![fold_card::fold(
         st,
@@ -28,7 +21,6 @@ pub fn parts(st: &str, v: &str) -> Vec<Node> {
     .iff(&format!("{v}.kind === 'tool_call'"))]
 }
 
-/// standalone demo — the card in the row the transcript draws it in.
 pub fn demo() -> Node {
     let (st, v) = (samples::EXPR, samples::row("tool_call"));
     m("div").class("tool-call-demo").child(

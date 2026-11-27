@@ -1,4 +1,3 @@
-//! The conversation's complete node tree, used to choose the write cursor.
 use std::collections::HashMap;
 use wasm_bindgen::JsValue;
 use rustex1_kit::h::{lit, m, Node};
@@ -20,8 +19,6 @@ pub const CSS: &str = r#"
 .history-tree-demo { width: min(680px, 100%); height: 380px; display: flex; }
 "#;
 
-/// Flatten the forest in depth-first order, indenting only at a fork so long
-/// linear conversations don't disappear off the right edge of the panel.
 pub fn flatten(nodes: &js_sys::Array, cursor: &str) -> JsValue {
     let mut children: HashMap<String, Vec<JsValue>> = HashMap::new();
     for n in nodes.iter() { children.entry(js::get_str(&n, "parentId")).or_default().push(n); }

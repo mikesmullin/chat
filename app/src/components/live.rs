@@ -1,20 +1,3 @@
-//! `live` — the store that binds the home route to angela.
-//!
-//! One store feeds all three columns, so they cannot disagree about which
-//! session is open:
-//!
-//! | column | reads |
-//! |---|---|
-//! | project tree | `projects` + `sessions` |
-//! | tab bar | `sessions` + `activeId` (one tab per session, per the design) |
-//! | session panel | `messages`, plus the live `streamText` / `streamReasoning` |
-//! | composer | `draft`, `waiting` |
-//!
-//! Streaming rows land here as they arrive. Per the m-js guidance on
-//! high-frequency updates, streamed text stays outside the reactive store and
-//! updates the rendered markdown directly. The store changes at stream and
-//! card boundaries, when m-js needs to mount, hide, or replace a row.
-
 use wasm_bindgen::JsValue;
 
 use rustex1_kit::mjs::Def;
@@ -25,7 +8,6 @@ use crate::helpers;
 
 pub const STORE: &str = "live";
 
-/// Pull the session list; refresh the rail and the tab bar.
 fn load_sessions(_this: JsValue, _args: js_sys::Array) -> JsValue {
     api::sessions(apply_sessions);
     JsValue::UNDEFINED
@@ -40,8 +22,6 @@ pub(crate) fn apply_sessions(v: JsValue) {
         js::set(&s, "sessions", &js::get(&v, "sessions"));
         js::set_str(&s, "projectRoot", &js::get_str(&v, "projectRoot"));
         rebuild_tabs(&s);
-        // Re-open whatever was on the strip last time. Nothing is adopted
-        // automatically: with no open tabs the column is deliberately bare.
         if js::get_str(&s, "activeId").is_empty() {
             let tabs = js_sys::Array::from(&js::get(&s, "tabs"));
             if tabs.length() > 0 {
@@ -55,15 +35,12 @@ pub(crate) fn apply_sessions(v: JsValue) {
         }
     }
 
-/// Load one session's transcript into `messages`.
 fn open_session_by_id(id: &str) {
     SESSION_LOADING.with(|v| *v.borrow_mut() = id.to_string());
     apply_cached_approvals();
     let want = id.to_string();
     api::session(id, move |v| {
         let s = mjs::store_ref(STORE);
-        // A slow response for a session the user has since navigated away
-        // from must not clobber the one they are now looking at.
         if js::get_str(&s, "activeId") != want {
             return;
         }
@@ -73,8 +50,6 @@ fn open_session_by_id(id: &str) {
         }
         js::set(&s, "messages", &msgs.clone().into());
         js::set(&s, "session", &js::get(&v, "session"));
-        // Pending work is not history: the queue comes with the transcript
-        // or not at all.
         let queue = js::get(&v, "queue");
         let empty = empty_queue();
         js::set(
@@ -89,34 +64,19 @@ fn open_session_by_id(id: &str) {
         let meta = js::get(&v, "session");
         let model = js::get_str(&meta, "model");
         if !model.is_empty() {
-            // The session's own model wins over the remembered pick: it is
-            // what the next turn will actually run on.
             js::set_str(&s, "model", &model);
             js::set_str(&mjs::store_ref("dropdown"), "model", &model);
         }
-        // Where this conversation works. Restored from the session rather
-        // than left as whatever the last tab happened to show — these are
-        // per-conversation settings. There is no session sandbox any more
-        // (PLAN55 D2): an agent's container is per (session → agent) and
-        // owned by the agents plane. The checkout (worktree) lives on the
-        // session editor's draft, seeded from the same meta.
         js::set_str(&s, "projectId", &js::get_str(&meta, "project"));
         let config = js::get(&meta, "config");
         let reasoning = js::get_str(&config, "reasoningEffort");
         js::set_str(&mjs::store_ref("dropdown"), "level", if reasoning.is_empty() { "medium" } else { &reasoning });
-        // A newly created or older session has no saved picker values yet;
-        // seed its SQLite metadata from the controls now shown for it.
         persist_composer_settings(JsValue::UNDEFINED, js_sys::Array::new());
-        // Rebuild the session totals from the reloaded transcript, so
-        // reopening a session shows what it has cost so far rather than
-        // starting from zero.
         store_metrics(&s, &session_metrics(&msgs));
-        // The editor holds only the session's additional rules.
         let text = js::get_str(&v, "allowlist");
         js::set_str(&s, "allowlist", &text);
         let overridden = js::get_bool(&v, "allowlistOverridden");
         js::set_bool(&s, "allowlistOverridden", overridden);
-        // Restore the policy so switching sessions shows each one's own.
         let unrestricted = js::get_str(&v, "allowlistMode") == "unrestricted";
         js::set_bool(&s, "unrestricted", unrestricted);
         js::set_str(
@@ -126,11 +86,8 @@ fn open_session_by_id(id: &str) {
         );
         js::set_str(&s, "allowlistBaseline", "");
         clear_stream(&s);
-        // The roster and the cursor come back on the same response, so the
-        // attribution map is ready before the first row renders.
         store_roster(&s, &js_sys::Array::from(&js::get(&v, "participants")));
         js::set_str(&s, "cursor", &js::get_str(&v, "cursor"));
-        // The browser pane shows this session's boxes (or nothing).
         refresh_browser_sandbox(JsValue::UNDEFINED, js_sys::Array::new());
         SESSION_LOADING.with(|v| v.borrow_mut().clear());
         let turn_done = replay_active_turn(&want);
@@ -139,18 +96,10 @@ fn open_session_by_id(id: &str) {
             open_session_by_id(&want);
             return;
         }
-        // The tree and the memory view are separate reads: neither is needed
-        // to draw the transcript, and asking for both up front would make
-        // opening a session wait on work most sessions never show.
         load_view(JsValue::UNDEFINED, js_sys::Array::new());
     });
 }
 
-/// Forget who was in the last conversation.
-///
-/// Every field `store_roster` writes, so nothing survives a switch: a roster
-/// left over from the previous session is indistinguishable from this one's,
-/// and it decides which turn path the composer thinks it is on.
 fn clear_roster(s: &JsValue) {
     js::set(s, "participants", &js_sys::Array::new().into());
     js::set(s, "others", &js_sys::Array::new().into());
@@ -163,7 +112,6 @@ fn clear_roster(s: &JsValue) {
     js::set_str(s, "cursor", "");
 }
 
-/// The queue with nothing in it — the shape every read of it expects.
 fn empty_queue() -> JsValue {
     let q = js::obj();
     js::set(&q, "items", &js_sys::Array::new().into());
@@ -171,8 +119,6 @@ fn empty_queue() -> JsValue {
     q.into()
 }
 
-/// Put a just-sent message in the queue card, before the server has even
-/// seen it. The id is local and never travels: dequeuing takes the server's.
 fn queue_locally(s: &JsValue, content: &str) {
     let queue = js::get(s, "queue");
     let items = js_sys::Array::from(&js::get(&queue, "items"));
@@ -187,9 +133,6 @@ fn queue_locally(s: &JsValue, content: &str) {
     js::set(s, "queue", &next.into());
 }
 
-/// The `queues` topic: the waiting messages of every session. The
-/// transcript draws the active session's — a queued message is live state
-/// and this is the only place it is ever stored client-side.
 pub fn apply_queue(value: JsValue) {
     let s = mjs::store_ref(STORE);
     let active = js::get_str(&s, "activeId");
@@ -207,11 +150,6 @@ pub fn apply_queue(value: JsValue) {
     mjs::redraw();
 }
 
-/// `dequeue(itemId)` — take a queued message back before it runs.
-///
-/// The text comes back to the composer (it was typed and never said), and
-/// the queue's own snapshot from the feed takes the row off the card. There
-/// is nothing to remove from history: a queued message was never in it.
 fn dequeue(_this: JsValue, args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let item = js::arg_str(&args, 0);
@@ -225,8 +163,6 @@ fn dequeue(_this: JsValue, args: js_sys::Array) -> JsValue {
         if js::get(&v, "ok").as_bool() == Some(true) {
             let text = js::get_str(&v, "text");
             if !text.is_empty() {
-                // The message goes back where it was typed. A draft written
-                // since is kept — both are the user's words.
                 let draft = js::get_str(&s, "draft");
                 let back = if draft.trim().is_empty() {
                     text
@@ -235,7 +171,6 @@ fn dequeue(_this: JsValue, args: js_sys::Array) -> JsValue {
                 };
                 js::set_str(&s, "draft", &back);
             }
-            // Off the card at once; the feed's snapshot agrees a moment later.
             let queue = js::get(&s, "queue");
             let items = js_sys::Array::new();
             for row in js_sys::Array::from(&js::get(&queue, "items")).iter() {
@@ -257,14 +192,10 @@ fn clear_stream(s: &JsValue) {
     STREAM_TEXT.with(|v| *v.borrow_mut() = StreamText::default());
     js::set_str(s, "streamText", "");
     js::set_str(s, "streamReasoning", "");
-    // Each turn's reasoning starts shut, whatever the reader did with the
-    // last one: leaving it open would make the next turn's reasoning the
-    // biggest thing on screen without them asking for it again.
     js::set_bool(s, "streamReasoningOpen", false);
     js::set_str(s, "streamHandle", "");
 }
 
-/// `openSession(id)` — select an already open tab.
 fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     if id.is_empty() {
@@ -275,13 +206,9 @@ fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::set_bool(&s, "treeOpen", false);
     js::set_num(&s, "treeEscapeAt", 0.0);
     close_preview_on_leave(&s, &id);
-    // The next session's memory view decides whether it has summaries.
     js::set_bool(&s, "compacted", false);
     js::set(&s, "threads", &js_sys::Array::new().into());
-    // Likewise the roster: the fetch below replaces it, and until it lands
-    // the old session's agents would be shown as this one's.
     clear_roster(&s);
-    // Opening from the project tree puts it on the strip if it is not there.
     add_open_id(&id);
     rebuild_tabs(&s);
     set_active(&s, &id);
@@ -289,15 +216,10 @@ fn open_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     clear_stream(&s);
     pin_to_bottom();
     mjs::redraw();
-    // Viewing a session (tree preview or tab) is not the same as asking for
-    // the Edit Session form: opening the inspector on every conversation switch
-    // is noise, and the column is contextual, opening only for the explicit
-    // selectors (pencil, agents, settings, target form).
     open_session_by_id(&id);
     JsValue::UNDEFINED
 }
 
-/// A project-tree selection opens one replaceable preview, unless already open.
 fn preview_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     if id.is_empty() { return JsValue::UNDEFINED; }
@@ -310,15 +232,11 @@ fn preview_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     open_session(JsValue::UNDEFINED, args)
 }
 
-/// Double-clicking the preview keeps it alongside the other tabs.
 fn pin_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
     keep_tab(&js::arg_str(&args, 0));
     JsValue::UNDEFINED
 }
 
-/// Keep a tab: clear its preview status so it stops being replaceable.
-/// Talking in a session counts as keeping it — sending from the composer
-/// pins the tab it lands in, same as the double-click.
 fn keep_tab(id: &str) {
     if !id.is_empty() && read_preview_id() == id {
         write_preview_id("");
@@ -327,7 +245,6 @@ fn keep_tab(id: &str) {
     }
 }
 
-/// `newSession()` — the tab bar's `+`.
 fn new_session(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let payload = js::obj();
     let current = mjs::store_ref(STORE);
@@ -353,14 +270,7 @@ fn new_session(_this: JsValue, _args: js_sys::Array) -> JsValue {
             js::set(&s, "threads", &js_sys::Array::new().into());
             js::set(&s, "messages", &js_sys::Array::new().into());
             clear_stream(&s);
-            // A new conversation is empty of agents. Without this the
-            // previous session's roster stayed on screen — and since
-            // nothing re-read it, those agents looked seated in a
-            // conversation that had never heard of them.
             clear_roster(&s);
-            // …and then read the real one back, so the new session's state
-            // comes from the server rather than from what we assumed.
-            // Do not carry the previous session's editor into the new one.
             js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
             open_session_by_id(&id);
         }
@@ -392,8 +302,6 @@ fn draft_input(_this: JsValue, args: js_sys::Array) -> JsValue {
     crate::components::composer::draft_input(&mjs::store_ref(STORE), args)
 }
 
-/// Open the hidden file picker (A5). The input does the choosing; this
-/// button is just its visible face.
 fn pick_image(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let doc = js::get(&js::global(), "document");
     let el = js::call(&doc, "querySelector", &[JsValue::from_str(".composer-image-input")]);
@@ -403,8 +311,6 @@ fn pick_image(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// The picked file becomes a POST of its raw bytes; the answer's URL is the
-/// pending attachment. Images only, enforced server-side too.
 fn image_chosen(_this: JsValue, args: js_sys::Array) -> JsValue {
     let ev = js::arg(&args, 0);
     let target = js::get(&ev, "target");
@@ -445,12 +351,9 @@ fn drop_image(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `send()` — the composer. Streams the turn into the store.
 fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let draft = js::get_str(&s, "draft");
-    // The pending attachment rides along as markdown — one content field,
-    // one renderer, one transcript (PLAN44 A5).
     let image = js::get_str(&s, "image");
     let mut content = draft.trim().to_string();
     if !image.is_empty() {
@@ -459,17 +362,10 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
         }
         content.push_str(&format!("![image]({image})"));
     }
-    // No `waiting` guard: a message sent while another runs simply queues
-    // behind it, and the "waiting for" card shows the line.
     if content.is_empty() {
         return JsValue::UNDEFINED;
     }
-    // A session you are talking in is one you mean to keep: submitting
-    // pins the preview tab exactly like the double-click does.
     keep_tab(&js::get_str(&s, "activeId"));
-    // A slash command is an instruction to the app, not a message to the
-    // conversation — it never reaches a model and never enters the
-    // transcript, so it is handled before anything else happens.
     if content.starts_with('/') {
         run_command(&s, &content);
         if js::get_str(&s, "draft").is_empty() {
@@ -488,10 +384,6 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let turn: JsValue = turn.into();
     OWN_TURNS.with(|t| t.borrow_mut().push(turn.clone()));
 
-    // No user prompt card: the message is queued first and the "waiting
-    // for" card draws it — until its turn starts, it is pending work, not
-    // something that was said. The local row is the queue's own shape, so
-    // the server's first snapshot replaces it rather than doubling it.
     crate::components::composer::reset_history(&s);
     queue_locally(&s, &content);
     js::set_str(&s, "draft", "");
@@ -501,8 +393,6 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_bool(&s, "stopPending", false);
     js::set(&s, "approvals", &js_sys::Array::new().into());
     apply_cached_approvals();
-    // Sending is an explicit "show me the bottom", even if the reader had
-    // scrolled up a moment ago.
     pin_to_bottom();
     mjs::redraw();
 
@@ -540,15 +430,8 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
                 load_sessions(JsValue::UNDEFINED, js_sys::Array::new());
                 return;
             }
-            // A stop we asked for ends the stream by aborting it, and the
-            // abort surfaces here as a failed request. It is not one: the
-            // turn did exactly what it was told, and an error row saying
-            // "The user aborted a request" would be the app reporting the
-            // user's own button press back to them as a fault.
             let stopped = js::get_bool(&s, "stopping") || js::get_bool(&s, "stopUnconfirmed");
             if stopped && js::get_bool(&s, "waiting") {
-                // The stream ended without a done row. Keep listening to the
-                // event feed; a closed connection does not stop the server.
                 js::set_bool(&s, "stopping", false);
                 js::set_bool(&s, "stopUnconfirmed", true);
                 mjs::redraw();
@@ -562,7 +445,6 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
                     push_message(&s, "error", &e, "");
                 }
             }
-            // Reconcile with the server's own record once the turn is done.
             let id = js::get_str(&s, "activeId");
             if !id.is_empty() {
                 open_session_by_id(&id);
@@ -574,18 +456,8 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `stop()` — the composer's stop button.
-///
-/// The expensive thing to cancel is not this browser's request, it is the
-/// request the **server** has open to the model provider: that is what is
-/// still being generated and still being billed. So the first thing this
-/// does is tell the server, which drops that request where it stands.
-///
-/// Keep the stream open for confirmation and the final persisted rows.
 fn stop(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
-    // Nothing in flight, or already stopping: a second press is not a
-    // second stop.
     if !js::get_bool(&s, "waiting") || js::get_bool(&s, "stopping") {
         return JsValue::UNDEFINED;
     }
@@ -595,17 +467,12 @@ fn stop(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_num(&s, "stopAttempt", attempt);
     let id = js::get_str(&s, "activeId");
     if id.is_empty() {
-        // The server has not named the session yet, so there is nothing to
-        // address this to. `on_row` sends it the moment the `session` row
-        // arrives, which is the first thing the turn emits.
         js::set_bool(&s, "stopPending", true);
     } else {
         crate::api::abort(&id, |_| {});
     }
     mjs::redraw();
 
-    // A timeout is not confirmation: keep the turn attached, offer a retry,
-    // and never replay it as if the user had not pressed Stop.
     rustex1_kit::lifecycle::after(2500.0, move || {
         let s = mjs::store_ref(STORE);
         if !js::get_bool(&s, "waiting") || !js::get_bool(&s, "stopping")
@@ -656,8 +523,6 @@ fn refresh_stream(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// One frame batches all tokens received since the last paint. The template
-/// owns row visibility; the ignored markdown node has exactly one DOM writer.
 fn schedule_stream_paint() {
     let scheduled = STREAM_TEXT.with(|v| {
         let mut text = v.borrow_mut();
@@ -689,8 +554,6 @@ fn paint_stream_node(kind: &str, html: &str) {
     }
 }
 
-/// Follow growing streaming text at a low frequency without turning each
-/// token into a reactive scroll update. Explicit reader scrolling still wins.
 fn pin_stream_if_due() {
     if !js::get_bool(&mjs::store_ref(STORE), "stickBottom") { return; }
     let now = js_sys::Date::now();
@@ -718,14 +581,11 @@ thread_local! {
     static TURNS: std::cell::RefCell<std::collections::HashMap<String, JsValue>> = std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Install the server's turn journal, which includes the transcript as it
-/// stood before the prompt. It can be replayed after an in-flight GET lands.
 pub(crate) fn receive_turn_snapshot(snapshot: JsValue) {
     let id = js::get_str(&snapshot, "sessionId");
     if id.is_empty() { return; }
     let turn_id = js::get_str(&snapshot, "turnId");
     for row in js_sys::Array::from(&js::get(&snapshot, "rows")).iter() {
-        // A dequeued request never ran: nothing completed.
         if js::get_str(&row, "type") == "done" && !js::get_bool(&row, "dequeued") {
             crate::components::notification_toggle::completed(&id, &turn_id, None);
         }
@@ -769,8 +629,6 @@ pub(crate) fn receive_turn_event(event: JsValue) {
     }
 }
 
-/// Returns true if replay included the end of a turn and a fresh transcript
-/// should be loaded once more (the first read may have raced finalization).
 fn replay_active_turn(id: &str) -> bool {
     let turn = OWN_TURNS.with(|t| t.borrow().iter().find(|turn| js::get_str(turn, "sessionId") == id).cloned())
         .or_else(|| TURNS.with(|t| t.borrow().get(id).cloned()));
@@ -780,10 +638,6 @@ fn replay_active_turn(id: &str) -> bool {
     for row in baseline.iter() { add_html(&row); }
     js::set(&s, "messages", &baseline.into());
     clear_stream(&s);
-    // No echo of the prompt: the turn's own user card row carries it, and
-    // while a message is still queued there is no row at all — it is not
-    // history yet. `waiting` follows the live rule: a turn is running once
-    // its message has left the queue, never while it merely waits.
     let mut done = false;
     let mut started = false;
     for row in js_sys::Array::from(&js::get(&turn, "rows")).iter() {
@@ -801,7 +655,6 @@ fn owns_turn(id: &str) -> bool {
     OWN_TURNS.with(|t| t.borrow().iter().any(|turn| js::get_str(turn, "sessionId") == id))
 }
 
-/// Record the POST stream independently of the currently selected session.
 fn on_owned_row(turn: &JsValue, row: &JsValue) {
     let s = mjs::store_ref(STORE);
     let active = js::get_str(&s, "activeId");
@@ -829,27 +682,18 @@ fn on_owned_row(turn: &JsValue, row: &JsValue) {
 fn on_row(row: &JsValue) {
     let s = mjs::store_ref(STORE);
     match js::get_str(row, "type").as_str() {
-        // The server names the session it actually used — adopt it, so a
-        // first prompt on a fresh tab binds the tab to its new session.
         "session" => {
             let id = js::get_str(row, "sessionId");
             if !id.is_empty() {
                 add_open_id(&id);
                 set_active(&s, &id);
-                // A mention may have invited an agent as this turn began.
                 load_roster(&id);
-                // Stop was pressed before the server said which session it
-                // was making. This row is the first moment the request can
-                // be addressed, so it goes out now rather than being lost.
                 if js::get_bool(&s, "stopPending") {
                     js::set_bool(&s, "stopPending", false);
                     crate::api::abort(&id, |_| {});
                 }
             }
         }
-        // High-frequency: append to one string, never rebuild the list.
-        // Who the in-flight rows belong to, so they take that agent's colour
-        // before the sealed card arrives to say so.
         "speaking" => {
             js::set_str(&s, "streamHandle", &js::get_str(row, "handle"));
         }
@@ -870,8 +714,6 @@ fn on_row(row: &JsValue) {
                 first
             });
             if first {
-                // Only the transition from absent to present belongs in the
-                // reactive tree. Subsequent tokens never write to the store.
                 js::set_str(&s, if reasoning { "streamReasoning" } else { "streamText" }, &fragment);
             }
             schedule_stream_paint();
@@ -887,12 +729,9 @@ fn on_row(row: &JsValue) {
             let kind = js::get_str(&card, "kind");
             let text = js::get_str(&card, "text");
             match kind.as_str() {
-                // The sealed bubble replaces the streamed one.
                 "assistant" => {
                     let streamed = STREAM_TEXT.with(|v| v.borrow().answer.clone());
                     let final_text = if text.is_empty() { streamed } else { text.clone() };
-                    // Fold this turn into the running totals. The rates come
-                    // from this turn's telemetry; the counts accumulate.
                     add_turn_metrics(&s, &js::get(&card, "telemetry"), &final_text);
                     if !final_text.trim().is_empty() {
                         push_card(&s, &card, "assistant", Some(&final_text));
@@ -907,20 +746,13 @@ fn on_row(row: &JsValue) {
                     STREAM_TEXT.with(|v| { let mut text = v.borrow_mut(); text.reasoning.clear(); text.reasoning_html.clear(); });
                     js::set_str(&s, "streamReasoning", "");
                 }
-                // Everything the turn produced goes through one path, so a
-                // streaming turn and a reloaded one draw the same rail.
                 "tool_call" | "tool_result" | "system_prompt" | "agent_prompt"
                 | "decision" => push_card(&s, &card, &kind, None),
-                // The message left the queue and became the turn's first
-                // row — the only place a queued message becomes history.
-                // From here the composer shows Stop: there is a turn.
                 "user" => {
                     push_card(&s, &card, "user", None);
                     js::set_bool(&s, "waiting", true);
                 }
                 "error" => push_card(&s, &card, "error", None),
-                // The server explaining itself — e.g. that the conversation
-                // has no agents in it yet.
                 "system" => push_message(&s, "system", &text, ""),
                 _ => {}
             }
@@ -930,18 +762,12 @@ fn on_row(row: &JsValue) {
             js::set_bool(&s, "stopping", false);
             js::set_bool(&s, "stopUnconfirmed", false);
             js::set_bool(&s, "stopPending", false);
-            // A new message changes the tree's leaf set, so a threaded view
-            // on screen is now one message short.
             load_view(JsValue::UNDEFINED, js_sys::Array::new());
         }
         _ => {}
     }
 }
 
-/// Append a card from the wire, keeping every field its template reads.
-///
-/// `text_override` is for the assistant row, whose final text may be what was
-/// streamed rather than what the sealed card carries.
 fn push_card(s: &JsValue, card: &JsValue, kind: &str, text_override: Option<&str>) {
     let list = js_sys::Array::from(&js::get(s, "messages"));
     let m = js::obj();
@@ -960,7 +786,6 @@ fn push_card(s: &JsValue, card: &JsValue, kind: &str, text_override: Option<&str
             js::set_num(&m, key, n);
         }
     }
-    // Structured fields the cards render directly.
     for key in ["verdict", "speak", "args", "ok", "denied", "telemetry"] {
         let v = js::get(card, key);
         if !v.is_undefined() {
@@ -983,12 +808,6 @@ fn push_card(s: &JsValue, card: &JsValue, kind: &str, text_override: Option<&str
     js::set(s, "messages", &next.into());
 }
 
-/// Join a live row to the run the server says it belongs to.
-///
-/// `turnLast` moves: it is set on each arrival and cleared from the row
-/// before, so the rail's end keeps pace as a turn produces more. Doing this
-/// on the client matters because a streaming turn must draw the same rail the
-/// reloaded transcript will — and the reloaded one computes it server-side.
 fn attach_turn(list: &js_sys::Array, m: &JsValue, turn: &str) {
     if turn.is_empty() {
         return;
@@ -1004,12 +823,10 @@ fn attach_turn(list: &js_sys::Array, m: &JsValue, turn: &str) {
     js::set_bool(m, "turnLast", true);
 }
 
-/// Append one message to the transcript.
 fn push_message(s: &JsValue, kind: &str, text: &str, name: &str) {
     push_message_as(s, kind, text, name, "")
 }
 
-/// Append one message, attributed to a participant's handle.
 fn push_message_as(s: &JsValue, kind: &str, text: &str, name: &str, handle: &str) {
     let list = js_sys::Array::from(&js::get(s, "messages"));
     let m = js::obj();
@@ -1021,37 +838,23 @@ fn push_message_as(s: &JsValue, kind: &str, text: &str, name: &str, handle: &str
     if !handle.is_empty() {
         js::set_str(&m, "handle", handle);
     }
-    // A locally made row happened now, by definition. Without this the
-    // echoed prompt shows no time until the transcript is re-read.
     js::set_str(
         &m,
         "ts",
         &js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default(),
     );
-    // A client-made row needs an id for `:key`; the server's ids are event
-    // ids, so prefix to guarantee no collision.
     js::set_str(&m, "id", &format!("local-{}", list.length()));
     add_html(&m.clone().into());
     js::set(&m, "visible", &JsValue::TRUE);
     let next = list.clone();
     next.push(&m.into());
-    // Replace the array rather than mutating it: an in-place push may not
-    // notify (RUST_M_JS §3).
     js::set(s, "messages", &next.into());
 }
 
-// ── the model picker ───────────────────────────────────────────────────────
-//
-// It lived in the legacy `chat` store, beside the demo page that is now gone.
-// It belongs here: the model is a composer setting, and the composer's other
-// settings (reasoning level, tool policy) already persist through this store.
 
 const MODEL_KEY: &str = "mjs-chat.model";
 const DEFAULT_MODEL: &str = "llama-server:default";
 
-/// The last model chosen, from localStorage — a per-browser convenience, so
-/// the picker is never an empty box on first paint. The session's own model
-/// is the server's business and arrives with the session.
 fn saved_model() -> String {
     let ls = js::get(&js::global(), "localStorage");
     if !ls.is_undefined() && !ls.is_null() {
@@ -1081,7 +884,6 @@ fn default_models() -> JsValue {
     a.into()
 }
 
-/// `setModel(id)` — pick one, remember it, tell the session.
 fn set_model(_this: JsValue, args: js_sys::Array) -> JsValue {
     let v = js::arg_str(&args, 0);
     if v.is_empty() {
@@ -1095,7 +897,6 @@ fn set_model(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// Fill the model list from agl's own config, and settle on one.
 pub fn load_models() {
     crate::api::models(apply_models);
 }
@@ -1117,9 +918,6 @@ pub(crate) fn apply_models(v: JsValue) {
         }
         let changed = !same_json(&js::get(&s, "models"), &models);
         if changed { js::set(&s, "models", &models); }
-        // Keep the current pick only if the server still offers it; otherwise
-        // take the configured default, so the box never names a model that
-        // would be refused.
         let current = js::get_str(&s, "model");
         let arr = js_sys::Array::from(&models);
         let valid = arr.iter().any(|x| x.as_string().as_deref() == Some(&current));
@@ -1132,12 +930,6 @@ pub(crate) fn apply_models(v: JsValue) {
         }
     }
 
-// ── approvals ──────────────────────────────────────────────────────────────
-//
-// A tool the allowlist does not permit stops the turn on the server and asks.
-// The question cannot come down the turn's own stream — the thread writing
-// that stream is the one blocked on the answer — the server pushes changes
-// through the shared event stream.
 
 thread_local! {
     static PENDING: std::cell::RefCell<JsValue> = const { std::cell::RefCell::new(JsValue::UNDEFINED) };
@@ -1157,7 +949,6 @@ fn apply_cached_approvals() {
     let key = format!("{}:{}", id, js_sys::JSON::stringify(&rows).ok().and_then(|x| x.as_string()).unwrap_or_default());
     if PENDING_KEY.with(|p| *p.borrow() == key) { return; }
     PENDING_KEY.with(|p| *p.borrow_mut() = key);
-    // Copy before adding UI fields; the cached wire snapshot stays unchanged.
     let copy = js_sys::JSON::stringify(&rows).ok().and_then(|v| v.as_string()).and_then(|v| js_sys::JSON::parse(&v).ok()).unwrap_or(rows);
     let arr = js_sys::Array::from(&copy);
     for r in arr.iter() {
@@ -1170,12 +961,6 @@ fn apply_cached_approvals() {
     }
 }
 
-/// `decideApproval(id, verdict)` — answer, and take the card off the screen.
-///
-/// The row is dropped here rather than waiting for the server: the turn
-/// resumes the moment the answer lands, and the transcript will carry the
-/// answered question as a real row a moment later. Leaving the live card up
-/// until then would show it twice.
 fn decide_approval(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     let verdict = js::arg_str(&args, 1);
@@ -1199,9 +984,6 @@ pub fn register() {
     d.val("sessions", &js_sys::Array::new().into())
         .str("model", &saved_model())
         .val("models", &default_models())
-        // `sessions` is every session on disk (the project tree).
-        // `tabs` is the subset currently open (the tab strip). Closing a tab
-        // must not destroy a session, so these are deliberately distinct.
         .val("tabs", &js_sys::Array::new().into())
         .str("previewId", "")
         .val("messages", &js_sys::Array::new().into())
@@ -1210,59 +992,28 @@ pub fn register() {
         .str("activeProject", "")
         .bool("notifyEnabled", crate::components::notification_toggle::enabled())
         .val("unreadSessions", &crate::components::notification_toggle::unread())
-        // ── the composer's target row ─────────────────────────────────
-        // Where this session works: which folder it is filed under, which
-        // checkout gets mounted. Empty lists until the pickers are wired to
-        // their services — the row renders, every menu shows its null answer
-        // and its create action, and nothing claims an instance exists that
-        // does not.
-        //
-        // `sandboxes` + `sandboxGroups` are the left-rail sandboxes menu's
-        // data (PLAN55 D6): container rows with their serving (session,
-        // agent), grouped per image — computed by `sandboxes_menu::group_rows`
-        // whenever rows arrive.
         .val("sandboxes", &js_sys::Array::new().into())
-        // The browser pane's world: picker-shaped rows for the active
-        // session's ready headed boxes, the selection, and its minted
-        // viewer ticket (per-mount — see `load_viewer_url`).
         .val("browserSandboxes", &js_sys::Array::new().into())
         .str("browserSandboxId", "")
         .str("browserViewerUrl", "")
         .bool("viewerFetching", false)
         .val("sandboxGroups", &js_sys::Array::new().into())
-        // Which image groups are expanded in the sandboxes menu (absent =
-        // open) — collapse state, not data, so the recompute cannot wipe it.
         .val("sandboxOpen", &js::obj().into())
-        // The rail's per-row destroy button: which container is armed —
-        // one, like the form's confirming flag — and the last destroy
-        // failure, shown as a line in the menu. Cleared on open and after a
-        // successful destroy.
         .str("sboxConfirmId", "")
         .str("sboxError", "")
         .val("projects", &js_sys::Array::new().into())
         .val("worktrees", &js_sys::Array::new().into())
         .val("repoBranches", &js_sys::Array::new().into())
         .val("repos", &js_sys::Array::new().into())
-        // The scheduled prompts. Same contract as the target lists: the
-        // rail renders, the form reads, and every write answers fresh.
         .val("automations", &js_sys::Array::new().into())
-        // Whether the sandbox service answered at all. An empty list and a
-        // dead service look identical in a menu; this is what tells them
-        // apart.
         .bool("sboxUp", false)
         .str("projectId", "")
         .str("draft", "")
-        // A pending attachment (PLAN44 A5): the uploaded image's URL, sent
-        // as the message's `![image](…)` line.
         .str("image", "")
         .num("historyPosition", -1.0)
         .str("historyDraft", "")
         .str("streamText", "")
-        // Reasoning opens on a click and starts shut, including the one
-        // streaming right now — it is how the answer was reached, not the
-        // answer, so it should not be the biggest thing on screen.
         .bool("streamReasoningOpen", false)
-        // Who is currently speaking, so the in-flight rows take their colour.
         .str("streamHandle", "")
         .str("streamReasoning", "")
         .str("projectRoot", "")
@@ -1270,70 +1021,37 @@ pub fn register() {
         .str("allowlistBaseline", "")
         .bool("allowlistOpen", false)
         .bool("allowlistOverridden", false)
-        // True while the session runs with `*`. The rules survive it.
         .bool("unrestricted", false)
         .bool("waiting", false)
-        // The messages waiting to become turns — pending work the
-        // "waiting for" card draws. Never history.
         .val("queue", &empty_queue())
         .val("approvals", &js_sys::Array::new().into())
-        // Sticky scroll: true while the reader is at (or near) the bottom.
         .bool("stickBottom", true)
         .num("promptTokens", 0.0)
         .num("totalTokens", 0.0)
-        // Metrics for the most recent turn that reported any, rendered
-        // under the composer. Held as pre-built HTML for the same reason
-        // the markdown is: a binding would rebuild it on every redraw.
         .str("lastMetrics", "")
-        // Running session totals behind the rendered row.
         .num("mTps", 0.0)
         .num("mDur", 0.0)
         .num("mIn", 0.0)
         .num("mOut", 0.0)
         .num("mBytes", 0.0)
-        // --- the memory tree ------------------------------------------------
-        // `threads` is a FLAT list that renders nested (each row carries its
-        // own `depth`): m-js diffs a keyed list far more cheaply than a
-        // recursive tree, and the nesting here is purely presentational.
         .val("threads", &js_sys::Array::new().into())
-        // True once something has actually been folded into a thread.
         .bool("compacted", false)
-        // Show the threaded history instead of the flat transcript.
         .bool("compacting", false)
-        // 0 = the server's default budget. Set it to force threading on a
-        // conversation that would otherwise still fit.
         .num("memoryHigh", 0.0)
-        // --- the roster -----------------------------------------------------
         .val("participants", &js_sys::Array::new().into())
-        // The roster bar's list: everyone except the reader.
         .val("others", &js_sys::Array::new().into())
         .val("activeOthers", &js_sys::Array::new().into())
-        // participant id -> handle, so a message can be attributed without
-        // searching the roster on every row.
         .val("handles", &js::obj().into())
-        // handle -> accent colour, for tinting a row to its author.
         .val("accents", &js::obj().into())
-        // handle -> phosphor icon name, for drawing a byline as its author.
         .val("icons", &js::obj().into())
-        // The reader's own name for the cluster's first disc. The server never
-        // sends it (it sends the user *seat*, which the roster skips), so it
-        // stays empty until something fills it - the template falls back to
-        // 'You'.
         .str("userName", "")
         .num("agentCount", 0.0)
         .bool("isGroup", false)
         .bool("rosterOpen", false)
-        // The stop press, between asking and the stream actually ending.
-        // Separate from `waiting` because the composer must not accept a new
-        // message yet — the old turn is still writing its last rows.
         .bool("stopping", false)
         .bool("stopUnconfirmed", false)
         .num("stopAttempt", 0.0)
-        // A stop pressed before the server has even named the session it
-        // made. There is nothing to address the stop to yet, so it is sent
-        // the moment the `session` row arrives.
         .bool("stopPending", false)
-        // --- branches -------------------------------------------------------
         .str("cursor", "")
         .bool("treeOpen", false)
         .bool("treeLoading", false)
@@ -1369,10 +1087,6 @@ pub fn register() {
         .method("setPolicy", set_policy)
         .method("setReasoning", set_reasoning)
         .method("persistComposerSettings", persist_composer_settings)
-        // The target row. `pickTarget` records the choice locally; the
-        // create/edit forms that these open are the next piece of work, so
-        // they are named-but-idle rather than missing — an unresolved
-        // method is a silent template failure, not a visible one.
         .method("loadProjects", load_projects)
         .method("loadTargets", load_targets)
         .method("loadAutomations", load_automations)
@@ -1415,7 +1129,6 @@ pub fn register() {
     mjs::store(STORE, &d.finish());
 }
 
-/// `toggleAllowlist()` — the shield button beside the composer.
 fn toggle_allowlist(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let open = js::get_bool(&s, "allowlistOpen");
@@ -1444,8 +1157,6 @@ fn set_reasoning(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `saveAllowlist()` — on blur, as cowork does. Persisting per keystroke
-/// would write a file on every character.
 fn save_allowlist(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let text = js::get_str(&s, "allowlist");
@@ -1466,7 +1177,6 @@ fn save_allowlist(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `revertAllowlist()` — clear the session rules; agent rules still apply.
 fn revert_allowlist(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let id = js::get_str(&s, "activeId");
@@ -1490,15 +1200,8 @@ fn revert_allowlist(_this: JsValue, _args: js_sys::Array) -> JsValue {
 }
 
 
-/// Pre-render a message's markdown.
-///
-/// Done once when the message lands rather than in a template binding: a
-/// bound expression is re-evaluated on every redraw, so rendering there would
-/// re-parse the whole transcript on each streamed token.
 fn add_html(msg: &JsValue) {
     let kind = js::get_str(msg, "kind");
-    // Reasoning is prose from the same model and arrives with the same
-    // markdown in it, so it gets the same treatment as an answer.
     if kind != "user" && kind != "assistant" && kind != "reasoning" {
         return;
     }
@@ -1509,7 +1212,6 @@ fn add_html(msg: &JsValue) {
     js::set_str(msg, "html", &helpers::markdown_to_html(&text));
 }
 
-/// Format a byline's elapsed time as prose, such as "24min ago".
 pub(crate) fn rel_ago(_this: JsValue, args: js_sys::Array) -> JsValue {
     let iso = js::arg_str(&args, 0);
     if iso.is_empty() {
@@ -1519,8 +1221,6 @@ pub(crate) fn rel_ago(_this: JsValue, args: js_sys::Array) -> JsValue {
     if then.is_nan() {
         return JsValue::from_str("");
     }
-    // Clamped at zero: a clock a second out of step should read "just now",
-    // not "in the future".
     let secs = ((js_sys::Date::now() - then) / 1000.0).max(0.0);
     let out = if secs < 45.0 {
         "just now".to_string()
@@ -1535,7 +1235,6 @@ pub(crate) fn rel_ago(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::from_str(&out)
 }
 
-/// `deleteSession(id)` — the trash button. Removes it from persistence.
 fn delete_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     if id.is_empty() {
@@ -1543,7 +1242,6 @@ fn delete_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     }
     let s = mjs::store_ref(STORE);
     crate::components::notification_toggle::begin_delete(&id);
-    // Drop it from the list immediately; the refetch below reconciles.
     let keep = js_sys::Array::new();
     for row in js_sys::Array::from(&js::get(&s, "sessions")).iter() {
         if js::get_str(&row, "id") != id {
@@ -1551,7 +1249,6 @@ fn delete_session(_this: JsValue, args: js_sys::Array) -> JsValue {
         }
     }
     js::set(&s, "sessions", &keep.into());
-    // A deleted session cannot stay on the strip.
     remove_open_id(&id);
     rebuild_tabs(&s);
     if js::get_str(&s, "activeId") == id {
@@ -1569,16 +1266,7 @@ fn delete_session(_this: JsValue, args: js_sys::Array) -> JsValue {
 }
 
 
-// ===========================================================================
-// Open tabs: which sessions are on the strip.
-// ===========================================================================
 
-/// Where the open-tab list is remembered between reloads.
-///
-/// Per-viewer convenience, so browser storage is the right home: which tabs
-/// *I* have open is not shared state and must not outlive my browser. Every
-/// access is wrapped, because storage throws in a private window and reads
-/// back empty after a clear.
 const OPEN_KEY: &str = "chat.openTabs";
 const PREVIEW_KEY: &str = "chat.previewTab";
 const ACTIVE_KEY: &str = "chat.activeTab";
@@ -1616,9 +1304,6 @@ fn set_active(store: &JsValue, id: &str) {
     js::set_str(store, "activeId", id);
     let storage = js::get(&js::global(), "sessionStorage");
     js::call(&storage, "setItem", &[JsValue::from_str(ACTIVE_KEY), JsValue::from_str(id)]);
-    // Looking at a session means it is read: drop anything it had queued
-    // as unread the moment it becomes the one on screen, regardless of how
-    // it got there (tab, tree, preview, new session, restored tab).
     if !id.is_empty() {
         crate::components::notification_toggle::clear_session_unread(store, id);
     }
@@ -1665,7 +1350,6 @@ fn write_preview_id(id: &str) {
     js::call(&storage(), "setItem", &[JsValue::from_str(PREVIEW_KEY), JsValue::from_str(id)]);
 }
 
-/// Preserve the preview's position while replacing it, leaving kept tabs alone.
 fn preview_tabs(mut ids: Vec<String>, previous: &str, id: &str) -> (Vec<String>, String) {
     if ids.iter().any(|open| open == id) {
         return (ids, previous.to_string());
@@ -1678,29 +1362,6 @@ fn preview_tabs(mut ids: Vec<String>, previous: &str, id: &str) -> (Vec<String>,
     (ids, id.to_string())
 }
 
-#[cfg(test)]
-mod preview_tab_tests {
-    use super::preview_tabs;
-
-    #[test]
-    fn preview_replaces_only_the_previous_preview() {
-        let ids = vec!["kept".into(), "peek".into(), "other".into()];
-        let (ids, preview) = preview_tabs(ids, "peek", "next");
-        assert_eq!(ids, ["kept", "next", "other"]);
-        assert_eq!(preview, "next");
-        let (ids, preview) = preview_tabs(ids, &preview, "kept");
-        assert_eq!(ids, ["kept", "next", "other"]);
-        assert_eq!(preview, "next");
-        let (ids, preview) = preview_tabs(ids, "", "new");
-        assert_eq!(ids, ["kept", "next", "other", "new"]);
-        assert_eq!(preview, "new");
-    }
-}
-
-/// Rebuild `tabs` from the open-id list and the known sessions.
-///
-/// Ids whose session no longer exists are dropped, so deleting a session
-/// elsewhere cannot leave a tab pointing at nothing.
 fn rebuild_tabs(s: &JsValue) {
     let sessions = js_sys::Array::from(&js::get(s, "sessions"));
     let open = read_open_ids();
@@ -1742,7 +1403,6 @@ fn remove_open_id(id: &str) {
     if read_preview_id() == id { write_preview_id(""); }
 }
 
-/// Leaving the active preview closes its tab, without deleting the session.
 fn close_preview_on_leave(s: &JsValue, next: &str) {
     let preview = read_preview_id();
     if !preview.is_empty() && preview != next && js::get_str(s, "activeId") == preview {
@@ -1750,8 +1410,6 @@ fn close_preview_on_leave(s: &JsValue, next: &str) {
     }
 }
 
-/// `closeTab(id)` — take it off the strip. The session stays on disk in
-/// `sessions`; an empty session is deleted when its tab closes.
 fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     if id.is_empty() {
@@ -1773,8 +1431,6 @@ fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
     }
 
     if js::get_str(&s, "activeId") == id {
-        // Fall back to whatever tab is left, so closing the active one does
-        // not leave an empty panel beside open tabs.
         let tabs = js_sys::Array::from(&js::get(&s, "tabs"));
         if tabs.length() > 0 {
             let next = js::get_str(&tabs.get(0), "id");
@@ -1785,8 +1441,6 @@ fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
             clear_stream(&s);
             js::set_bool(&s, "compacted", false);
             js::set(&s, "threads", &js_sys::Array::new().into());
-            // Falling back to the next tab is a selection, but like every
-            // other view of a session it does not force the inspector open.
             open_session_by_id(&next);
         } else {
             set_active(&s, "");
@@ -1799,22 +1453,9 @@ fn close_tab(_this: JsValue, args: js_sys::Array) -> JsValue {
 }
 
 
-// ===========================================================================
-// Sticky scroll.
-// ===========================================================================
 
-/// How close to the bottom still counts as "following along".
-///
-/// Generous on purpose: a token arriving between the scroll event and the
-/// next frame can move the bottom by a line, and a tight threshold would
-/// unstick the view for no reason the reader can see.
 const STICK_SLACK_PX: f64 = 48.0;
 
-/// `onScroll($event)` — the reader decides whether we follow.
-///
-/// Scrolling up to read turns sticking off; scrolling back to the bottom
-/// turns it on again. Nothing else changes it, so the view never fights the
-/// person reading it.
 fn on_scroll(_this: JsValue, args: js_sys::Array) -> JsValue {
     let ev = js::arg(&args, 0);
     let el = js::get(&ev, "currentTarget");
@@ -1826,14 +1467,9 @@ fn on_scroll(_this: JsValue, args: js_sys::Array) -> JsValue {
     let client = js::get(&el, "clientHeight").as_f64().unwrap_or(0.0);
     let at_bottom = height - (top + client) <= STICK_SLACK_PX;
     let s = mjs::store_ref(STORE);
-    // Written directly rather than through a redraw: this fires on every
-    // scroll frame, and the value only gates the next auto-scroll.
     if js::get_bool(&s, "stickBottom") != at_bottom {
         js::set_bool(&s, "stickBottom", at_bottom);
     }
-    // Reaching the bottom of the transcript means the reader has caught up:
-    // whatever this session had queued as unread is now read. The guard is
-    // cheap (an `all()` over the unread list) and runs only on real scroll.
     if at_bottom {
         let active_id = js::get_str(&s, "activeId");
         if !active_id.is_empty() {
@@ -1843,12 +1479,6 @@ fn on_scroll(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `keepPinned($el)` — scroll to the bottom if we are still following.
-///
-/// Called from `x-effect`, so it runs whenever the transcript changes. The
-/// write is deferred to `$nextTick`: during the effect the diff has not
-/// committed yet, so `scrollHeight` is still the previous height and the
-/// view would land one row short of the bottom.
 fn keep_pinned(_this: JsValue, args: js_sys::Array) -> JsValue {
     let el = js::arg(&args, 0);
     if js::is_missing(&el) {
@@ -1858,8 +1488,6 @@ fn keep_pinned(_this: JsValue, args: js_sys::Array) -> JsValue {
     if !js::get_bool(&s, "stickBottom") {
         return JsValue::UNDEFINED;
     }
-    // One direct DOM write per change, which is what m-js asks for at this
-    // frequency rather than another round of diffing.
     let el2 = el.clone();
     let cb = wasm_bindgen::closure::Closure::once_into_js(move || {
         let h = js::get(&el2, "scrollHeight");
@@ -1870,18 +1498,12 @@ fn keep_pinned(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// Re-pin when a session is opened, so a resumed transcript starts at the
-/// newest message rather than the oldest.
 fn pin_to_bottom() {
     let s = mjs::store_ref(STORE);
     js::set_bool(&s, "stickBottom", true);
 }
 
 
-/// `loadProjects()` — refresh the folder list.
-///
-/// Called from the shell's init beside `loadSessions`, and again after every
-/// write, because the server returns the new listing with each one.
 pub(crate) fn load_projects(_this: JsValue, _args: js_sys::Array) -> JsValue {
     api::projects(|v| {
         apply_projects(&js::get(&v, "projects"));
@@ -1889,7 +1511,6 @@ pub(crate) fn load_projects(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// Take a `projects` array from any response that carries one.
 fn apply_projects(list: &JsValue) {
     if list.is_undefined() || list.is_null() {
         return;
@@ -1898,30 +1519,16 @@ fn apply_projects(list: &JsValue) {
     mjs::redraw();
 }
 
-/// `loadTargets()` — the sandbox, repo, branch and worktree lists.
-///
-/// Separate from `loadProjects` because they come from different places:
-/// projects live in the conversation database, these live on the host (and,
-/// for sandboxes, in another service entirely).
 pub(crate) fn load_targets(_this: JsValue, _args: js_sys::Array) -> JsValue {
     api::targets(|v| apply_targets(&v));
     JsValue::UNDEFINED
 }
 
-/// `loadAutomations()` — the scheduled prompts.
-///
-/// Separate from `loadTargets` because automations live in chat's own
-/// registry (not the host registry), and the rail reads them on its own
-/// cadence: a schedule list that only refreshes with the repo list would
-/// go stale between target writes.
 fn load_automations(_this: JsValue, _args: js_sys::Array) -> JsValue {
     api::automations(|v| apply_automations(&v));
     JsValue::UNDEFINED
 }
 
-/// Adopt an automations listing. Split out so the scheduler-independent
-/// refresh path (`loadAutomations`) and the write path (`saveTarget`)
-/// share it rather than re-typing the key.
 fn apply_automations(v: &JsValue) {
     let s = mjs::store_ref(STORE);
     let list = js::get(v, "automations");
@@ -1931,17 +1538,6 @@ fn apply_automations(v: &JsValue) {
     }
 }
 
-/// Adopt whatever target lists a response carries.
-///
-/// Every write answers with the fresh listing, so this runs after each one
-/// too and there is never a second request to find out what just happened.
-/// The pane's world: which ready headed sandboxes the active session has,
-/// and a minted viewer ticket for the selected one.
-///
-/// `browserSandboxes` rows are picker-shaped (`{id, name, icon, hint}`);
-/// the raw rows live in `sandboxes`, and this is the one place the two are
-/// related. A selection change always clears `browserViewerUrl` — the
-/// ticket is per-mount, so the iframe re-mounts only on a fresh one.
 fn refresh_browser_sandbox(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let active = js::get_str(&s, "activeId");
@@ -1950,9 +1546,6 @@ fn refresh_browser_sandbox(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let mut still = false;
     for r in js_sys::Array::from(&js::get(&s, "sandboxes")).iter() {
         let id = js::get_str(&r, "id");
-        // Headed == the desktop image; ready == a viewer can attach. A
-        // booting or headless box is not a desktop yet, and the pane says
-        // so by not existing rather than by a spinner that never resolves.
         if js::get_str(&r, "session") != active
             || !js::get_str(&r, "image").contains("desktop")
             || js::get_str(&r, "state") != "ready"
@@ -1971,7 +1564,6 @@ fn refresh_browser_sandbox(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set(&s, "browserSandboxes", &rows.into());
     if !still {
         js::set_str(&s, "browserSandboxId", &first);
-        // The old ticket (if any) names a box nobody is looking at.
         js::set_str(&s, "browserViewerUrl", "");
     }
     if !js::get_str(&s, "browserSandboxId").is_empty()
@@ -1982,11 +1574,6 @@ fn refresh_browser_sandbox(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `loadViewerUrl()` — mint a viewer ticket for the selected sandbox.
-///
-/// The ticket is short-lived and single-flow (the sbox-a tile recipe), so
-/// this runs per iframe mount and per selection change, never on a timer.
-/// A response for a selection that has since changed is dropped.
 fn load_viewer_url(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let id = js::get_str(&s, "browserSandboxId");
@@ -2010,9 +1597,6 @@ fn load_viewer_url(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `pickBrowserSandbox(id)` — the pane's dropdown: switch boxes. Clears
-/// the ticket so the iframe re-mounts on the next mint (a mount is a
-/// ticket's one flow).
 fn pick_browser_sandbox(_this: JsValue, args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let id = js::arg_str(&args, 0);
@@ -2027,17 +1611,6 @@ fn pick_browser_sandbox(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `sboxRemove(id)` — the rail row's trash button. First press arms the
-/// row (the button turns armed and says so), the second destroys the
-/// container through the same endpoint the Sandbox form's Delete uses.
-///
-/// The destroy sends the id the row carries, and nothing else: a sandbox is
-/// its container id. The response answers the fresh listing, which
-/// `apply_targets` adopts — the row disappears through the same recompute
-/// the listing already runs, and the open Sandbox form (if the user was
-/// editing the same box) tracks its now-gone container. A refusal re-arms
-/// the button and says why on a line in the menu, so a failure is a
-/// re-click, not a mystery.
 fn sbox_remove(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     if id.is_empty() {
@@ -2045,13 +1618,9 @@ fn sbox_remove(_this: JsValue, args: js_sys::Array) -> JsValue {
     }
     let s = mjs::store_ref(STORE);
     if js::get_str(&s, "sboxConfirmId") != id {
-        // First press: arm the row. The button goes red and stays armed
-        // for 3 seconds only — the timer in `arm_row` puts it back grey.
         crate::components::sandboxes_menu::arm_row(STORE, &id);
         return JsValue::UNDEFINED;
     }
-    // Second press: disarm first, then destroy. The button going back to
-    // dim on the second press is the honest read of "this is in flight".
     js::set_str(&s, "sboxConfirmId", "");
     js::set_str(&s, "sboxError", "");
     mjs::redraw();
@@ -2063,9 +1632,6 @@ fn sbox_remove(_this: JsValue, args: js_sys::Array) -> JsValue {
             apply_targets(&v);
             return;
         }
-        // The destroy failed: the row is still there, so the armed button
-        // comes back — the user asked for a retry, and the 3-second timer
-        // applies to it too — with the error line saying why.
         let msg = js::get_str(&v, "error");
         let msg = if msg.trim().is_empty() { "That sandbox could not be destroyed.".to_string() } else { msg };
         crate::components::sandboxes_menu::arm_row(STORE, &id);
@@ -2078,11 +1644,7 @@ fn sbox_remove(_this: JsValue, args: js_sys::Array) -> JsValue {
 
 fn apply_targets(v: &JsValue) {
     let s = mjs::store_ref(STORE);
-    // `automations` rides along because automation writes answer with the
-    // same fresh-listing contract; a plain targets response simply lacks
-    // the key and skips it.
     for key in ["sandboxes", "repos", "repoBranches", "worktrees", "automations"] {
-        // An unavailable service does not mean the existing sandboxes vanished.
         let list = js::get(v, key);
         if key == "sandboxes" && js::get(v, "sboxUp").as_bool() == Some(false)
             && (js::is_missing(&list) || js_sys::Array::from(&list).length() == 0) { continue; }
@@ -2094,39 +1656,22 @@ fn apply_targets(v: &JsValue) {
     if let Some(up) = up.as_bool() {
         if js::get_bool(&s, "sboxUp") != up { js::set_bool(&s, "sboxUp", up); }
     }
-    // The sandboxes menu groups rows per image (PLAN55 D6's rollup). One
-    // computation, shared with the samples store — the listing and its
-    // rollup cannot disagree because they are the same data.
     let groups = crate::components::sandboxes_menu::group_rows(&js::get(&s, "sandboxes"));
     if !same_json(&js::get(&s, "sandboxGroups"), &groups) {
         js::set(&s, "sandboxGroups", &groups);
     }
-    // An open Sandbox form tracks its container's state in real time (the
-    // feed republishes every couple of seconds).
     crate::components::target_form::sync_sandbox_status(&s);
-    // The browser pane's list and ticket follow the same feed.
     refresh_browser_sandbox(JsValue::UNDEFINED, js_sys::Array::new());
 }
 
 pub(crate) fn apply_sandboxes(value: &JsValue) { apply_targets(value); }
 
-/// `saveTarget(action, payload)` — every write behind the pickers' Create
-/// and Edit actions, plus the automation form's.
-///
-/// The payload arrives as an object built by the form, because the actions
-/// take different shapes and a positional signature covering all of them
-/// would be unreadable. `automation-*` actions post to the automations
-/// endpoint (chat's own registry, not the host's); everything else keeps
-/// the targets endpoint. Both answer the fresh listing, so one callback
-/// serves both.
 fn save_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     let action = js::arg_str(&args, 0);
     let payload = args.get(1);
     let form = mjs::store_ref("tform");
     let request_id = js::get_num(&form, "requestId");
     js::set_bool(&form, "busy", true);
-    // One callback serves both endpoints: each answers the fresh listing,
-    // and `apply_targets` adopts whichever keys are present.
     let callback = move |v: JsValue| {
         let form = mjs::store_ref("tform");
         let same_form = js::get_bool(&form, "open") && js::get_num(&form, "requestId") == request_id;
@@ -2150,12 +1695,6 @@ fn save_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `dropSession(id, project)` — the sidebar's drag-and-drop.
-///
-/// Refiles optimistically so the row lands where it was dropped rather than
-/// snapping back for a round-trip, then reconciles with whatever the server
-/// says. A drop onto the folder a conversation is already in is a no-op,
-/// not a write — dragging something one pixel should not touch the file.
 fn drop_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     let project = js::arg_str(&args, 1);
@@ -2177,8 +1716,6 @@ fn drop_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     if !moved {
         return JsValue::UNDEFINED;
     }
-    // The open session's own copy of the metadata, so the composer's
-    // project picker agrees with the tree it was just dragged in.
     if js::get_str(&s, "activeId") == id {
         js::set_str(&s, "projectId", &project);
         js::set_str(&js::get(&s, "session"), "project", &project);
@@ -2194,11 +1731,6 @@ fn drop_session(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `saveProject(action, a, b)` — create, rename or delete a folder.
-///
-/// One method for the three writes because they differ only in which two
-/// strings they send, and the response handling — adopt the new listing — is
-/// identical.
 fn save_project(_this: JsValue, args: js_sys::Array) -> JsValue {
     let action = js::arg_str(&args, 0);
     let payload = js::obj();
@@ -2213,9 +1745,6 @@ fn save_project(_this: JsValue, args: js_sys::Array) -> JsValue {
     }
     api::project_action(&action, &payload.into(), |v| {
         apply_projects(&js::get(&v, "projects"));
-        // Creating a folder files this conversation in it: the picker is
-        // under the composer, so "new project" there means "and put this
-        // one in it".
         let created = js::get_str(&v, "select");
         if !created.is_empty() {
             let s = mjs::store_ref(STORE);
@@ -2231,8 +1760,6 @@ fn save_project(_this: JsValue, args: js_sys::Array) -> JsValue {
                 });
             }
         }
-        // A rename or a delete rewrites labels on conversations this client
-        // is holding, so the session list is no longer trustworthy.
         api::sessions(|sv| {
             let s = mjs::store_ref(STORE);
             js::set(&s, "sessions", &js::get(&sv, "sessions"));
@@ -2242,7 +1769,6 @@ fn save_project(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// Rename the visible segment of a project, or a conversation's title.
 fn rename_tree_row(_this: JsValue, args: js_sys::Array) -> JsValue {
     let kind = js::arg_str(&args, 0);
     let old = js::arg_str(&args, 1);
@@ -2256,8 +1782,6 @@ fn rename_tree_row(_this: JsValue, args: js_sys::Array) -> JsValue {
             None => name,
         };
         if new != old {
-            // The backend merges names on collision. An inline rename should
-            // never silently merge two existing project trees.
             let s = mjs::store_ref(STORE);
             let projects = js_sys::Array::from(&js::get(&s, "projects"));
             if projects.iter().any(|p| {
@@ -2287,13 +1811,6 @@ fn rename_tree_row(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `pickTarget(kind, id)` — the project picker's choice (the composer's
-/// checkout pickers are gone; the session editor's Worktree section owns
-/// the checkout now).
-///
-/// Records the choice and closes the menu. The project rides the
-/// `/api/projects/assign` path, which persists the filing and answers the
-/// fresh listing.
 fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     let field = match js::arg_str(&args, 0).as_str() {
         "project" => "projectId",
@@ -2322,11 +1839,6 @@ fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `createTarget(kind)` / `editTarget(kind, id)` — open the inspector form.
-///
-/// The store's own name goes with the call, so the form writes back here
-/// rather than to whichever store happened to register last. The design
-/// guide passes its own, and gets a form that persists nothing.
 fn create_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::call(
         &mjs::store_ref("tform"),
@@ -2340,8 +1852,6 @@ fn create_target(_this: JsValue, args: js_sys::Array) -> JsValue {
 }
 
 fn edit_target(_this: JsValue, args: js_sys::Array) -> JsValue {
-    // Opening the form is the one other interaction the armed trash button
-    // yields to: the rail's armed state is one row's worth, never two.
     let s = mjs::store_ref(STORE);
     js::set_str(&s, "sboxConfirmId", "");
     js::set_str(&s, "sboxError", "");
@@ -2357,20 +1867,11 @@ fn edit_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `setPolicy(mode)` — the composer's policy dropdown.
-///
-/// `Allowlist` enforces the rules and reveals the editor, because choosing
-/// it is almost always a prelude to reading or changing them.
-/// `Unrestricted` runs with `*`. It is a **temporary override, not an
-/// edit**: the rules are left exactly as written and come back when the
-/// policy is switched back, so turning it on is never destructive.
 fn set_policy(_this: JsValue, args: js_sys::Array) -> JsValue {
     let mode = js::arg_str(&args, 0);
     let unrestricted = mode == "Unrestricted";
     let s = mjs::store_ref(STORE);
     js::set_bool(&s, "unrestricted", unrestricted);
-    // Picking "Allowlist" opens the editor; picking "Unrestricted" leaves
-    // whatever was open alone, so the rules stay readable while inert.
     if !unrestricted {
         js::set_bool(&s, "allowlistOpen", true);
     }
@@ -2382,8 +1883,6 @@ fn set_policy(_this: JsValue, args: js_sys::Array) -> JsValue {
     }
     let payload = js::obj();
     js::set_str(&payload, "sessionId", &id);
-    // No `allowlist` key: the server only patches the rules when it is
-    // present, so this changes the mode and nothing else.
     js::set_str(
         &payload,
         "mode",
@@ -2394,12 +1893,7 @@ fn set_policy(_this: JsValue, args: js_sys::Array) -> JsValue {
 }
 
 
-// ===========================================================================
-// Session metrics.
-// ===========================================================================
 
-/// Sum one session's telemetry: totals across every assistant turn, rates
-/// from the most recent one that reported them.
 fn session_metrics(msgs: &js_sys::Array) -> helpers::SessionMetrics {
     let mut m = helpers::SessionMetrics::default();
     for row in msgs.iter() {
@@ -2412,10 +1906,7 @@ fn session_metrics(msgs: &js_sys::Array) -> helpers::SessionMetrics {
         }
         m.input_tokens += nonneg(&tel, "prompt_tokens");
         m.output_tokens += nonneg(&tel, "completion_tokens");
-        // Response bytes are the text's own UTF-8 size; the server does not
-        // send it because only the rendered message knows it.
         m.bytes += js::get_str(&row, "text").len() as f64;
-        // Last turn wins for the rates.
         let tps = nonneg(&tel, "tok_per_sec");
         if tps > 0.0 {
             m.tok_per_sec = tps;
@@ -2437,11 +1928,6 @@ fn nonneg(o: &JsValue, key: &str) -> f64 {
     }
 }
 
-/// Add one completed turn to the session totals and re-render the row.
-///
-/// Kept incremental rather than recomputed from `messages`: the sealed card
-/// arrives before the message list is reconciled with the server, so
-/// summing the list here would miss the turn that just finished.
 fn add_turn_metrics(s: &JsValue, tel: &JsValue, text: &str) {
     let mut m = helpers::SessionMetrics {
         tok_per_sec: js::get_num(s, "mTps"),
@@ -2466,7 +1952,6 @@ fn add_turn_metrics(s: &JsValue, tel: &JsValue, text: &str) {
     store_metrics(s, &m);
 }
 
-/// Persist the running totals plus their rendered row.
 fn store_metrics(s: &JsValue, m: &helpers::SessionMetrics) {
     js::set_num(s, "mTps", m.tok_per_sec);
     js::set_num(s, "mDur", m.duration_ms);
@@ -2476,26 +1961,11 @@ fn store_metrics(s: &JsValue, m: &helpers::SessionMetrics) {
     js::set_str(s, "lastMetrics", &helpers::metrics_html(m));
 }
 
-// ===========================================================================
-// The memory tree in the UI: threads you can open one level at a time
-// ===========================================================================
-//
-// `threads` is a **flat** array that renders as a nested list, because m-js
-// diffs a keyed list far more cheaply than it diffs a recursive component
-// tree, and the nesting here is only ever presentational. Each entry carries
-// its own `depth`, and the template indents by it.
-//
-// Opening a thread splices its two halves in directly after it. Nothing is
-// fetched until someone opens something, so the top of a very long
-// conversation costs exactly as many rows as it shows.
 
-/// Build one thread row from a `/view` or `/zoom` part.
 fn thread_row(part: &JsValue, depth: f64) -> JsValue {
     let row = js::obj();
     let r = js::get_str(part, "ref");
     js::set_str(&row, "ref", &r);
-    // The key has to be unique across the whole flat list, and the same
-    // reference can legitimately appear at two depths while a parent is open.
     js::set_str(&row, "id", &format!("t{depth}-{r}"));
     js::set(&row, "from", &js::get(part, "id"));
     js::set(&row, "n", &js::get(part, "n"));
@@ -2508,18 +1978,12 @@ fn thread_row(part: &JsValue, depth: f64) -> JsValue {
     js::set_bool(&row, "loading", false);
     let text = js::get_str(part, "text");
     js::set_str(&row, "text", &text);
-    // A summary is prose from a model, so it gets the same markdown
-    // treatment as an answer.
     js::set_str(&row, "html", &helpers::markdown_to_html(&text));
-    // A leaf carries the original message, which renders as the card it
-    // always was rather than as a summary line.
     let msg = js::get(part, "message");
     if !msg.is_undefined() && !msg.is_null() {
         add_html(&msg);
         js::set(&row, "message", &msg);
     }
-    // How many messages this line stands for — the count the UI shows on a
-    // collapsed thread.
     let n = js::get(part, "n").as_f64().unwrap_or(1.0);
     js::set_str(
         &row,
@@ -2533,7 +1997,6 @@ fn thread_row(part: &JsValue, depth: f64) -> JsValue {
     row.into()
 }
 
-/// `loadView()` — pull the memory view for the open session.
 fn load_view(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let id = js::get_str(&s, "activeId");
@@ -2558,11 +2021,6 @@ fn load_view(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `compact()` — run compaction on the open conversation.
-///
-/// Explicit rather than automatic: compaction spends model calls, and the
-/// moment a conversation gets re-shaped under the reader is a moment they
-/// should have asked for.
 fn compact(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let id = js::get_str(&s, "activeId");
@@ -2585,7 +2043,6 @@ fn compact(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// Index of the thread row with this key, or -1.
 fn thread_index(rows: &js_sys::Array, key: &str) -> i32 {
     for (i, r) in rows.iter().enumerate() {
         if js::get_str(&r, "id") == key {
@@ -2595,7 +2052,6 @@ fn thread_index(rows: &js_sys::Array, key: &str) -> i32 {
     -1
 }
 
-/// `toggleThread(key)` — open a thread one level, or close it.
 fn toggle_thread(_this: JsValue, args: js_sys::Array) -> JsValue {
     let key = js::arg_str(&args, 0);
     let s = mjs::store_ref(STORE);
@@ -2606,8 +2062,6 @@ fn toggle_thread(_this: JsValue, args: js_sys::Array) -> JsValue {
     }
     let row = rows.get(at as u32);
     if js::get_bool(&row, "leaf") {
-        // A width-1 part is already the original message; there is nothing
-        // under it to open.
         return JsValue::UNDEFINED;
     }
     if js::get_bool(&row, "expanded") {
@@ -2644,8 +2098,6 @@ fn toggle_thread(_this: JsValue, args: js_sys::Array) -> JsValue {
             return;
         }
         js::set_bool(&row, "expanded", true);
-        // Splice the halves in right after their parent. The parent stays
-        // visible as the thread's header, so you can see what you opened.
         let next = js_sys::Array::new();
         for (i, r) in rows.iter().enumerate() {
             next.push(&r);
@@ -2655,15 +2107,12 @@ fn toggle_thread(_this: JsValue, args: js_sys::Array) -> JsValue {
                 }
             }
         }
-        // Replace the array rather than mutating it: an in-place splice may
-        // not notify.
         js::set(&s, "threads", &next.into());
         mjs::redraw();
     });
     JsValue::UNDEFINED
 }
 
-/// Close a thread: drop every row nested under it.
 fn collapse_at(s: &JsValue, rows: &js_sys::Array, at: i32) {
     let row = rows.get(at as u32);
     let depth = js::get(&row, "depth").as_f64().unwrap_or(0.0);
@@ -2678,8 +2127,6 @@ fn collapse_at(s: &JsValue, rows: &js_sys::Array, at: i32) {
             continue;
         }
         if skipping {
-            // Everything deeper than the parent belongs to it; the first row
-            // back at the parent's own depth ends the subtree.
             if d > depth {
                 continue;
             }
@@ -2691,40 +2138,20 @@ fn collapse_at(s: &JsValue, rows: &js_sys::Array, at: i32) {
     mjs::redraw();
 }
 
-// ===========================================================================
-// The roster: who is in the conversation
-// ===========================================================================
 
-/// Store the roster and build the id → handle map the transcript uses to
-/// attribute each message.
 fn store_roster(s: &JsValue, list: &js_sys::Array) {
     js::set(s, "participants", &list.clone().into());
     let by_id = js::obj();
     let mut agents = 0.0;
-    // Who to show in the roster bar: everyone **except me**. A list that
-    // includes the reader is a list of the room, not of who they are
-    // talking to — and the one entry they can do nothing about.
-    //
-    // "Me" is the generic `user` seat; a **named** user seat is someone
-    // invited in — the "other humans" this roster always meant to show
-    // (a `@mention` or `/invite` of a person seats them exactly like an
-    // agent).
     let others = js_sys::Array::new();
     let active_others = js_sys::Array::new();
-    // handle -> colour, so a row can be tinted without searching the roster
-    // on every redraw. Keyed by handle rather than by participant id because
-    // a streamed card names its speaker by handle.
     let accents = js::obj();
-    // …and the same for the glyph, so a byline can be drawn as its author
-    // without the row carrying a copy of the definition.
     let icons = js::obj();
     for p in list.iter() {
         let id = js::get(&p, "id").as_f64().unwrap_or(-1.0);
         let handle = js::get_str(&p, "handle");
         js::set_str(&by_id, &format!("{id}"), &handle);
         let kind = js::get_str(&p, "kind");
-        // A person wears the person's mark whatever the row says: a user
-        // seat has no agent icon or accent to copy.
         let is_person = kind == "user";
         let colour = js::get_str(&p, "accentColor");
         js::set_str(
@@ -2757,8 +2184,6 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
             }
             others.push(&p);
         } else if is_person && handle != "user" {
-            // The other humans: seated people appear in the roster bar.
-            // The generic `user` seat stays out — that one is me.
             if js::get_bool(&p, "active") {
                 active_others.push(&p);
             }
@@ -2771,18 +2196,9 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
     js::set(s, "icons", &icons);
     js::set(s, "handles", &by_id);
     js::set_num(s, "agentCount", agents);
-    // Two or more agents is what makes this a group conversation, which is
-    // what the server uses to pick the group turn path.
     js::set_bool(s, "isGroup", agents > 1.0);
 }
 
-/// `openSessionRow(id)` — a project-tree session row click.
-///
-/// The row is the toggle for the right sidebar — and the edit form riding
-/// in it — but only for the session already current: clicking the current
-/// session's row shows the inspector with the edit form in it, or hides both.
-/// Clicking another session just selects it quietly: the transcript is what
-/// changed, and the column keeps whatever it was showing.
 fn open_session_row(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     if id.is_empty() {
@@ -2798,30 +2214,19 @@ fn open_session_row(_this: JsValue, args: js_sys::Array) -> JsValue {
             let draft = mjs::store_ref("sessionDraft");
             js::set_bool(&draft, "open", false);
         } else {
-            // Opening the sidebar shows the edit form — the one thing the
-            // row is for. It seeds from the active session's own meta.
             open_session_editor(JsValue::UNDEFINED, js_sys::Array::new());
         }
         mjs::redraw();
         return JsValue::UNDEFINED;
     }
-    // Not current: select it quietly — no sidebar toggle, no form.
     preview_session(JsValue::UNDEFINED, args)
 }
 
-/// `openSessionEditor()` — the edit form, opened from the current session's
-/// project-tree row. Seeds the draft from the live conversation — its meta for the five fields,
-/// its roster for the seats — closes the panels it displaces, and opens the
-/// column. The seats are copies, not the roster's own objects: unseating in
-/// the editor must not dim the live cluster before anything is saved, and
-/// inviting must not seat a reference the room never approved.
 fn open_session_editor(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let live = mjs::store_ref(STORE);
     let draft = mjs::store_ref("sessionDraft");
     js::set_bool(&mjs::store_ref("groupDraft"), "open", false);
     let meta = js::get(&live, "session");
-    // The fields — including the workspace root and the worktree config —
-    // seed through the draft's own `seed`, the same call the guide makes.
     js::call(&draft, "seed", &[meta, JsValue::from_str(STORE)]);
     js::set(&draft, "inherited", &js::obj().into());
     let id = js::get_str(&live, "activeId");
@@ -2845,7 +2250,6 @@ fn open_session_editor(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set(&draft, "seats", &seats.into());
     js::set_str(&draft, "inviteHandle", "");
     js::set_bool(&draft, "open", true);
-    // One panel at a time: the inspector shows what you last selected.
     let agents = mjs::store_ref("agents");
     js::set_bool(&agents, "open", false);
     js::set_str(&agents, "selected", "");
@@ -2856,7 +2260,6 @@ fn open_session_editor(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `removeAgent(id)` — unseat a participant.
 fn remove_agent(_this: JsValue, args: js_sys::Array) -> JsValue {
     let pid = js::arg_num(&args, 0, 0.0);
     if pid <= 0.0 {
@@ -2889,9 +2292,6 @@ fn load_roster(id: &str) {
     );
 }
 
-// ===========================================================================
-// Branching: the cursor picks which version of the conversation you are in
-// ===========================================================================
 
 fn tree_escape(_this: JsValue, args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
@@ -2994,7 +2394,6 @@ fn tree_choose(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// Move before the selected prompt and place its text back in the composer.
 fn fork_prompt(_this: JsValue, args: js_sys::Array) -> JsValue {
     let event_id = js::arg_str(&args, 0);
     let prompt = js::arg_str(&args, 1);
@@ -3023,7 +2422,6 @@ fn fork_prompt(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `handleOf(participantId)` — the `@handle` that authored a message.
 fn handle_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     let pid = js::arg_num(&args, 0, 0.0);
     let s = mjs::store_ref(STORE);
@@ -3033,14 +2431,7 @@ fn handle_of(_this: JsValue, args: js_sys::Array) -> JsValue {
 }
 
 
-// ===========================================================================
-// Slash commands
-// ===========================================================================
 
-/// Add a transient notice to the transcript.
-///
-/// Not persisted on purpose: it is the app answering you, not something
-/// anyone said, and a reload should not replay it.
 fn notice(s: &JsValue, text: &str) {
     push_message(s, "system", text, "");
     let rows = js_sys::Array::from(&js::get(s, "messages"));
@@ -3049,7 +2440,6 @@ fn notice(s: &JsValue, text: &str) {
     mjs::redraw();
 }
 
-/// Save a roster change before showing it, so transcript reloads retain it.
 fn record_notice(session: &str, text: &str) {
     let payload = js::obj();
     js::set_str(&payload, "sessionId", session);
@@ -3075,7 +2465,6 @@ fn record_notice(session: &str, text: &str) {
     });
 }
 
-/// Run a `/command` from the composer.
 fn run_command(s: &JsValue, line: &str) {
     let mut parts = line.split_whitespace();
     let cmd = parts.next().unwrap_or("").to_ascii_lowercase();
@@ -3093,18 +2482,11 @@ fn run_command(s: &JsValue, line: &str) {
             );
         }
         other => {
-            // Left in the box: a typo should not cost you what you typed.
             notice(s, &format!("Unknown command {other}. Try /help."));
         }
     }
 }
 
-/// `/invite @a @b` — seat agents or people in the open conversation.
-///
-/// The name is resolved server-side, the way a mention resolves it: an agent
-/// of that name first, a user next — seating either kind is the same act.
-/// The answers this side keeps are "already here" (the roster is right
-/// here) and whatever the server says about the rest.
 fn invite_command(s: &JsValue, names: &[String]) {
     let session = js::get_str(s, "activeId");
     if session.is_empty() {
@@ -3143,15 +2525,10 @@ fn invite_command(s: &JsValue, names: &[String]) {
     }
 
     js::set_str(s, "draft", "");
-    // One request per name; the roster is re-read once at the end rather
-    // than after each, so the bar does not flicker through intermediate
-    // states on a multi-name invite.
     let total = invited.len();
     let results = std::rc::Rc::new(std::cell::RefCell::new((Vec::<String>::new(), Vec::<String>::new())));
     for name in invited.clone() {
         let payload = js::obj();
-        // The server resolves the name — an agent first, a person next —
-        // and re-seats a name that is already in the room.
         js::set_str(&payload, "name", &name);
         let session = session.clone();
         let results = std::rc::Rc::clone(&results);
@@ -3188,7 +2565,6 @@ fn invite_command(s: &JsValue, names: &[String]) {
     }
 }
 
-/// Remove active agents by handle, retaining their existing message authorship.
 fn uninvite_command(s: &JsValue, names: &[String]) {
     let session = js::get_str(s, "activeId");
     if session.is_empty() {
@@ -3242,15 +2618,7 @@ fn uninvite_command(s: &JsValue, names: &[String]) {
 
 
 
-/// `toggleReasoning(id)` — open or shut one reasoning card.
-///
-/// An empty id means the turn in flight, which has no row of its own and
-/// keeps its state on the store instead.
 fn toggle_reasoning(_this: JsValue, args: js_sys::Array) -> JsValue {
-    // Selecting text inside an open card is a click too. Collapsing it out
-    // from under a reader who was trying to copy a line is the obvious way
-    // to make "click anywhere" annoying, so a click that ended a selection
-    // is not a toggle.
     if has_selection() {
         return JsValue::UNDEFINED;
     }
@@ -3271,16 +2639,12 @@ fn toggle_reasoning(_this: JsValue, args: js_sys::Array) -> JsValue {
         }
         next.push(&msg);
     }
-    // Replace the array rather than relying on the in-place flag to notify:
-    // a property written on a row inside a reactive array may not reach the
-    // diff on its own (RUST_M_JS §3).
     js::set(&s, "messages", &next.into());
     mjs::redraw();
     JsValue::UNDEFINED
 }
 
 
-/// Is there a non-empty text selection on the page?
 fn has_selection() -> bool {
     let sel = js::call(&js_sys::global(), "getSelection", &[]);
     if sel.is_undefined() || sel.is_null() {
@@ -3293,8 +2657,6 @@ fn has_selection() -> bool {
 }
 
 
-/// A removed, never-speaking agent no longer has a seat, but its definition
-/// still supplies the same icon and colour to mentions in earlier notices.
 fn defined_agent_field(handle: &str, field: &str) -> String {
     js_sys::Array::from(&js::get(&mjs::store_ref("agents"), "agents")).iter()
         .find(|agent| js::get_str(agent, "name") == handle)
@@ -3302,12 +2664,6 @@ fn defined_agent_field(handle: &str, field: &str) -> String {
         .unwrap_or_default()
 }
 
-/// `accentOf(handle)` — the colour a row is drawn in.
-///
-/// Always a concrete colour, never empty: an empty custom property makes the
-/// declaration that uses it invalid at computed-value time, which falls back
-/// to *inherited*, not to the `var()` fallback — so the row would take its
-/// neighbour's colour rather than the default.
 fn accent_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     let handle = js::arg_str(&args, 0);
     let s = mjs::store_ref(STORE);
@@ -3320,12 +2676,6 @@ fn accent_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     })
 }
 
-/// `iconOf(handle)` — the glyph a byline is drawn with.
-///
-/// Always a concrete name, like [`accent_of`]: `'ph ph-' + ''` is the class
-/// `ph-`, which draws a blank where the author's icon belongs. A handle the
-/// roster does not know — the human seat, or an agent that has since been
-/// unseated — falls back to the default rather than to nothing.
 fn icon_of(_this: JsValue, args: js_sys::Array) -> JsValue {
     let handle = js::arg_str(&args, 0);
     let s = mjs::store_ref(STORE);

@@ -1,38 +1,3 @@
-//! `session editor` — the panel the presence cluster's `+` opens.
-//!
-//! Not a dialog. The third column already means "whatever is selected
-//! elsewhere", so a modal for the same idea would be a second paradigm for one
-//! gesture. Clicking `+` in the roster puts this in the inspector, beside the
-//! agent editor and the target form.
-//!
-//! ## It is one form, not an invite box
-//!
-//! The thing you are doing when you add a participant is editing the
-//! conversation. Renaming it belongs in the same place, because a conversation
-//! you have just opened up to three agents is exactly the moment its title
-//! stops fitting.
-//!
-//! Five fields, and every one of them is already accepted by
-//! `POST /api/sessions/:id/settings` (`serve.rs`), which whitelists
-//! `purpose`, `notes`, `routing`, `memoryHigh` and `title`. `conversation.title`
-//! already reaches the client too — the tab strip binds its tooltip to
-//! `s.title` and displays only the ordinal. So this panel is the missing UI
-//! for a route that is already finished.
-//!
-//! ## `role` is not what the reference shows
-//!
-//! `participants.role` exists and is unused by the UI, but it is a *routing*
-//! role: `lead` picks who runs the routing call (`harness.rs`). It is not a job
-//! title. A job title written into it would silently change who routes a group
-//! round, so there is no "Role" field here.
-//!
-//! ## The chrome is the agent editor's
-//!
-//! `.agent-editor`, `.agent-editor-head`, `.ae-field`, `.ae-label`, `.ae-mode`,
-//! `.ae-btn` — the inspector's form idiom, reused rather than redrawn, exactly
-//! as `target_form` does. This file owns only what the editor has no equivalent
-//! of: the participants block and the invite row.
-
 use wasm_bindgen::JsValue;
 
 use rustex1_kit::h::{lit, m, Node};
@@ -45,9 +10,6 @@ use crate::css;
 const STORE: &str = "sessionDraft";
 const ST: &str = "$store.sessionDraft";
 
-/// The agents this project defines, so an unknown name is answered locally
-/// rather than by seating a reference to something that does not exist — the
-/// same check `/invite @name` makes.
 const KNOWN: &[(&str, &str, &str)] = &[
     ("researcher", "flask", "#0091ff"),
     ("joker", "mask-happy", "#be5cff"),
@@ -59,8 +21,6 @@ const KNOWN: &[(&str, &str, &str)] = &[
 ];
 
 pub const CSS: &str = r#"
-/* The participants block and the invite row: the only parts of this panel the
-   agent editor has no equivalent of. */
 :is(#sb, #home) .se-participants { display: flex; flex-direction: column; gap: 8px; }
 :is(#sb, #home) .se-invite { display: flex; align-items: center; gap: 8px; }
 :is(#sb, #home) .se-invite input {
@@ -71,8 +31,6 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .se-invite input:focus { outline: none; border-color: var(--gray-dim); }
 :is(#sb, #home) .se-invite input::placeholder { color: var(--gray-dim); }
-/* The search glyph inside the field, so the row says "type a name" before you
-   type one. */
 :is(#sb, #home) .se-invite-field { position: relative; flex: 1 1 auto; min-width: 0; }
 :is(#sb, #home) .se-invite-field > i {
   position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
@@ -80,12 +38,7 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .se-invite-field input { padding-left: 30px; }
 
-/* The Worktree section: its own label + hint above the repo picker, the
-   two pattern inputs stacked beside the same fields as the rest of the
-   form, a note carrying the resolved path, and the action that removes
-   the checkout. */
 :is(#sb, #home) .se-worktree { display: flex; flex-direction: column; gap: 8px; }
-/* The repo picker reads like a text field: full width, same pill shape. */
 :is(#sb, #home) .se-worktree .picker { display: flex; width: 100%; }
 :is(#sb, #home) .se-worktree .dropdown-btn {
   flex: 1 1 auto; box-sizing: border-box; width: 100%;
@@ -95,12 +48,8 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .se-worktree .dropdown-btn:hover { background: var(--panel-2); border-color: transparent; }
 :is(#sb, #home) .se-worktree .dropdown-value { flex: 1 1 auto; color: var(--fg); }
-/* The menu opens upward from the bottom of a narrow column, so it hangs
-   off the right edge anchored left — anchor it right, like the deleted
-   composer row's menus did at the composer's right edge. */
 :is(#sb, #home) .se-worktree .picker .picker-menu,
 :is(#sb, #home) .se-project .picker .picker-menu { left: auto; right: 0; }
-/* The same for the Project picker, which shares the form. */
 :is(#sb, #home) .se-project .dropdown { display: flex; width: 100%; }
 :is(#sb, #home) .se-project .dropdown-btn {
   flex: 1 1 auto; box-sizing: border-box; width: 100%;
@@ -119,8 +68,6 @@ pub const CSS: &str = r#"
 .se-editor-demo { width: 340px; }
 "#;
 
-/// One labelled row, in the inspector's idiom. `rows` 0 is an input, any other
-/// number a textarea of that height.
 pub(crate) fn field(label: &str, hint: &str, model: &str, placeholder: &str, rows: usize) -> Node {
     let input = if rows == 0 {
         m("input")
@@ -147,7 +94,6 @@ pub(crate) fn field(label: &str, hint: &str, model: &str, placeholder: &str, row
     ])
 }
 
-/// The two-way routing switch, in the agent editor's `.ae-mode` shape.
 fn mode(draft: &str, value: &str, label: &str, icon: &str) -> Node {
     m("button")
         .class("ae-mode")
@@ -165,13 +111,6 @@ pub(crate) fn routing_modes(draft: &str) -> Node {
     ])
 }
 
-/// Who is seated, and the row that adds one.
-///
-/// The cluster is `presence`'s markup — the same `seat()` the guide features
-/// alone at `/storybook/presence`. The editor shows **every** seat: this panel
-/// is where the truncated ones live, so it is the thing `+N` opens. Removal
-/// happens here too, but through the dialog's own control — never a button on
-/// a seat, which would break the stack.
 fn participants() -> Node {
     let seat = presence::seat(
         "s.handle",
@@ -197,8 +136,6 @@ fn participants() -> Node {
                     .attr("placeholder", "@name")
                     .attr("spellcheck", "false")
                     .model(&format!("{ST}.inviteHandle"))
-                    // Enter invites: this is one word, and reaching for the
-                    // mouse to commit a single word is friction.
                     .on("keydown.enter", &format!("{ST}.invite()")),
             ]),
             m("button")
@@ -210,10 +147,6 @@ fn participants() -> Node {
     ])
 }
 
-/// The project block: the existing `picker::project` brick, wrapped in the
-/// same `ae-field` idiom as the rest of the form. It persists through the
-/// app's own `pickTarget('project', …)` — one brick, one behavior, mounted
-/// here by the page that passes the live store.
 fn project_block(st: &str) -> Node {
     m("div").class("ae-field se-project").kids(vec![
         m("label").class("ae-label").kids(vec![
@@ -224,10 +157,6 @@ fn project_block(st: &str) -> Node {
     ])
 }
 
-/// The worktree section: the repo the checkout is provisioned from, the two
-/// patterns that name it, where it lands, and the action that takes it away.
-/// The resolved-path readout reads the session's live record — the server
-/// re-resolves it on save, so the path shown is the path the gate checks.
 pub(crate) fn worktree_config(st: &str, draft: &str) -> Vec<Node> {
     vec![
         m("label").class("ae-label").kids(vec![
@@ -253,9 +182,6 @@ fn worktree_section(st: &str) -> Node {
     m("div").class("se-worktree").kids(children)
 }
 
-/// The panel. `st` is the app store behind the form — `$store.live` in the
-/// app, `$store.samples` in the guide — threaded to the pickers that read
-/// the app's target lists, so the same builder serves both pages.
 pub fn panel(st: &str) -> Node {
     m("div")
         .class("agent-editor session-editor")
@@ -265,8 +191,6 @@ pub fn panel(st: &str) -> Node {
             Node::icon("pencil-simple"),
             m("span").class("agent-editor-title").child(lit("Edit session")),
         ]),
-        // The verdict banner: always at the top of the form, just above the
-        // first field — one brick, every aside form.
         validation_info::live(
             &format!("({ST}.messageTone ? ' ' + {ST}.messageTone : '')"),
             &format!("{ST}.message"),
@@ -324,8 +248,6 @@ pub fn panel(st: &str) -> Node {
                 .attr("title", "Save")
                 .on("click", &format!("{ST}.save()"))
                 .child(m("span").child(lit("Save"))),
-            // Who else can reach this conversation (PLAN44 C4): the share
-            // dialog owns the grants; this only opens it.
             m("button")
                 .class("ae-btn")
                 .attr("type", "button")
@@ -335,11 +257,6 @@ pub fn panel(st: &str) -> Node {
                     m("span").child(lit("Share…")),
                 ]),
             m("span").class("spacer"),
-            // Two presses rather than a dialog: the destructive press is a
-            // different press from the one that reveals it — same idiom as
-            // the agent editor's remove and the target form. A session is a
-            // conversation with a history; one stray click should not be the
-            // whole cost of a typo.
             m("button")
                 .class("ae-btn danger")
                 .attr("type", "button")
@@ -355,12 +272,7 @@ pub fn panel(st: &str) -> Node {
     ])
 }
 
-/// The guide's mount: the panel with the guide's store behind it.
 pub fn demo() -> Node {
-    // The panel hides on its own `open` flag in the inspector; the guide
-    // turns it on at mount and seeds the draft from the guide's sample
-    // session, so every section — Project, Workspace root, Worktree —
-    // shows what the app's form shows with data in it.
     m("div")
         .class("se-editor-demo")
         .init("$store.sessionDraft.open = true; $store.sessionDraft.seed($store.samples.session, 'samples'); $store.sessionDraft.workspaceRoot = ''; $store.sessionDraft.inherited = { workspaceRoot: '/workspace/example' }")
@@ -369,16 +281,9 @@ pub fn demo() -> Node {
 
 fn say(s: &JsValue, tone: &str, message: &str) {
     js::set_str(s, "messageTone", tone);
-    // Through the brick: the message fades in a minute, re-armed by each
-    // new one.
     crate::components::validation_info::note(STORE, "message", message);
 }
 
-/// `invite()` — seat a name.
-///
-/// The same three answers `/invite @name` gives, because it *is* the same act:
-/// a name is checked against the defined agents before anything is seated, and
-/// an already-seated name is re-seated rather than duplicated.
 fn invite(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let raw = js::get_str(&s, "inviteHandle").trim().to_string();
@@ -403,8 +308,6 @@ fn invite(_this: JsValue, _args: js_sys::Array) -> JsValue {
             max_id = id;
         }
         if js::get_str(&p, "handle") == handle {
-            // Already in the room. Re-seat rather than add a second seat with
-            // the same name, which would draw the same agent twice.
             js::set_bool(&p, "active", true);
             js::set_str(&s, "inviteHandle", "");
             say(&s, "ok", &format!("{handle} is already here"));
@@ -413,8 +316,6 @@ fn invite(_this: JsValue, _args: js_sys::Array) -> JsValue {
         }
     }
 
-    // `max + 1`, never `length + 1`: a removed seat must not re-collide with a
-    // surviving one and give x-for a duplicate key.
     let p = js::obj();
     js::set_num(&p, "id", max_id + 1.0);
     js::set_str(&p, "handle", &handle);
@@ -436,8 +337,6 @@ fn set_routing(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// What the routing choice means, in one line, because "lead" alone does not
-/// say what will happen.
 fn routing_note(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let note = if js::get_str(&s, "routing") == "lead" {
@@ -448,12 +347,6 @@ fn routing_note(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::from_str(note)
 }
 
-/// `save()` — persist the five settings fields, then refresh.
-///
-/// Only the settings travel: the seats are draft-local until the participants
-/// path is wired, which is why invite/unseat answer locally while save talks
-/// to the server. Mirrors `live::rename_tree_row`: write the meta, refresh
-/// the session, reload the list so the tab strip follows the new title.
 fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let title = js::get_str(&s, "title").trim().to_string();
@@ -475,24 +368,15 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_str(&payload, "notes", &js::get_str(&s, "notes").trim().to_string());
     js::set_str(&payload, "soulAppendage", &js::get_str(&s, "soulAppendage"));
     js::set_str(&payload, "routing", &js::get_str(&s, "routing"));
-    // `x-model` on a number input stores a number or null, never a string —
-    // sending the box's "" would store text in an INTEGER column.
     let mh = js::get(&s, "memoryHigh");
     if mh.is_null() || mh.is_undefined() || mh.as_f64().is_none() {
         js::set(&payload, "memoryHigh", &JsValue::NULL);
     } else {
         js::set(&payload, "memoryHigh", &mh);
     }
-    // The session's two properties: the host file/shell root, and the
-    // worktree CONFIG the server provisions on save (its answer carries the
-    // resolved branch/path — the readout reads that back off the session).
     js::set_str(&payload, "workspaceRoot", &js::get_str(&s, "workspaceRoot").trim().to_string());
     let repo = js::get_str(&s, "worktreeRepoId").trim().to_string();
     if repo.is_empty() {
-        // "No repo": this session does not manage git, and a session that
-        // does not manage git keeps no checkout. The null is the settings
-        // body's spelling for exactly that — the same thing Remove worktree
-        // sends, so the two spellings cannot disagree.
         js::set(&payload, "worktree", &JsValue::NULL);
     } else {
         let wt = js::obj();
@@ -507,9 +391,6 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
         move |v| {
             let live = mjs::store_ref("live");
             let s = mjs::store_ref(STORE);
-            // A 4xx with `{ok:false, error}` still reaches this callback —
-            // provisioning refusals (a path taken, a bad ref) must land in
-            // the banner, not in a silent nothing.
             if js::get(&v, "ok").as_bool() == Some(false) {
                 say(&s, "error", &js::get_str(&v, "error"));
                 mjs::redraw();
@@ -518,7 +399,6 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
             if js::get_str(&live, "activeId") == id {
                 js::set(&live, "session", &js::get(&v, "session"));
             }
-            // New title, new tab strip: the tooltip reads the reloaded list.
             js::call(&mjs::store_ref("live"), "loadSessions", &[]);
             say(&s, "ok", "Saved");
             mjs::redraw();
@@ -530,22 +410,11 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
 fn close(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     js::set_bool(&s, "open", false);
-    // Disarm: closing the panel is "I'm not deleting", whatever state it
-    // was in — same rule `target_form.close` follows for `confirming`.
     js::set_bool(&s, "confirmDelete", false);
     mjs::redraw();
     JsValue::UNDEFINED
 }
 
-/// `delete()` — the trash button in the form, two presses rather than a
-/// dialog: the first arms it and says so, the second does it (see the
-/// agent editor and the target form, where a folder holding conversations
-/// is not a thing to lose to one click).
-///
-/// The target is `$store.live.activeId` — the session the draft was seeded
-/// from. `live.deleteSession` removes it from the list immediately, re-syncs
-/// with the server, and clears `activeId` if it was the one looked at; the
-/// form then closes, since the thing it edited is gone.
 fn delete(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let live = mjs::store_ref("live");
@@ -567,23 +436,10 @@ fn delete(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `seed(meta, from)` — fill the draft from a session meta object.
-///
-/// One seeding implementation for both pages: the app calls it from
-/// `live::open_session_editor` (which does the orchestration around it —
-/// seats, closing sibling panels, opening the aside), the guide calls it at
-/// mount. `from` names the store the meta belongs to (`live`/`samples`):
-/// the title fallback chain reads that store's session list, because a
-/// nameless session still shows the server's display title on its row.
 fn seed(_this: JsValue, args: js_sys::Array) -> JsValue {
     let meta = args.get(0);
     let from = args.get(1).as_string().unwrap_or_else(|| "live".to_string());
     let s = mjs::store_ref(STORE);
-    // `title` is seeded on its own: sessions made without a name carry no
-    // stored one, and the tree/tab bar then show the server's display
-    // fallback (`title || agent || id`). The form should match the name the
-    // user sees on the row, not an empty box — and typing a real name in
-    // `save()` persists it, which is exactly what renaming is.
     let mut title = js::get_str(&meta, "title");
     if title.is_empty() {
         let row_id = js::get_str(&meta, "id");
@@ -601,17 +457,12 @@ fn seed(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::set_str(&s, "soulAppendage", &js::get_str(&meta, "soulAppendage"));
     let routing = js::get_str(&meta, "routing");
     js::set_str(&s, "routing", &routing);
-    // Numbers stay numbers: the meta's NULL/number goes straight through,
-    // the same shape `save` sends back.
     let mh = js::get(&meta, "memoryHigh");
     if mh.is_null() || mh.is_undefined() || mh.as_f64().is_none() {
         js::set(&s, "memoryHigh", &JsValue::NULL);
     } else {
         js::set(&s, "memoryHigh", &mh);
     }
-    // The session properties: workspace root, and the worktree config the
-    // server resolves (the record's patterns are what re-save keeps stable —
-    // a fresh {{hex}} is drawn only when these change).
     js::set_str(&s, "workspaceRoot", &js::get_str(&meta, "workspaceRoot"));
     let wt = js::get(&meta, "worktree");
     js::set_str(&s, "worktreeRepoId", &js::get_str(&wt, "repoId"));
@@ -625,9 +476,6 @@ fn seed(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// The repo picker's pick: write the draft's repo and close the menu —
-/// the same shape every picker's `on_pick` has, but landing on the form's
-/// own field instead of the composer's.
 fn pick_repo(_this: JsValue, args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let id = args.get(0).as_string().unwrap_or_default();
@@ -637,9 +485,6 @@ fn pick_repo(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `removeWorktree()` — take the session's checkout away deliberately.
-/// `worktree: null` is the settings body's "no worktree" spelling: the
-/// server reaps the session's worktree(s) and answers the cleared meta.
 fn remove_worktree(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let live = mjs::store_ref("live");
@@ -675,8 +520,6 @@ fn store_register() {
         js::set_str(&p, "handle", name);
         js::set_str(&p, "icon", icon);
         js::set_str(&p, "accentColor", accent);
-        // The last one starts unseated, so the dimmed disc is on screen without
-        // having to click first.
         js::set_bool(&p, "active", i + 1 < KNOWN.len());
         seats.push(&p);
     }

@@ -1,17 +1,3 @@
-//! `queued card` — the "waiting for" card.
-//!
-//! **Live state, never history.** The card is a projection of the session's
-//! message queue: the messages waiting to become turns, why the line waits,
-//! and a way to take each one back. It is bound to the store's `queue` (the
-//! feed pushes it), not to a message row — a queued message is pending work
-//! and history has no place for it. The card is on screen exactly while the
-//! queue holds something: no enqueued message, no card.
-//!
-//! The waits of *finished* turns leave nothing behind. A turn that waited
-//! for a model slot, or a request parked on the session's configuration,
-//! used to leave a row on the rail; the rule now is the same for every
-//! wait: it is shown while it holds a message, and gone when it does not.
-
 use rustex1_kit::h::{lit, m, Node};
 
 use crate::components::samples;
@@ -26,8 +12,6 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .bubble-queued i { line-height: 19px; }
 :is(#sb, #home) .queued-text { overflow-wrap: anywhere; min-width: 0; }
 
-/* One card, one line per waiting message. The reason explains the line;
-   each message can be taken back on its own. */
 :is(#sb, #home) .queue-card { align-items: flex-start; }
 :is(#sb, #home) .queue-card > i { line-height: 19px; margin-top: 1px; }
 :is(#sb, #home) .queue-lines {
@@ -53,13 +37,6 @@ pub const CSS: &str = r#"
 .queued-demo .mjs-chat.mode-sidebar { border-left: 0; }
 "#;
 
-/// The "waiting for" card: the messages waiting to become turns.
-///
-/// Bound to `{st}.queue` — live state the feed pushes — rather than to a
-/// message row: a queued message is pending work and history has no place
-/// for it. The line is explained by its head's reason; each message carries
-/// its own way back to the composer. The card shows itself only while the
-/// queue holds a message.
 pub fn queue_parts(st: &str) -> Vec<Node> {
     vec![
         m("div")
@@ -89,9 +66,6 @@ pub fn queue_parts(st: &str) -> Vec<Node> {
     ]
 }
 
-/// standalone demo — the card over the guide's samples, both of its states:
-/// the line held up by the session's configuration, and the dequeue that
-/// takes a message back.
 pub fn demo() -> Node {
     m("div").class("queued-demo").child(
         m("div")
