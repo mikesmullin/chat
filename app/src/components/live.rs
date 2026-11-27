@@ -85,11 +85,9 @@ fn open_session_by_id(id: &str) {
         // than left as whatever the last tab happened to show — these are
         // per-conversation settings. There is no session sandbox any more
         // (PLAN55 D2): an agent's container is per (session → agent) and
-        // owned by the agents plane.
-        for field in ["project", "worktreeId", "branchId"] {
-            let store_field = if field == "project" { "projectId" } else { field };
-            js::set_str(&s, store_field, &js::get_str(&meta, field));
-        }
+        // owned by the agents plane. The checkout (worktree) lives on the
+        // session editor's draft, seeded from the same meta.
+        js::set_str(&s, "projectId", &js::get_str(&meta, "project"));
         let config = js::get(&meta, "config");
         let reasoning = js::get_str(&config, "reasoningEffort");
         js::set_str(&mjs::store_ref("dropdown"), "level", if reasoning.is_empty() { "medium" } else { &reasoning });
@@ -119,6 +117,15 @@ fn open_session_by_id(id: &str) {
         // attribution map is ready before the first row renders.
         store_roster(&s, &js_sys::Array::from(&js::get(&v, "participants")));
         js::set_str(&s, "cursor", &js::get_str(&v, "cursor"));
+        // A project-tree row click asked for the Edit session form with this
+        // session's meta: open it now the meta is fresh (the row is the
+        // toggle — see `open_session_row`).
+        if js::get_bool(&s, "editorOnLoad") {
+            js::set_bool(&s, "editorOnLoad", false);
+            open_session_editor(JsValue::UNDEFINED, js_sys::Array::new());
+        }
+        // The browser pane shows this session's boxes (or nothing).
+        refresh_browser_sandbox(JsValue::UNDEFINED, js_sys::Array::new());
         SESSION_LOADING.with(|v| v.borrow_mut().clear());
         let turn_done = replay_active_turn(&want);
         mjs::redraw();
@@ -1015,6 +1022,13 @@ pub fn register() {
         // agent), grouped per image — computed by `sandboxes_menu::group_rows`
         // whenever rows arrive.
         .val("sandboxes", &js_sys::Array::new().into())
+        // The browser pane's world: picker-shaped rows for the active
+        // session's ready headed boxes, the selection, and its minted
+        // viewer ticket (per-mount — see `load_viewer_url`).
+        .val("browserSandboxes", &js_sys::Array::new().into())
+        .str("browserSandboxId", "")
+        .str("browserViewerUrl", "")
+        .bool("viewerFetching", false)
         .val("sandboxGroups", &js_sys::Array::new().into())
         // Which image groups are expanded in the sandboxes menu (absent =
         // open) — collapse state, not data, so the recompute cannot wipe it.
@@ -1031,8 +1045,6 @@ pub fn register() {
         // apart.
         .bool("sboxUp", false)
         .str("projectId", "")
-        .str("worktreeId", "")
-        .str("branchId", "")
         .str("draft", "")
         // A pending attachment (PLAN44 A5): the uploaded image's URL, sent
         // as the message's `![image](…)` line.
@@ -1057,6 +1069,9 @@ pub fn register() {
         // True while the session runs with `*`. The rules survive it.
         .bool("unrestricted", false)
         .bool("waiting", false)
+        // Set by a project-tree row click: the Edit session form opens when
+        // that session's meta finishes loading (see `open_session_row`).
+        .bool("editorOnLoad", false)
         .val("approvals", &js_sys::Array::new().into())
         // Sticky scroll: true while the reader is at (or near) the bottom.
         .bool("stickBottom", true)
@@ -1168,6 +1183,10 @@ pub fn register() {
         .method("toggleThread", toggle_thread)
         .method("removeAgent", remove_agent)
         .method("openSessionEditor", open_session_editor)
+        .method("openSessionRow", open_session_row)
+        .method("refreshBrowserSandbox", refresh_browser_sandbox)
+        .method("loadViewerUrl", load_viewer_url)
+        .method("pickBrowserSandbox", pick_browser_sandbox)
         .method("treeEscape", tree_escape)
         .method("treeResetEscape", tree_reset_escape)
         .method("treeClose", tree_close)
@@ -1706,6 +1725,98 @@ fn apply_automations(v: &JsValue) {
 ///
 /// Every write answers with the fresh listing, so this runs after each one
 /// too and there is never a second request to find out what just happened.
+/// The pane's world: which ready headed sandboxes the active session has,
+/// and a minted viewer ticket for the selected one.
+///
+/// `browserSandboxes` rows are picker-shaped (`{id, name, icon, hint}`);
+/// the raw rows live in `sandboxes`, and this is the one place the two are
+/// related. A selection change always clears `browserViewerUrl` — the
+/// ticket is per-mount, so the iframe re-mounts only on a fresh one.
+fn refresh_browser_sandbox(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let active = js::get_str(&s, "activeId");
+    let selected = js::get_str(&s, "browserSandboxId");
+    let rows = js_sys::Array::new();
+    let mut still = false;
+    for r in js_sys::Array::from(&js::get(&s, "sandboxes")).iter() {
+        let id = js::get_str(&r, "id");
+        // Headed == the desktop image; ready == a viewer can attach. A
+        // booting or headless box is not a desktop yet, and the pane says
+        // so by not existing rather than by a spinner that never resolves.
+        if js::get_str(&r, "session") != active
+            || !js::get_str(&r, "image").contains("desktop")
+            || js::get_str(&r, "state") != "ready"
+        {
+            continue;
+        }
+        if id == selected { still = true; }
+        let row = js::obj();
+        js::set_str(&row, "id", &id);
+        js::set_str(&row, "name", &id);
+        js::set_str(&row, "icon", "desktop");
+        js::set_str(&row, "hint", &js::get_str(&r, "state"));
+        rows.push(&row);
+    }
+    let first = js::get_str(&rows.get(0), "id");
+    js::set(&s, "browserSandboxes", &rows.into());
+    if !still {
+        js::set_str(&s, "browserSandboxId", &first);
+        // The old ticket (if any) names a box nobody is looking at.
+        js::set_str(&s, "browserViewerUrl", "");
+    }
+    if !js::get_str(&s, "browserSandboxId").is_empty()
+        && js::get_str(&s, "browserViewerUrl").is_empty()
+    {
+        load_viewer_url(JsValue::UNDEFINED, js_sys::Array::new());
+    }
+    JsValue::UNDEFINED
+}
+
+/// `loadViewerUrl()` — mint a viewer ticket for the selected sandbox.
+///
+/// The ticket is short-lived and single-flow (the sbox-a tile recipe), so
+/// this runs per iframe mount and per selection change, never on a timer.
+/// A response for a selection that has since changed is dropped.
+fn load_viewer_url(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let id = js::get_str(&s, "browserSandboxId");
+    if id.is_empty() || js::get_bool(&s, "viewerFetching") {
+        return JsValue::UNDEFINED;
+    }
+    js::set_bool(&s, "viewerFetching", true);
+    let want = id.clone();
+    rustex1_kit::api::get(&format!("/api/browser/{id}/viewer"), None, move |v| {
+        let s = mjs::store_ref(STORE);
+        js::set_bool(&s, "viewerFetching", false);
+        if js::get_str(&s, "browserSandboxId") != want {
+            return;
+        }
+        let url = js::get_str(&v, "url");
+        if !url.is_empty() {
+            js::set_str(&s, "browserViewerUrl", &url);
+        }
+        mjs::redraw();
+    });
+    JsValue::UNDEFINED
+}
+
+/// `pickBrowserSandbox(id)` — the pane's dropdown: switch boxes. Clears
+/// the ticket so the iframe re-mounts on the next mint (a mount is a
+/// ticket's one flow).
+fn pick_browser_sandbox(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let id = js::arg_str(&args, 0);
+    if id == js::get_str(&s, "browserSandboxId") {
+        return JsValue::UNDEFINED;
+    }
+    js::set_str(&s, "browserSandboxId", &id);
+    js::set_str(&s, "browserViewerUrl", "");
+    js::call(&mjs::store_ref("picker"), "close", &[]);
+    load_viewer_url(JsValue::UNDEFINED, js_sys::Array::new());
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
 fn apply_targets(v: &JsValue) {
     let s = mjs::store_ref(STORE);
     // `automations` rides along because automation writes answer with the
@@ -1734,6 +1845,8 @@ fn apply_targets(v: &JsValue) {
     // An open Sandbox form tracks its container's state in real time (the
     // feed republishes every couple of seconds).
     crate::components::target_form::sync_sandbox_status(&s);
+    // The browser pane's list and ticket follow the same feed.
+    refresh_browser_sandbox(JsValue::UNDEFINED, js_sys::Array::new());
 }
 
 pub(crate) fn apply_sandboxes(value: &JsValue) { apply_targets(value); }
@@ -1915,18 +2028,16 @@ fn rename_tree_row(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// `pickTarget(kind, id)` — the composer's project / worktree /
-/// branch row.
+/// `pickTarget(kind, id)` — the project picker's choice (the composer's
+/// checkout pickers are gone; the session editor's Worktree section owns
+/// the checkout now).
 ///
-/// Records the choice and closes the menu. It does **not** yet persist: the
-/// session-meta fields these map to land with the services behind them, and
-/// writing a `projectId` that no `/api/projects` can resolve would put a
-/// dangling id in the session file.
+/// Records the choice and closes the menu. The project rides the
+/// `/api/projects/assign` path, which persists the filing and answers the
+/// fresh listing.
 fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     let field = match js::arg_str(&args, 0).as_str() {
         "project" => "projectId",
-        "worktree" => "worktreeId",
-        "branch" => "branchId",
         _ => return JsValue::UNDEFINED,
     };
     let value = js::arg_str(&args, 1);
@@ -1934,37 +2045,20 @@ fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::set_str(&s, field, &value);
     js::call(&mjs::store_ref("picker"), "close", &[]);
     mjs::redraw();
-    // The worktree and branch ride the composer-settings path, the
-    // same one the model and allowlist pickers use. They have to be
-    // durable: the seam mounts the session's checkout into the agent's
-    // sandbox from them (PLAN55), so a selection that
-    // lived only in the tab would silently stop applying on reload.
-    if field != "projectId" {
-        let id = js::get_str(&s, "activeId");
-        if !id.is_empty() {
-            js::set_str(&js::get(&s, "session"), field, &value);
-            let payload = js::obj();
-            js::set_str(&payload, "sessionId", &id);
-            js::set_str(&payload, field, &value);
-            rustex1_kit::api::post_json("/api/composer-settings", &payload.into(), |_| {});
-        }
-    }
-    if field == "projectId" {
-        let id = js::get_str(&s, "activeId");
-        if !id.is_empty() {
-            js::set_str(&js::get(&s, "session"), "project", &value);
-            let payload = js::obj();
-            js::set_str(&payload, "sessionId", &id);
-            js::set_str(&payload, "project", &value);
-            api::project_action("assign", &payload.into(), |v| {
-                apply_projects(&js::get(&v, "projects"));
-                api::sessions(|sv| {
-                    let st = mjs::store_ref(STORE);
-                    js::set(&st, "sessions", &js::get(&sv, "sessions"));
-                    mjs::redraw();
-                });
+    let id = js::get_str(&s, "activeId");
+    if !id.is_empty() {
+        js::set_str(&js::get(&s, "session"), "project", &value);
+        let payload = js::obj();
+        js::set_str(&payload, "sessionId", &id);
+        js::set_str(&payload, "project", &value);
+        api::project_action("assign", &payload.into(), |v| {
+            apply_projects(&js::get(&v, "projects"));
+            api::sessions(|sv| {
+                let st = mjs::store_ref(STORE);
+                js::set(&st, "sessions", &js::get(&sv, "sessions"));
+                mjs::redraw();
             });
-        }
+        });
     }
     JsValue::UNDEFINED
 }
@@ -2418,6 +2512,30 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
     js::set_bool(s, "isGroup", agents > 1.0);
 }
 
+/// `openSessionRow(id)` — a project-tree session row click: select the
+/// session and **toggle** the Edit session form for it. The row is the
+/// toggle: clicking the row whose form is showing closes the form and the
+/// right sidebar with it; any other row opens the form for that session.
+fn open_session_row(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let id = js::arg_str(&args, 0);
+    if id.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let s = mjs::store_ref(STORE);
+    let draft = mjs::store_ref("sessionDraft");
+    if js::get_bool(&draft, "open") && js::get_str(&s, "activeId") == id {
+        js::set_bool(&draft, "open", false);
+        js::set_bool(&mjs::store_ref("home"), "asideOpen", false);
+        mjs::redraw();
+        return JsValue::UNDEFINED;
+    }
+    // The form seeds from the session's meta and `previewSession` fetches
+    // that asynchronously — so it opens from the load completion
+    // (`editorOnLoad`), not here.
+    js::set_bool(&s, "editorOnLoad", true);
+    preview_session(JsValue::UNDEFINED, args)
+}
+
 /// `openSessionEditor()` — the pencil beside the presence cluster.
 ///
 /// Seeds the draft from the live conversation — its meta for the five fields,
@@ -2429,40 +2547,9 @@ fn open_session_editor(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let live = mjs::store_ref(STORE);
     let draft = mjs::store_ref("sessionDraft");
     let meta = js::get(&live, "session");
-    // `title` is seeded on its own: sessions made without a name carry no
-    // stored one, and the tree/tab bar then show the server's display
-    // fallback (`title || agent || id`). The form should match the name the
-    // user sees on the row, not an empty box — and typing a real name in
-    // `save()` persists it, which is exactly what renaming is.
-    let mut title = js::get_str(&meta, "title");
-    if title.is_empty() {
-        // The list row carries the server's display name for a title-less
-        // session; on a fresh `+` the list may not have refetched yet, so
-        // the id is the last resort — the server's own fallback chain is
-        // `title || agent || id`, so this never misleads.
-        let row_id = js::get_str(&meta, "id");
-        for r in js_sys::Array::from(&js::get(&live, "sessions")).iter() {
-            if js::get_str(&r, "id") == row_id {
-                title = js::get_str(&r, "title");
-                break;
-            }
-        }
-        if title.is_empty() { title = row_id; }
-    }
-    for (draft_key, meta_key) in [("purpose", "purpose"), ("notes", "notes"), ("routing", "routing")] {
-        js::set_str(&draft, draft_key, &js::get_str(&meta, meta_key));
-    }
-    js::set_str(&draft, "title", &title);
-    // A missing routing never leaves the switch without a side.
-    if js::get_str(&draft, "routing").is_empty() {
-        js::set_str(&draft, "routing", "everyone");
-    }
-    let mh = js::get(&meta, "memoryHigh");
-    if mh.is_null() || mh.is_undefined() || mh.as_f64().is_none() {
-        js::set(&draft, "memoryHigh", &JsValue::NULL);
-    } else {
-        js::set(&draft, "memoryHigh", &mh);
-    }
+    // The fields — including the workspace root and the worktree config —
+    // seed through the draft's own `seed`, the same call the guide makes.
+    js::call(&draft, "seed", &[meta, JsValue::from_str(STORE)]);
     let seats = js_sys::Array::new();
     for p in js_sys::Array::from(&js::get(&live, "others")).iter() {
         let copy = js::obj();
@@ -2475,8 +2562,6 @@ fn open_session_editor(_this: JsValue, _args: js_sys::Array) -> JsValue {
     }
     js::set(&draft, "seats", &seats.into());
     js::set_str(&draft, "inviteHandle", "");
-    js::set_str(&draft, "message", "");
-    js::set_str(&draft, "messageTone", "");
     js::set_bool(&draft, "open", true);
     // One panel at a time: the inspector shows what you last selected.
     let agents = mjs::store_ref("agents");

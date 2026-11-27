@@ -21,7 +21,6 @@ use rustex1_kit::{js, mjs};
 use wasm_bindgen::JsValue;
 
 use crate::components::dropdown;
-use crate::components::picker;
 use crate::components::samples;
 use crate::components::session_state;
 use crate::css;
@@ -285,32 +284,6 @@ pub const CSS: &str = r#"
 
 .mjs-chat .composer-box .dropdown.dd-policy { margin-right: 2px; }
 
-/* ---- the target row ---------------------------------------------
-   Where this session works: project, worktree, branch. It sits
-   OUTSIDE the envelope, under it — these are not part of composing a
-   message, they are the standing context the message will be composed
-   in, and putting them inside the plate would say otherwise.
-
-   No surface of its own: bare chrome on the page, like the reference. */
-.mjs-chat .composer-targets {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-wrap: wrap;
-  padding: 2px 2px 0;
-}
-/* The row is the one place these triggers appear, and it is the full width
-   of the composer, so a long worktree name may have the space a composer-row
-   dropdown may not. */
-.mjs-chat .composer-targets .dropdown-value { max-width: 180px; }
-/* The last two menus sit near the right edge of a narrow sidebar, where a
-   288px panel anchored left would hang off the page. */
-.mjs-chat.mode-sidebar .composer-targets .dd-worktree .picker-menu,
-.mjs-chat.mode-sidebar .composer-targets .dd-branch .picker-menu {
-  left: auto;
-  right: 0;
-}
-
 /* ---- send / stop: one round button ------------------------------ */
 .mjs-chat .composer-box .btn-primary,
 .mjs-chat .composer-box .btn-stop,
@@ -513,9 +486,6 @@ pub fn panel(st: &str) -> Node {
                         .child(Node::icon("arrow-up")),
                 ]),
             ]),
-            // Under the envelope, not in it: the standing context the next
-            // message will be sent with.
-            picker::target_row(st).show("$store.mode.advanced"),
         ]),
     )
 }

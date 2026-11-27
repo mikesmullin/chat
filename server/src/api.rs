@@ -50,9 +50,22 @@ pub(crate) fn angela(port: u16) -> &'static AngelaServer {
         }));
         // Agent-owned sandboxes (PLAN55): angela owns the policy (one
         // container per session → agent, lazily launched), this module owns
-        // the seam (the sbox-b client + worktree bookkeeping).
+        // the seam (the sbox-b client).
         angela::sandbox::set_backend(Box::new(crate::sbox::SboxBackend {
             root: root.clone(),
+        }));
+        // The session-properties gate: a session is turn-ready only when
+        // its workspace root is set and its worktree is provisioned —
+        // checked here, repaired here (the hook may re-provision a
+        // vanished checkout). The deletion hook reaps the session's
+        // checkout: a sandbox is disposable, a worktree is not.
+        let root_check = root.clone();
+        let root_delete = root.clone();
+        angela::session_props::set_check(Arc::new(move |meta| {
+            crate::hostgit::session_worktree_ready(&root_check, meta)
+        }));
+        angela::session_props::set_on_deleted(Arc::new(move |sid| {
+            crate::hostgit::reap_session_worktree(&root_delete, sid)
         }));
         eprintln!(
             "angela embedded · conversations in {}/.angela/conversations.db",
@@ -448,15 +461,13 @@ fn required_capability(req: &Request) -> Option<&'static str> {
     if p.starts_with("/api/sessions/") && p.ends_with("/participants") {
         return Some("session.invite");
     }
-    if matches!(
-        p,
-        "/api/projects/project-add"
-            | "/api/projects/repo-add"
-            | "/api/projects/branch-add"
-            | "/api/projects/worktree-add"
-    ) {
-        return Some("project.create");
-    }
+    // The real mutating checkout routes are `/api/targets/*` (repo-add,
+    // repo-remove, branch-add, worktree-add, worktree-remove) and they
+    // get no Layer-1 capability today: the plan's catalog has no
+    // `worktree.*` verb, and the surrounding table leaves the target
+    // routes ungated — with the sandbox destroy gate applied where the
+    // resource is named (PLAN55). The dead entries this replaced used
+    // routes (`/api/projects/*-add`) that never matched anything.
     None
 }
 
@@ -502,8 +513,39 @@ fn acl_rows(
     (rows, owner)
 }
 
+/// Validate a workspace root the client sent with a session settings body.
+///
+/// A non-empty absolute path that is a directory and carries no
+/// mount-spec characters (`:` and `,`) — the same refusal the worktree
+/// paths get, because the workspace root is a path a container runtime
+/// may be told to mount.
+fn validate_workspace_root(raw: &str) -> Result<std::path::PathBuf, String> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Err("workspace root must not be empty".into());
+    }
+    if !t.starts_with('/') {
+        return Err(format!("workspace root must be absolute: {t}"));
+    }
+    if t.contains(':') || t.contains(',') {
+        return Err(
+            "workspace root cannot contain ':' or ',' — a mount spec is delimited by both".into(),
+        );
+    }
+    let p = std::path::PathBuf::from(t);
+    if !p.is_dir() {
+        return Err(format!("workspace root is not a directory: {t}"));
+    }
+    Ok(p)
+}
+
 /// The dev server's raw `/api/` handler.
 pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
+    // The routes below may pre-process the request body and then fall
+    // through to angela's dispatch with the rewritten body — e.g. the
+    // settings route rewrites a session's worktree CONFIG into a resolved
+    // record before the write lands.
+    let mut pre_processed_body: Option<Vec<u8>> = None;
     // ---- identity, admin and ACL (PLAN44) -------------------------------
     //
     // The gate has already turned anonymous non-loopback traffic away; what
@@ -964,6 +1006,10 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         });
         match result {
             Some(Ok(true)) => {
+                // The row is going away; the worktree the session owned is
+                // not. Reap it before the delete (store.delete also fires
+                // the deletion hook, which reaps again — idempotently).
+                crate::hostgit::reap_session_worktree(&project_root(), id);
                 let server = angela(state.config.port);
                 // Finish the ordinary deletion cleanup, including legacy files.
                 // The PLAN55 sandbox cascade rides `store.delete` — a no-op on
@@ -1308,13 +1354,10 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 "allowlist",
                 "allowlistMode",
                 "allowlistSource",
-                "project",
-                // Where this conversation's work happens. There is no
-                // session sandbox any more (PLAN55 D2): an agent's container
-                // is per (session → agent), owned by the agents plane — so
-                // `sandboxId` is deliberately not a composer setting.
-                "worktreeId",
-                "branchId",
+                // The checkout is no longer a composer setting: it rides
+                // the session settings route, where it is provisioned and
+                // gated, and the project rides the projects route — neither
+                // is a bare id here.
             ] {
                 if let Some(value) = payload.get(key) { patch.insert(key.into(), value.clone()); }
             }
@@ -1332,6 +1375,136 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         let _ = out.json(status, &body);
         return;
     }
+    // ── session settings: the properties gate's input ─────────────────────
+    //
+    // POST /api/sessions/<id>/settings carries the session's workspace
+    // root and its worktree config. The workspace root is validated here;
+    // the worktree CONFIG is resolved here — provisioned, or kept as a
+    // current, still-provisioned record — so the write angela lands is a
+    // record the gate can answer yes to.
+    if req.method == "POST"
+        && req.path.starts_with("/api/sessions/")
+        && req.path.ends_with("/settings")
+    {
+        let rest = &req.path["/api/sessions/".len()..];
+        let (id, sub) = match rest.split_once('/') {
+            Some((id, sub)) => (id, sub),
+            None => (rest, ""),
+        };
+        if !id.is_empty() && sub == "settings" {
+            let root = project_root();
+            let mut body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            if body.get("workspaceRoot").is_some() {
+                let ws = body
+                    .get("workspaceRoot")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if let Err(e) = validate_workspace_root(&ws) {
+                    let _ = out.json(400, &serde_json::json!({"ok": false, "error": e}));
+                    return;
+                }
+                body["workspaceRoot"] = Value::String(ws);
+            }
+            if let Some(wt) = body.get("worktree").and_then(Value::as_object).cloned() {
+                let repo_id = wt.get("repoId").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+                let branch_pattern = wt.get("branchPattern").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+                let path_pattern = wt.get("pathPattern").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+                // A CONFIG from the client carries repoId + branchPattern.
+                // Anything else passes through untouched.
+                if !repo_id.is_empty() && !branch_pattern.is_empty() {
+                    let store = &angela(state.config.port).state.store;
+                    let Some(current_session) = store.load(id) else {
+                        // Nothing to configure — refuse before provisioning,
+                        // so a worktree never outlives the session that
+                        // owns it.
+                        let _ = out.json(404, &serde_json::json!({"ok": false, "error": "not found"}));
+                        return;
+                    };
+                    let current = current_session.get("worktree").cloned();
+                    let keep = current.as_ref().map(|c| {
+                        let obj = c.as_object();
+                        obj.is_some_and(|o| {
+                            o.get("provisioned").and_then(Value::as_bool).unwrap_or(false)
+                                && o.get("repoId").and_then(Value::as_str) == Some(repo_id.as_str())
+                                && o.get("branchPattern").and_then(Value::as_str).unwrap_or("") == branch_pattern
+                                && o.get("pathPattern").and_then(Value::as_str).unwrap_or("") == path_pattern
+                                && o.get("path").and_then(Value::as_str)
+                                    .map(|p| std::path::Path::new(p).is_dir())
+                                    .unwrap_or(false)
+                        })
+                    }).unwrap_or(false);
+                    let resolved = if keep {
+                        // Same CONFIG, same checkout — keep the record
+                        // as it stands; no re-provision, no new {{hex}} draw.
+                        current.unwrap()
+                    } else {
+                        match crate::hostgit::provision_session_worktree(&root, id, &repo_id, &branch_pattern, &path_pattern) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                let _ = out.json(400, &serde_json::json!({"ok": false, "error": e}));
+                                return;
+                            }
+                        }
+                    };
+                    body["worktree"] = resolved;
+                }
+            } else if body.get("worktree").is_some_and(|w| w.is_null()) {
+                // "Remove worktree" — the panel drops the checkout on
+                // purpose. The record clears with the null angela stores;
+                // the checkouts themselves are reaped here, because hostgit
+                // is this module's half.
+                crate::hostgit::reap_session_worktree(&root, id);
+            }
+            pre_processed_body = Some(serde_json::to_vec(&body).unwrap_or_default());
+            // fall through — the rewritten body reaches angela below
+        }
+    }
+
+    // ── deletion: the session owns its worktree ────────────────────────────
+    //
+    // Both delete routes reap the checkout before angela sees the request:
+    // the store's own deletion hook fires on `delete`, but a status-less
+    // row and the bulk clean have no other reap, so the route does it once
+    // and the hook reaps idempotently.
+    if req.method == "DELETE" && req.path.starts_with("/api/sessions/") {
+        let rest = &req.path["/api/sessions/".len()..];
+        // Exactly the session id: deeper paths are not this session's
+        // delete.
+        if !rest.is_empty() && !rest.contains('/') {
+            crate::hostgit::reap_session_worktree(&project_root(), rest);
+        }
+    }
+    if req.method == "DELETE" && req.path == "/api/sessions" {
+        crate::hostgit::reap_all_session_worktrees(&project_root());
+    }
+
+    // ── the browser viewer ─────────────────────────────────────────────────
+    // Thin forward to sbox-b's viewer-ticket endpoint: the URL is sbox-b's
+    // to mint, and this route only carries it back.
+    if req.method == "GET"
+        && req.path.starts_with("/api/browser/")
+        && req.path.ends_with("/viewer")
+    {
+        let rest = &req.path["/api/browser/".len()..];
+        let (id, sub) = match rest.split_once('/') {
+            Some((id, sub)) => (id, sub),
+            None => (rest, ""),
+        };
+        if !id.is_empty() && sub == "viewer" {
+            match crate::sbox::viewer_url(id) {
+                Ok(v) => {
+                    let _ = out.json(200, &v);
+                }
+                Err(e) => {
+                    let _ = out.json(502, &serde_json::json!({"ok": false, "error": e}));
+                }
+            }
+            return;
+        }
+    }
+
     let mut areq = ARequest {
         method: req.method.clone(),
         path: req.path.clone(),
@@ -1341,7 +1514,7 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
             .iter()
             .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
             .collect(),
-        body: req.body.clone(),
+        body: pre_processed_body.clone().unwrap_or_else(|| req.body.clone()),
     };
     let chat = req.method == "POST" && req.path == "/api/chat";
     let mut body: Value = if chat { serde_json::from_slice(&req.body).unwrap_or(Value::Null) } else { Value::Null };

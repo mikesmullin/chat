@@ -39,7 +39,7 @@ use rustex1_kit::h::{lit, m, Node};
 use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
-use crate::components::{presence, validation_info};
+use crate::components::{picker, presence, validation_info};
 use crate::css;
 
 const STORE: &str = "sessionDraft";
@@ -79,6 +79,42 @@ pub const CSS: &str = r#"
   font-size: 13px; color: var(--gray-dim); pointer-events: none;
 }
 :is(#sb, #home) .se-invite-field input { padding-left: 30px; }
+
+/* The Worktree section: its own label + hint above the repo picker, the
+   two pattern inputs stacked beside the same fields as the rest of the
+   form, a note carrying the resolved path, and the action that removes
+   the checkout. */
+:is(#sb, #home) .se-worktree { display: flex; flex-direction: column; gap: 8px; }
+/* The repo picker reads like a text field: full width, same pill shape. */
+:is(#sb, #home) .se-worktree .picker { display: flex; width: 100%; }
+:is(#sb, #home) .se-worktree .dropdown-btn {
+  flex: 1 1 auto; box-sizing: border-box; width: 100%;
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid transparent; border-radius: 8px;
+  padding: 7px 9px; font-size: 13px; line-height: 1.5;
+}
+:is(#sb, #home) .se-worktree .dropdown-btn:hover { background: var(--panel-2); border-color: transparent; }
+:is(#sb, #home) .se-worktree .dropdown-value { flex: 1 1 auto; color: var(--fg); }
+/* The menu opens upward from the bottom of a narrow column, so it hangs
+   off the right edge anchored left — anchor it right, like the deleted
+   composer row's menus did at the composer's right edge. */
+:is(#sb, #home) .se-worktree .picker .picker-menu,
+:is(#sb, #home) .se-project .picker .picker-menu { left: auto; right: 0; }
+/* The same for the Project picker, which shares the form. */
+:is(#sb, #home) .se-project .dropdown { display: flex; width: 100%; }
+:is(#sb, #home) .se-project .dropdown-btn {
+  flex: 1 1 auto; box-sizing: border-box; width: 100%;
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid transparent; border-radius: 8px;
+  padding: 7px 9px; font-size: 13px; line-height: 1.5;
+}
+:is(#sb, #home) .se-project .dropdown-btn:hover { background: var(--panel-2); border-color: transparent; }
+:is(#sb, #home) .se-project .dropdown-value { flex: 1 1 auto; color: var(--fg); }
+:is(#sb, #home) .se-worktree-path {
+  margin: 0; font-family: var(--mono); font-size: 11px; line-height: 1.6;
+  color: var(--gray-dim); overflow-wrap: anywhere;
+}
+:is(#sb, #home) .se-worktree-actions { display: flex; }
 
 .se-editor-demo { width: 340px; }
 "#;
@@ -161,8 +197,67 @@ fn participants() -> Node {
     ])
 }
 
-/// The panel.
-pub fn panel() -> Node {
+/// The project block: the existing `picker::project` brick, wrapped in the
+/// same `ae-field` idiom as the rest of the form. It persists through the
+/// app's own `pickTarget('project', …)` — one brick, one behavior, mounted
+/// here by the page that passes the live store.
+fn project_block(st: &str) -> Node {
+    m("div").class("ae-field se-project").kids(vec![
+        m("label").class("ae-label").kids(vec![
+            m("span").child(lit("Project")),
+            m("span").class("hint").child(lit("the folder this conversation is filed under")),
+        ]),
+        picker::project(st),
+    ])
+}
+
+/// The worktree section: the repo the checkout is provisioned from, the two
+/// patterns that name it, where it lands, and the action that takes it away.
+/// The resolved-path readout reads the session's live record — the server
+/// re-resolves it on save, so the path shown is the path the gate checks.
+fn worktree_section(st: &str) -> Node {
+    let readout = format!(
+        "({st}.session.worktree && {st}.session.worktree.provisioned ? {st}.session.worktree.path : 'will be provisioned on save')"
+    );
+    m("div").class("se-worktree").kids(vec![
+        m("label").class("ae-label").kids(vec![
+            m("span").child(lit("Worktree")),
+            m("span").class("hint").child(lit("provisioned from a repo")),
+        ]),
+        picker::repo(st),
+        field(
+            "Branch pattern",
+            "the branch to check out; {{hex}} draws a fresh suffix",
+            &format!("{ST}.worktreeBranchPattern"),
+            "chat/{{hex}}",
+            0,
+        ),
+        field(
+            "Path pattern",
+            "where the checkout lands",
+            &format!("{ST}.worktreePathPattern"),
+            "{{parent}}/{{repo}}/{{prefix}}-{{hash}}",
+            0,
+        ),
+        m("p").class("se-worktree-path").text(&readout),
+        m("div").class("se-worktree-actions").kids(vec![
+            m("button")
+                .class("ae-btn")
+                .attr("type", "button")
+                .show(&format!("({st}.session.worktree && {st}.session.worktree.provisioned)"))
+                .on("click", &format!("{ST}.removeWorktree()"))
+                .kids(vec![
+                    Node::icon("trash"),
+                    m("span").child(lit("Remove worktree")),
+                ]),
+        ]),
+    ])
+}
+
+/// The panel. `st` is the app store behind the form — `$store.live` in the
+/// app, `$store.samples` in the guide — threaded to the pickers that read
+/// the app's target lists, so the same builder serves both pages.
+pub fn panel(st: &str) -> Node {
     m("div")
         .class("agent-editor session-editor")
         .show(&format!("{ST}.open"))
@@ -216,6 +311,15 @@ pub fn panel() -> Node {
                 .attr("placeholder", "512")
                 .model(&format!("{ST}.memoryHigh")),
         ]),
+        project_block(st),
+        field(
+            "Workspace root",
+            "absolute path — the session's file/shell root on the host",
+            &format!("{ST}.workspaceRoot"),
+            "/workspace/vibe-arcade",
+            0,
+        ),
+        worktree_section(st),
         participants(),
         m("div").class("ae-actions").kids(vec![
             m("span")
@@ -257,11 +361,13 @@ pub fn panel() -> Node {
 /// The guide's mount: the panel with the guide's store behind it.
 pub fn demo() -> Node {
     // The panel hides on its own `open` flag in the inspector; the guide
-    // turns it on at mount so the route still shows the thing itself.
+    // turns it on at mount and seeds the draft from the guide's sample
+    // session, so every section — Project, Workspace root, Worktree —
+    // shows what the app's form shows with data in it.
     m("div")
         .class("se-editor-demo")
-        .init("$store.sessionDraft.open = true")
-        .child(panel())
+        .init("$store.sessionDraft.open = true; $store.sessionDraft.seed($store.samples.session, 'samples')")
+        .child(panel(crate::components::samples::EXPR))
 }
 
 fn say(s: &JsValue, tone: &str, message: &str) {
@@ -379,17 +485,37 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
     } else {
         js::set(&payload, "memoryHigh", &mh);
     }
+    // The session's two properties: the host file/shell root, and the
+    // worktree CONFIG the server provisions on save (its answer carries the
+    // resolved branch/path — the readout reads that back off the session).
+    js::set_str(&payload, "workspaceRoot", &js::get_str(&s, "workspaceRoot").trim().to_string());
+    let repo = js::get_str(&s, "worktreeRepoId").trim().to_string();
+    if !repo.is_empty() {
+        let wt = js::obj();
+        js::set_str(&wt, "repoId", &repo);
+        js::set_str(&wt, "branchPattern", &js::get_str(&s, "worktreeBranchPattern").trim().to_string());
+        js::set_str(&wt, "pathPattern", &js::get_str(&s, "worktreePathPattern").trim().to_string());
+        js::set(&payload, "worktree", &wt);
+    }
     rustex1_kit::api::post_json(
         &format!("/api/sessions/{id}/settings"),
         &payload.into(),
         move |v| {
             let live = mjs::store_ref("live");
+            let s = mjs::store_ref(STORE);
+            // A 4xx with `{ok:false, error}` still reaches this callback —
+            // provisioning refusals (a path taken, a bad ref) must land in
+            // the banner, not in a silent nothing.
+            if js::get(&v, "ok").as_bool() == Some(false) {
+                say(&s, "error", &js::get_str(&v, "error"));
+                mjs::redraw();
+                return;
+            }
             if js::get_str(&live, "activeId") == id {
                 js::set(&live, "session", &js::get(&v, "session"));
             }
             // New title, new tab strip: the tooltip reads the reloaded list.
             js::call(&mjs::store_ref("live"), "loadSessions", &[]);
-            let s = mjs::store_ref(STORE);
             say(&s, "ok", "Saved");
             mjs::redraw();
         },
@@ -437,6 +563,105 @@ fn delete(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+/// `seed(meta, from)` — fill the draft from a session meta object.
+///
+/// One seeding implementation for both pages: the app calls it from
+/// `live::open_session_editor` (which does the orchestration around it —
+/// seats, closing sibling panels, opening the aside), the guide calls it at
+/// mount. `from` names the store the meta belongs to (`live`/`samples`):
+/// the title fallback chain reads that store's session list, because a
+/// nameless session still shows the server's display title on its row.
+fn seed(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let meta = args.get(0);
+    let from = args.get(1).as_string().unwrap_or_else(|| "live".to_string());
+    let s = mjs::store_ref(STORE);
+    // `title` is seeded on its own: sessions made without a name carry no
+    // stored one, and the tree/tab bar then show the server's display
+    // fallback (`title || agent || id`). The form should match the name the
+    // user sees on the row, not an empty box — and typing a real name in
+    // `save()` persists it, which is exactly what renaming is.
+    let mut title = js::get_str(&meta, "title");
+    if title.is_empty() {
+        let row_id = js::get_str(&meta, "id");
+        for r in js_sys::Array::from(&js::get(&mjs::store_ref(&from), "sessions")).iter() {
+            if js::get_str(&r, "id") == row_id {
+                title = js::get_str(&r, "title");
+                break;
+            }
+        }
+        if title.is_empty() { title = row_id; }
+    }
+    js::set_str(&s, "title", &title);
+    js::set_str(&s, "purpose", &js::get_str(&meta, "purpose"));
+    js::set_str(&s, "notes", &js::get_str(&meta, "notes"));
+    let routing = js::get_str(&meta, "routing");
+    js::set_str(&s, "routing", if routing.is_empty() { "everyone" } else { &routing });
+    // Numbers stay numbers: the meta's NULL/number goes straight through,
+    // the same shape `save` sends back.
+    let mh = js::get(&meta, "memoryHigh");
+    if mh.is_null() || mh.is_undefined() || mh.as_f64().is_none() {
+        js::set(&s, "memoryHigh", &JsValue::NULL);
+    } else {
+        js::set(&s, "memoryHigh", &mh);
+    }
+    // The session properties: workspace root, and the worktree config the
+    // server resolves (the record's patterns are what re-save keeps stable —
+    // a fresh {{hex}} is drawn only when these change).
+    js::set_str(&s, "workspaceRoot", &js::get_str(&meta, "workspaceRoot"));
+    let wt = js::get(&meta, "worktree");
+    js::set_str(&s, "worktreeRepoId", &js::get_str(&wt, "repoId"));
+    let bp = js::get_str(&wt, "branchPattern");
+    js::set_str(&s, "worktreeBranchPattern", if bp.trim().is_empty() { "chat/{{hex}}" } else { &bp });
+    let pp = js::get_str(&wt, "pathPattern");
+    js::set_str(&s, "worktreePathPattern", if pp.trim().is_empty() { "{{parent}}/{{repo}}/{{prefix}}-{{hash}}" } else { &pp });
+    js::set_str(&s, "message", "");
+    js::set_str(&s, "messageTone", "");
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+/// The repo picker's pick: write the draft's repo and close the menu —
+/// the same shape every picker's `on_pick` has, but landing on the form's
+/// own field instead of the composer's.
+fn pick_repo(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let id = args.get(0).as_string().unwrap_or_default();
+    js::set_str(&s, "worktreeRepoId", &id);
+    js::call(&mjs::store_ref("dropdown"), "closeIf", &[JsValue::from_str("repo")]);
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+/// `removeWorktree()` — take the session's checkout away deliberately.
+/// `worktree: null` is the settings body's "no worktree" spelling: the
+/// server reaps the session's worktree(s) and answers the cleared meta.
+fn remove_worktree(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let live = mjs::store_ref("live");
+    let id = js::get_str(&live, "activeId");
+    if id.is_empty() {
+        say(&s, "error", "No active session");
+        mjs::redraw();
+        return JsValue::UNDEFINED;
+    }
+    let payload = js::obj();
+    js::set(&payload, "worktree", &JsValue::NULL);
+    rustex1_kit::api::post_json(&format!("/api/sessions/{id}/settings"), &payload.into(), move |v| {
+        let live = mjs::store_ref("live");
+        let s = mjs::store_ref(STORE);
+        if js::get(&v, "ok").as_bool() == Some(false) {
+            say(&s, "error", &js::get_str(&v, "error"));
+        } else {
+            if js::get_str(&live, "activeId") == id {
+                js::set(&live, "session", &js::get(&v, "session"));
+            }
+            say(&s, "ok", "Worktree removed");
+        }
+        mjs::redraw();
+    });
+    JsValue::UNDEFINED
+}
+
 fn store_register() {
     let seats = js_sys::Array::new();
     for (i, (name, icon, accent)) in KNOWN.iter().enumerate() {
@@ -458,11 +683,18 @@ fn store_register() {
         .str("notes", "")
         .str("routing", "everyone")
         .str("memoryHigh", "")
+        .str("workspaceRoot", "")
+        .str("worktreeRepoId", "")
+        .str("worktreeBranchPattern", "chat/{{hex}}")
+        .str("worktreePathPattern", "{{parent}}/{{repo}}/{{prefix}}-{{hash}}")
         .str("inviteHandle", "")
         .str("message", "")
         .str("messageTone", "")
         .val("seats", &seats.into())
         .method("invite", invite)
+        .method("seed", seed)
+        .method("pickRepo", pick_repo)
+        .method("removeWorktree", remove_worktree)
         .method("setRouting", set_routing)
         .method("routingNote", routing_note)
         .method("save", save)

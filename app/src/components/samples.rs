@@ -527,6 +527,33 @@ fn pick_target(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+/// `pickBrowserSandbox(id)` — the pane's dropdown in the guide really
+/// selects (the check moves), but nothing streams: the guide shows the
+/// static states.
+fn pick_browser_sandbox(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    js::set_str(&s, "browserSandboxId", &js::arg_str(&args, 0));
+    js::call(&mjs::store_ref("picker"), "close", &[]);
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+/// The pane's demo rows: two ready headed boxes, picker-shaped like the
+/// app's (the app derives these rows from `sandboxes`; a sample spells
+/// them because a sample has no feed).
+fn browser_rows() -> JsValue {
+    let rows = js_sys::Array::new();
+    for id in ["sbox-sample-1", "sbox-sample-2"] {
+        let r = js::obj();
+        js::set_str(&r, "id", id);
+        js::set_str(&r, "name", id);
+        js::set_str(&r, "icon", "desktop");
+        js::set_str(&r, "hint", "ready");
+        rows.push(&r);
+    }
+    rows.into()
+}
+
 /// The automation form behaves like the app without reaching the real
 /// service: writes land in the samples store so the guide's rail redraws.
 fn save_target_sample(_this: JsValue, args: js_sys::Array) -> JsValue {
@@ -907,8 +934,26 @@ pub fn register() {
         bytes: 9400.0,
     });
 
+    // The session meta the editor demo seeds from — the same shape the
+    // server's `load` answers, so `sessionDraft.seed` reads it unchanged.
     let session = js::obj();
     js::set_num(&session, "contextWindow", 200000.0);
+    js::set_str(&session, "id", "s-1");
+    js::set_str(&session, "title", "darkmarch run");
+    js::set_str(&session, "purpose", "two features, two worktrees, no stepping on toes");
+    js::set_str(&session, "notes", "the guide's sample; inert");
+    js::set_str(&session, "routing", "everyone");
+    js::set_num(&session, "memoryHigh", 67108864.0);
+    js::set_str(&session, "workspaceRoot", "/home/Bob/src/vibe-arcade");
+    let worktree = js::obj();
+    js::set_str(&worktree, "repoId", "r-sample");
+    js::set_str(&worktree, "repoName", "vibe-arcade");
+    js::set_str(&worktree, "branch", "chat/1a2b3c4d");
+    js::set_str(&worktree, "path", "/home/Bob/.angela/worktrees/vibe-arcade/chat-1a2b3c4d-0b82d9328e39ec99");
+    js::set_str(&worktree, "branchPattern", "chat/{{hex}}");
+    js::set_str(&worktree, "pathPattern", "{{parent}}/{{repo}}/{{prefix}}-{{hash}}");
+    js::set_bool(&worktree, "provisioned", true);
+    js::set(&session, "worktree", &worktree);
     let sample_sessions = sessions();
     let initial_tabs = js_sys::Array::new();
     let all = js_sys::Array::from(&sample_sessions);
@@ -928,6 +973,10 @@ pub fn register() {
         .val("icons", &icons.into())
         // ── the composer's target row ─────────────────────────────
         .val("sandboxes", &sandbox_rows())
+        .val("browserSandboxes", &browser_rows())
+        .str("browserSandboxId", "sbox-sample-1")
+        .str("browserViewerUrl", "")
+        .bool("viewerFetching", false)
         .val("sandboxGroups", &crate::components::sandboxes_menu::group_rows(&sandbox_rows()))
         .val("sandboxOpen", &js::obj().into())
         .val("automations", &sample_automations())
@@ -1039,6 +1088,9 @@ pub fn register() {
         .method("saveProject", inert)
         .method("renameTreeRow", rename_tree_row)
         .method("pickTarget", pick_target)
+        .method("pickBrowserSandbox", pick_browser_sandbox)
+        // A sample mints no tickets and streams nothing.
+        .method("loadViewerUrl", inert)
         .method("editTarget", edit_target)
         .method("createTarget", create_target)
         .method("persistComposerSettings", inert)

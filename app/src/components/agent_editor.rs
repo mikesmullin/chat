@@ -404,22 +404,11 @@ pub fn agent_editor() -> Node {
                     .attr("placeholder", "5")
                     .model(&format!("{ST}.draft.maxTurns")),
             ]),
-            // Where the agent's file and shell tools believe the disk begins:
-            // an explicit root, or the project root if left blank. Blank is
-            // the placeholder of the field, not an error. Relative values
-            // resolve under the project root, as `${projectRoot}` expands.
-            field(
-                "Workspace root",
-                "file-io and the shell start here; blank = project root \
-                 — host-only (no effect on sandboxes)",
-                &format!("{ST}.draft.cwd"),
-                "/workspace/blz",
-                0,
-            ),
             // PLAN55 D1: the agent's Containerfile (absolute host path).
-            // Set, and every turn of this agent runs in a container built
-            // from `sbox-<this file's directory>:latest` — one per session,
-            // launched at its first turn there. Empty = the host, unchanged.
+            // Set, and every turn of this agent runs in a container from
+            // that image — one per session, launched at its first turn
+            // there (the file's parent dir names the image; `headed` and
+            // `headless` name the sandbox matrix rows). Empty = the host.
             field(
                 "Containerfile",
                 "absolute host path; empty = runs on the host",

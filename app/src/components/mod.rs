@@ -5,6 +5,7 @@ pub mod agents;
 pub mod agents_menu;
 pub mod approval_card;
 pub mod assistant_card;
+pub mod browser_pane;
 pub mod automation_form;
 pub mod automations_menu;
 pub mod composer;
@@ -77,6 +78,7 @@ pub fn register() {
     settings::register();
     approval_card::register();
     assistant_card::register();
+    browser_pane::register();
     automation_form::register();
     composer::register();
     decision_card::register();

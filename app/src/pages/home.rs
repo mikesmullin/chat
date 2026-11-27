@@ -37,7 +37,7 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::components::{
-    agent_editor, agents_menu, automations_menu, identity_switcher, lightbox, mode_toggle,
+    agent_editor, agents_menu, automations_menu, browser_pane, identity_switcher, lightbox, mode_toggle,
     perf_badge, profile_panel, project_tree, sandboxes_menu, session_editor, session_panel,
     share_dialog, tab, target_form,
 };
@@ -54,24 +54,55 @@ pub const CSS: &str = r#"
    its own, and each content column is a rounded --panel card. */
 #home {
   display: grid;
-  grid-template-columns: 300px 1fr 320px;
+  /* The side columns are user-resizable: the gutters drag `--rail-w` /
+     `--aside-w` (set inline from the `home` store; `initial` when nobody
+     has dragged, so the responsive fallbacks below still apply). A
+     collapsed column zeroes its track outright. */
+  grid-template-columns: var(--rail-w, 300px) 1fr var(--aside-w, 320px);
   height: 100vh;
   height: 100dvh;
   min-height: 0;
+  position: relative;
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans, ui-sans-serif, system-ui, sans-serif);
   transition: grid-template-columns .3s ease-in-out;
 }
+/* Dragging a gutter is 1:1 with the pointer — the easing is for the
+   collapse toggles, not for a resize that follows the mouse. */
+#home.home-resizing { transition: none; }
 /* A collapsed column is gone, not narrow: `display: none` takes it out of
    flow (with explicit `grid-column` below, the rest stay in their tracks),
    and its track collapses to zero so no space is reserved. */
-#home.aside-collapsed { grid-template-columns: 300px 1fr 0px; }
+#home.aside-collapsed { grid-template-columns: var(--rail-w, 300px) 1fr 0px; }
 #home.aside-collapsed .home-aside { display: none; }
-#home.rail-collapsed { grid-template-columns: 0px 1fr 320px; }
+#home.rail-collapsed { grid-template-columns: 0px 1fr var(--aside-w, 320px); }
 #home.rail-collapsed .home-rail { display: none; }
 #home.rail-collapsed .home-col { margin-left: 10px; }
 #home.rail-collapsed.aside-collapsed { grid-template-columns: 0px 1fr 0px; }
+
+/* ---- the resize gutters ----------------------------------------
+   One per seam. The grid has no spare track to give them, so each sits
+   absolutely over the boundary its side's width names — the gutter and
+   the track read the same variable and cannot drift apart. Pointer
+   capture on pointerdown routes every later move/up to the gutter
+   itself, so there are no document-level listeners to manage. */
+.home-gutter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  z-index: 40;
+  background: transparent;
+}
+.home-gutter:hover, .home-gutter:active { background: var(--accent); opacity: .4; }
+.home-gutter.g-left { left: calc(var(--rail-w, 300px) - 3px); }
+.home-gutter.g-right { right: calc(var(--aside-w, 320px) - 3px); }
+#home.rail-collapsed .home-gutter.g-left { display: none; }
+#home.aside-collapsed .home-gutter.g-right { display: none; }
 .home-rail { grid-column: 1; }
 
 /* The sidebar's group rhythm: the visible gap between menu groups (and
@@ -214,12 +245,16 @@ pub const CSS: &str = r#"
    of flow — no component's look is redefined here, so each component keeps
    owning its own rules (its narrow mode lives in its own file). */
 @media (max-width: 1180px) {
-  #home { grid-template-columns: 248px minmax(0, 1fr) 288px; }
-  #home.aside-collapsed { grid-template-columns: 248px minmax(0, 1fr) 0px; }
+  #home { grid-template-columns: var(--rail-w, 248px) minmax(0, 1fr) var(--aside-w, 288px); }
+  #home.aside-collapsed { grid-template-columns: var(--rail-w, 248px) minmax(0, 1fr) 0px; }
+  .home-gutter.g-left { left: calc(var(--rail-w, 248px) - 3px); }
+  .home-gutter.g-right { right: calc(var(--aside-w, 288px) - 3px); }
 }
 @media (max-width: 1020px) {
-  #home { grid-template-columns: 216px minmax(0, 1fr) 256px; }
-  #home.aside-collapsed { grid-template-columns: 216px minmax(0, 1fr) 0px; }
+  #home { grid-template-columns: var(--rail-w, 216px) minmax(0, 1fr) var(--aside-w, 256px); }
+  #home.aside-collapsed { grid-template-columns: var(--rail-w, 216px) minmax(0, 1fr) 0px; }
+  .home-gutter.g-left { left: calc(var(--rail-w, 216px) - 3px); }
+  .home-gutter.g-right { right: calc(var(--aside-w, 256px) - 3px); }
 }
 /* Narrow: the rail becomes a 60px icon strip and the aside becomes an overlay
    driven by the same store flag as ever — anything that opens it (agent
@@ -228,6 +263,8 @@ pub const CSS: &str = r#"
    is `display: none` when collapsed, so a reserved track holds nothing — it
    was 48px of dead gap beside the transcript, not a strip. */
 @media (max-width: 900px) {
+  /* Resizing is meaningless at overlay widths: the seams are gone. */
+  .home-gutter { display: none; }
   /* `.aside-collapsed` is spelled out alongside the bare `#home`, and it is
      not redundant: the 1020px block above sets `#home.aside-collapsed`, which
      is id+class (0,2,0) and so outranks a bare `#home` (0,1,0) here no matter
@@ -288,7 +325,9 @@ fn rail() -> Node {
                     ))
                     .child(project_tree::tree(
                         LIVE,
-                        &format!("{LIVE}.previewSession({{}})"),
+                        // A session row is the Edit-session-form toggle as
+                        // well as the selection (openSessionRow).
+                        &format!("{LIVE}.openSessionRow({{}})"),
                         &format!("{LIVE}.createTarget('project')"),
                     )),
                 m("div").class("home-agents")
@@ -397,11 +436,15 @@ fn aside() -> Node {
             // The inspector: contextual, so its contents are whatever is
             // selected elsewhere. Today that is an agent definition.
             m("div").class("home-aside-body").kids(vec![
+                // The sandbox desktop sits above the inspector forms: it is
+                // not a form, and it answers "what is the box doing" while
+                // the forms answer "what is this session".
+                browser_pane::panel(LIVE),
                 agent_editor::agent_editor(),
                 agent_editor::settings_panel(),
                 profile_panel::panel(),
                 target_form::panel(),
-                session_editor::panel(),
+                session_editor::panel(LIVE),
                 share_dialog::panel(),
             ]),
         ])
@@ -420,10 +463,137 @@ pub fn shell() -> Node {
         .bind(
             "class",
             &format!(
-                "(($store.{STORE}.asideOpen ? '' : 'aside-collapsed') + ($store.{STORE}.railOpen ? '' : ' rail-collapsed'))"
+                "(($store.{STORE}.asideOpen ? '' : 'aside-collapsed') + ($store.{STORE}.railOpen ? '' : ' rail-collapsed') + ($store.{STORE}.dragSide ? ' home-resizing' : ''))"
             ),
         )
-        .kids(vec![rail(), main_col(), aside(), lightbox::lightbox()])
+        // The gutters drag these two; `initial` keeps the responsive
+        // fallbacks for a width nobody has chosen yet. Reads go through
+        // `$store.home.*` — the tracked form, so a drag redraws the seam.
+        .bind(
+            "style",
+            &format!(
+                "('--rail-w:' + ($store.{STORE}.railWidth ? $store.{STORE}.railWidth + 'px' : 'initial') + '; --aside-w:' + ($store.{STORE}.asideWidth ? $store.{STORE}.asideWidth + 'px' : 'initial'))"
+            ),
+        )
+        .kids(vec![rail(), gutter("left"), main_col(), gutter("right"), aside(), lightbox::lightbox()])
+}
+
+/// One resize gutter: the thin drag strip over a column seam. Pointer
+/// capture on pointerdown means the later move/up events arrive here even
+/// when the pointer is dragged past the strip — no document listeners.
+fn gutter(side: &str) -> Node {
+    m("div")
+        .class(&format!("home-gutter g-{side}"))
+        .attr("title", "drag to resize")
+        .on("pointerdown", &format!("$store.home.gutterDown('{side}', $event)"))
+        .on("pointermove", "$store.home.gutterMove($event)")
+        .on("pointerup", "$store.home.gutterUp($event)")
+        .on("pointercancel", "$store.home.gutterUp($event)")
+}
+
+thread_local! {
+    static DRAG: std::cell::RefCell<Drag> = std::cell::RefCell::new(Drag::default());
+}
+
+#[derive(Default)]
+struct Drag {
+    /// Which seam: "left" (the rail) or "right" (the aside).
+    side: String,
+    x: f64,
+    start_w: f64,
+}
+
+/// `gutterDown(side, event)` — begin a resize. The width the drag starts
+/// from is the column's live width (not the store's, which may still be
+/// the responsive default), so the first drag never jumps.
+fn gutter_down(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let side = js::arg_str(&args, 0);
+    if side != "left" && side != "right" {
+        return JsValue::UNDEFINED;
+    }
+    let ev = args.get(1);
+    js::call(&ev, "preventDefault", &[]);
+    let col = if side == "left" { ".home-rail" } else { ".home-aside" };
+    let doc = js::get(&js::global(), "document");
+    let el = js::call(&doc, "querySelector", &[JsValue::from_str(col)]);
+    let rect = if js::is_missing(&el) { JsValue::UNDEFINED } else { js::call(&el, "getBoundingClientRect", &[]) };
+    let start_w = js::get_num(&rect, "width");
+    DRAG.with(|d| {
+        *d.borrow_mut() = Drag { side: side.clone(), x: js::get_num(&ev, "clientX"), start_w }
+    });
+    let s = mjs::store_ref(STORE);
+    js::set_str(&s, "dragSide", &side);
+    let target = js::get(&ev, "currentTarget");
+    if !js::is_missing(&target) {
+        js::call(&target, "setPointerCapture", &[js::get(&ev, "pointerId")]);
+    }
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+/// `gutterMove(event)` — follow the pointer. Left gutter: width grows with
+/// the drag; right gutter: width grows against it. Bounded so a column can
+/// be neither crushed nor swallow the transcript.
+fn gutter_move(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let ev = args.get(0);
+    let (side, x0, w0) = DRAG.with(|d| {
+        let g = d.borrow();
+        (g.side.clone(), g.x, g.start_w)
+    });
+    if side.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let delta = js::get_num(&ev, "clientX") - x0;
+    let w = if side == "left" { w0 + delta } else { w0 - delta };
+    let w = w.clamp(220.0, 1000.0);
+    let s = mjs::store_ref(STORE);
+    if side == "left" {
+        js::set_num(&s, "railWidth", w);
+    } else {
+        js::set_num(&s, "asideWidth", w);
+    }
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+/// `gutterUp(event)` — end the resize and remember it: a width is a
+/// preference, so it survives reloads the same way the rail sections do.
+fn gutter_up(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let side = DRAG.with(|d| {
+        let mut g = d.borrow_mut();
+        let s = std::mem::take(&mut g.side);
+        s
+    });
+    if side.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let s = mjs::store_ref(STORE);
+    js::set_str(&s, "dragSide", "");
+    let (key, v) = if side == "left" {
+        ("chat.home.railWidth", js::get_num(&s, "railWidth"))
+    } else {
+        ("chat.home.asideWidth", js::get_num(&s, "asideWidth"))
+    };
+    if v > 0.0 {
+        let storage = js::get(&js::global(), "localStorage");
+        js::call(&storage, "setItem", &[JsValue::from_str(key), JsValue::from_str(&format!("{v:.0}"))]);
+    }
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
+/// A remembered column width, or 0 = "layout default" (the responsive
+/// fallbacks decide, until the user drags once).
+fn saved_width(key: &str) -> f64 {
+    let storage = js::get(&js::global(), "localStorage");
+    let v = js::call(&storage, "getItem", &[JsValue::from_str(key)]);
+    if js::is_missing(&v) || v.is_null() {
+        return 0.0;
+    }
+    v.as_string()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|n| *n > 0.0)
+        .unwrap_or(0.0)
 }
 
 /// `toggleAside`: flip the right column open/closed.
@@ -489,12 +659,20 @@ pub fn register() {
     // answer. Its toggle in the tab strip stays visible either way.
     d.bool("asideOpen", false)
         .bool("railOpen", true)
+        .num("railWidth", saved_width("chat.home.railWidth"))
+        .num("asideWidth", saved_width("chat.home.asideWidth"))
+        // Which seam a live drag is on ("" = none) — the class that kills
+        // the collapse easing while a gutter follows the pointer.
+        .str("dragSide", "")
         .bool("projectsOpen", section_open("projectsOpen"))
         .bool("agentsOpen", section_open("agentsOpen"))
         .bool("sandboxesOpen", section_open("sandboxesOpen"))
         .bool("automationsOpen", section_open("automationsOpen"))
         .method("toggleAside", toggle_aside)
         .method("toggleRail", toggle_rail)
-        .method("toggleSection", toggle_section);
+        .method("toggleSection", toggle_section)
+        .method("gutterDown", gutter_down)
+        .method("gutterMove", gutter_move)
+        .method("gutterUp", gutter_up);
     mjs::store(STORE, &d.finish());
 }

@@ -432,19 +432,28 @@ pub fn picker(p: &Picker) -> Node {
                 .attr("placeholder", p.search)
                 .model(&format!("$store.{STORE}.query")),
         ]),
-        m("div").class("picker-list").kids(vec![
-            null_row(p),
-            item_row(p),
-            m("p")
-                .class("picker-empty")
-                .show(&format!(
-                    "$store.{STORE}.match({}).length === 0",
-                    p.items
-                ))
-                .text(&format!(
-                    "($store.{STORE}.query ? 'No matches' : 'Nothing here yet')"
-                )),
-        ]),
+        m("div").class("picker-list").kids({
+            // The null row exists only where "nothing" is an answer; a
+            // picker with `null: None` has no such row — a row labelled
+            // "None" would be a choice nobody offered.
+            let mut rows: Vec<Node> = Vec::new();
+            if p.null.is_some() {
+                rows.push(null_row(p));
+            }
+            rows.push(item_row(p));
+            rows.push(
+                m("p")
+                    .class("picker-empty")
+                    .show(&format!(
+                        "$store.{STORE}.match({}).length === 0",
+                        p.items
+                    ))
+                    .text(&format!(
+                        "($store.{STORE}.query ? 'No matches' : 'Nothing here yet')"
+                    )),
+            );
+            rows
+        }),
     ];
     if !p.actions.is_empty() {
         menu.push(
@@ -517,6 +526,35 @@ pub fn project(st: &str) -> Node {
             icon: "folder-plus",
             label: "Create new project",
             run: &format!("{st}.createTarget('project')"),
+        }],
+    })
+}
+
+/// Which repo the session's worktree is provisioned from.
+///
+/// Lives in the session editor, so the pick lands on the editor's draft
+/// (`sessionDraft.worktreeRepoId`) while the list is the app's registered
+/// repos — one picker brick, the form's own value. "Open from folder" is
+/// the only way a clone enters the list (there is no scan), so the footer
+/// carries it here too.
+pub fn repo(st: &str) -> Node {
+    picker(&Picker {
+        key: "repo",
+        icon: "folder",
+        extra: "dd-repo",
+        search: "Search repos…",
+        items: &format!("{st}.repos"),
+        value: "$store.sessionDraft.worktreeRepoId",
+        null: Some(("No repo", "no worktree")),
+        null_icon: "folder",
+        on_pick: "$store.sessionDraft.pickRepo({})",
+        // No per-row edit: a registered repo is a path, and the path form
+        // is the "Open from folder" action below.
+        on_edit: "",
+        actions: &[Action {
+            icon: "folder-open",
+            label: "Open from folder",
+            run: &format!("{st}.createTarget('repo')"),
         }],
     })
 }

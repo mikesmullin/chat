@@ -161,6 +161,7 @@ dependencies = [
  "rusqlite",
  "rustex1-devserver",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -8,8 +8,9 @@
 //! module is the **seam**: where the image and the mounts are decided, and
 //! the only sbox-b client there is. `create` takes the image an agent's
 //! Containerfile names (`sbox-<dir>:latest`, PLAN55 D7), mounts the
-//! composer-selected checkout at angela's fixed guest path, and passes the
-//! host's GPU devices through (D8/D12). There are no friendly names
+//! session's provisioned worktree at angela's fixed guest path (an empty
+//! path mounts nothing), and passes the host's GPU devices through
+//! (D8/D12). There are no friendly names
 //! (D3/D10): the container's id is the identity, full stop.
 //!
 //! ## Chat is a second front door, not a new API
@@ -22,8 +23,10 @@
 //!
 //! What chat adds is the half sbox-b has no concept of — the **worktree**.
 //! sbox-b takes host bind mounts and knows nothing about where one came
-//! from, so [`create`] asks [`crate::hostgit`] for the path and tells it
-//! which sandbox claimed it, and [`destroy`] reaps it afterwards.
+//! from. The session owns its checkout: its path arrives from the session
+//! record and is never claimed or reaped by the container — a sandbox
+//! created from a worktree leaves the checkout alone when it dies.
+//! Reaping is `hostgit`'s half, at session delete.
 //!
 //! ## Why a hand-rolled client
 //!
@@ -61,7 +64,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(180);
 ///
 /// `Connection: close` so the body ends at EOF and there is no chunked
 /// decoding to get wrong — this talks to one service, once per call.
-fn request(method: &str, path: &str, body: Option<&Value>) -> Result<Value, String> {
+pub(crate) fn request(method: &str, path: &str, body: Option<&Value>) -> Result<Value, String> {
     let (host, port) = base();
     let addr = format!("{host}:{port}");
     let sock = addr
@@ -109,12 +112,14 @@ fn request(method: &str, path: &str, body: Option<&Value>) -> Result<Value, Stri
     if (200..300).contains(&status) {
         return Ok(parsed);
     }
-    // sbox-b answers errors as `{code, message}` (or the nested
-    // `{error:{code,message}}` envelope); surface its wording rather than
-    // inventing our own, because it is the half that knows why.
+    // sbox-b answers errors as `{"error": "<message>"}` (the plain string)
+    // or the `{code, message}` / `{error:{code,message}}` envelopes; surface
+    // its wording rather than inventing our own, because it is the half that
+    // knows why.
     let msg = parsed
         .get("message")
         .and_then(Value::as_str)
+        .or_else(|| parsed.get("error").and_then(Value::as_str))
         .or_else(|| {
             parsed
                 .get("error")
@@ -249,32 +254,55 @@ fn gpu_setup() -> (Vec<String>, Vec<(String, String)>) {
 }
 
 /// The one place the create payload is built — the seam. `image` is the
-/// agent's image (PLAN55 D7); `worktree_id`/`branch_id` are the session's
-/// checkout selection (empty = mount nothing).
+/// agent's image (a sandbox kind or an admin reference);
+/// `worktree_path` is the session's checkout (empty = mount nothing), and
+/// `repo_git_dir` is its repo's `.git` directory (empty = no git mount) —
+/// mounted at its own absolute path so the checkout's gitdir pointer, an
+/// absolute host path, resolves inside the guest and git works there.
 ///
-/// The mount is read-write: the point of attaching a worktree is that the
-/// agent works in it. Creation is **async** on sbox-b's side — it answers 202
-/// and boots in the background — so this returns as soon as the record
-/// exists; angela's sandbox module blocks the turn until the box is `ready`.
+/// The mounts are read-write: the point of attaching a worktree is that
+/// the agent works in it. Creation is **async** on sbox-b's side — it
+/// answers 202 and boots in the background — so this returns as soon as
+/// the record exists; angela's sandbox module blocks the turn until the
+/// box is `ready`.
 pub fn create(
     root: &Path,
     image: &str,
-    worktree_id: &str,
-    branch_id: &str,
+    worktree_path: &str,
+    repo_git_dir: &str,
 ) -> Result<String, String> {
-    let payload = json!({ "image": image, "network": true });
+    // 8 CPUs, not the 4-CPU default: the guest renders WebGL through
+    // SwiftShader (software), which scales with cores — a game recording at
+    // 4 cores is a slideshow, at 8 it is watchable.
+    let payload = json!({ "image": image, "network": true, "resources": { "cpus": 8 } });
 
-    let mount = crate::hostgit::mount_for(root, worktree_id, branch_id);
     let mut volumes: Vec<Value> = Vec::new();
-    if let Some((path, _)) = &mount {
+    if !worktree_path.trim().is_empty() {
+        if !Path::new(worktree_path).is_dir() {
+            return Err(format!("worktree path is not a directory: {worktree_path}"));
+        }
         volumes.push(json!({
             "type": "bind",
-            "path": path,
+            "path": worktree_path,
             // One fixed guest path, so an agent's instructions do not have
             // to vary with which repo happens to be mounted. The constant
             // is angela's because the other half of the bargain is there:
             // the `## Environment` section tells the agent to work here.
             "mount": angela::harness::SANDBOX_MOUNT,
+            "mode": "rw",
+        }));
+    }
+    if !repo_git_dir.trim().is_empty() {
+        if !Path::new(repo_git_dir).is_dir() {
+            return Err(format!("repo git dir is not a directory: {repo_git_dir}"));
+        }
+        volumes.push(json!({
+            "type": "bind",
+            "path": repo_git_dir,
+            // At its OWN absolute path on purpose: the checkout's `.git`
+            // file names this directory by that exact host path, so the
+            // guest must see it there.
+            "mount": repo_git_dir,
             "mode": "rw",
         }));
     }
@@ -330,14 +358,17 @@ pub fn create(
         Err(e) => return Err(e),
     };
 
-    // Tie the checkout to the box, so destroying the box removes it. Only a
-    // worktree is claimed — a plain repo was here first and is not ours.
-    if let Some((_, wt)) = &mount {
-        if !wt.is_empty() {
-            crate::hostgit::claim_worktree(root, wt, &id);
-        }
-    }
+    // The checkout is the session's — the path arrived from its record,
+    // and the container never owns or claims it, so the root is not used
+    // here: nothing is tied to the sandbox anymore.
+    let _ = root;
     Ok(id)
+}
+
+/// `GET /api/containers/<id>/viewer` — a fresh viewer ticket URL for the
+/// container, for the caller to answer verbatim.
+pub(crate) fn viewer_url(id: &str) -> Result<Value, String> {
+    request("GET", &format!("/api/containers/{id}/viewer"), None)
 }
 
 /// A sandbox's state as sbox-b reports it (`ready`, `starting`, …); `None`
@@ -367,17 +398,13 @@ pub fn rows() -> Result<Vec<SandboxRow>, String> {
         .collect())
 }
 
-/// Destroy a sandbox, then reap the worktree it was holding.
-///
-/// In that order: if sbox-b refuses, the checkout is still mounted into a
-/// live container and removing it would pull the floor out from under a
-/// running agent.
-pub fn destroy(root: &Path, id: &str) -> Result<(), String> {
+/// Destroy a sandbox. Destroying one sandbox never reaps the checkout —
+/// the session owns the worktree; `hostgit` reaps it at session delete.
+pub fn destroy(_root: &Path, id: &str) -> Result<(), String> {
     if id.trim().is_empty() {
         return Err("which sandbox?".into());
     }
     request("DELETE", &format!("/api/orchestration/sandboxes/{id}"), None)?;
-    crate::hostgit::forget_for_sandbox(root, id);
     Ok(())
 }
 
@@ -411,8 +438,8 @@ fn runtime_bin() -> String {
 }
 
 impl angela::sandbox::Backend for SboxBackend {
-    fn create(&self, image: &str, worktree_id: &str, branch_id: &str) -> Result<String, String> {
-        create(&self.root, image, worktree_id, branch_id)
+    fn create(&self, image: &str, worktree_path: &str, repo_git_dir: &str) -> Result<String, String> {
+        create(&self.root, image, worktree_path, repo_git_dir)
     }
     fn state(&self, id: &str) -> Option<String> {
         state(id)

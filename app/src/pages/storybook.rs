@@ -63,7 +63,7 @@ use rustex1_kit::{js, lifecycle, Runtime};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use crate::components::{
-    agents_menu, approval_card, assistant_card, automation_form, automations_menu, composer, decision_card,
+    agents_menu, approval_card, assistant_card, automation_form, automations_menu, browser_pane, composer, decision_card,
     samples, mode_toggle,
     dropdown, error_card, fold_card, identity_switcher, picker, project_tree, prompt_card, queued_card, rail_head,
     share_dialog,
@@ -187,6 +187,13 @@ pub fn register(rt: &mut Runtime) {
                 Node::host("uiCounter", &[]).bind("value", "128"),
             ]);
         route_def("route /storybook/counter", "Counter", content)
+    });
+
+    // browser pane: the sandbox desktop over the samples store (the
+    // placeholder/minted states — a sample streams nothing), plus the
+    // empty state a session without a headed sandbox sees.
+    rt.route("/storybook/browser-pane", "Browser Pane", |_| {
+        route_def("route /storybook/browser-pane", "Browser Pane", browser_pane::demo())
     });
 
     // standalone fixed-size rail.
