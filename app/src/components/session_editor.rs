@@ -217,12 +217,12 @@ fn project_block(st: &str) -> Node {
 /// re-resolves it on save, so the path shown is the path the gate checks.
 fn worktree_section(st: &str) -> Node {
     let readout = format!(
-        "({st}.session.worktree && {st}.session.worktree.provisioned ? {st}.session.worktree.path : 'will be provisioned on save')"
+        "({ST}.worktreeRepoId ? ({st}.session.worktree && {st}.session.worktree.provisioned ? {st}.session.worktree.path : 'will be provisioned on save') : 'no worktree — this session does not manage git')"
     );
     m("div").class("se-worktree").kids(vec![
         m("label").class("ae-label").kids(vec![
             m("span").child(lit("Worktree")),
-            m("span").class("hint").child(lit("provisioned from a repo")),
+            m("span").class("hint").child(lit("optional — pick a repo, or none")),
         ]),
         picker::repo(st),
         field(
@@ -231,14 +231,18 @@ fn worktree_section(st: &str) -> Node {
             &format!("{ST}.worktreeBranchPattern"),
             "chat/{{hex}}",
             0,
-        ),
+        )
+        // Nothing to configure without a repo: "No repo" means this session
+        // does not manage git, and its sandbox mounts nothing.
+        .show(&format!("{ST}.worktreeRepoId")),
         field(
             "Path pattern",
             "where the checkout lands",
             &format!("{ST}.worktreePathPattern"),
             "{{parent}}/{{repo}}/{{prefix}}-{{hash}}",
             0,
-        ),
+        )
+        .show(&format!("{ST}.worktreeRepoId")),
         m("p").class("se-worktree-path").text(&readout),
         m("div").class("se-worktree-actions").kids(vec![
             m("button")
@@ -314,7 +318,7 @@ pub fn panel(st: &str) -> Node {
         project_block(st),
         field(
             "Workspace root",
-            "absolute path — the session's file/shell root on the host",
+            "optional — absolute path; blank falls back to the project root",
             &format!("{ST}.workspaceRoot"),
             "/workspace/vibe-arcade",
             0,
@@ -490,7 +494,13 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
     // resolved branch/path — the readout reads that back off the session).
     js::set_str(&payload, "workspaceRoot", &js::get_str(&s, "workspaceRoot").trim().to_string());
     let repo = js::get_str(&s, "worktreeRepoId").trim().to_string();
-    if !repo.is_empty() {
+    if repo.is_empty() {
+        // "No repo": this session does not manage git, and a session that
+        // does not manage git keeps no checkout. The null is the settings
+        // body's spelling for exactly that — the same thing Remove worktree
+        // sends, so the two spellings cannot disagree.
+        js::set(&payload, "worktree", &JsValue::NULL);
+    } else {
         let wt = js::obj();
         js::set_str(&wt, "repoId", &repo);
         js::set_str(&wt, "branchPattern", &js::get_str(&s, "worktreeBranchPattern").trim().to_string());

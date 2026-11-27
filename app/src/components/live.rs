@@ -73,6 +73,19 @@ fn open_session_by_id(id: &str) {
         }
         js::set(&s, "messages", &msgs.clone().into());
         js::set(&s, "session", &js::get(&v, "session"));
+        // Pending work is not history: the queue comes with the transcript
+        // or not at all.
+        let queue = js::get(&v, "queue");
+        let empty = empty_queue();
+        js::set(
+            &s,
+            "queue",
+            if js::is_missing(&queue) || queue.is_null() {
+                &empty
+            } else {
+                &queue
+            },
+        );
         let meta = js::get(&v, "session");
         let model = js::get_str(&meta, "model");
         if !model.is_empty() {
@@ -155,6 +168,96 @@ fn clear_roster(s: &JsValue) {
     js::set_num(s, "agentCount", 0.0);
     js::set_bool(s, "isGroup", false);
     js::set_str(s, "cursor", "");
+}
+
+/// The queue with nothing in it — the shape every read of it expects.
+fn empty_queue() -> JsValue {
+    let q = js::obj();
+    js::set(&q, "items", &js_sys::Array::new().into());
+    js::set_str(&q, "reason", "");
+    q.into()
+}
+
+/// Put a just-sent message in the queue card, before the server has even
+/// seen it. The id is local and never travels: dequeuing takes the server's.
+fn queue_locally(s: &JsValue, content: &str) {
+    let queue = js::get(s, "queue");
+    let items = js_sys::Array::from(&js::get(&queue, "items"));
+    let item = js::obj();
+    js::set_str(&item, "id", &format!("local-{}", items.length()));
+    js::set_str(&item, "text", content);
+    js::set_str(&item, "reason", "waiting to run");
+    items.push(&item);
+    let next = js::obj();
+    js::set(&next, "items", &items.into());
+    js::set_str(&next, "reason", "waiting to run");
+    js::set(s, "queue", &next.into());
+}
+
+/// The `queues` topic: the waiting messages of every session. The
+/// transcript draws the active session's — a queued message is live state
+/// and this is the only place it is ever stored client-side.
+pub fn apply_queue(value: JsValue) {
+    let s = mjs::store_ref(STORE);
+    let active = js::get_str(&s, "activeId");
+    let q = js::get(&js::get(&value, "queues"), &active);
+    let empty = empty_queue();
+    js::set(
+        &s,
+        "queue",
+        if js::is_missing(&q) || q.is_null() {
+            &empty
+        } else {
+            &q
+        },
+    );
+    mjs::redraw();
+}
+
+/// `dequeue(itemId)` — take a queued message back before it runs.
+///
+/// The text comes back to the composer (it was typed and never said), and
+/// the queue's own snapshot from the feed takes the row off the card. There
+/// is nothing to remove from history: a queued message was never in it.
+fn dequeue(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let item = js::arg_str(&args, 0);
+    let id = js::get_str(&s, "activeId");
+    if id.is_empty() || item.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let item_id = item.clone();
+    crate::api::dequeue(&id, &item, move |v| {
+        let s = mjs::store_ref(STORE);
+        if js::get(&v, "ok").as_bool() == Some(true) {
+            let text = js::get_str(&v, "text");
+            if !text.is_empty() {
+                // The message goes back where it was typed. A draft written
+                // since is kept — both are the user's words.
+                let draft = js::get_str(&s, "draft");
+                let back = if draft.trim().is_empty() {
+                    text
+                } else {
+                    format!("{text}\n{draft}")
+                };
+                js::set_str(&s, "draft", &back);
+            }
+            // Off the card at once; the feed's snapshot agrees a moment later.
+            let queue = js::get(&s, "queue");
+            let items = js_sys::Array::new();
+            for row in js_sys::Array::from(&js::get(&queue, "items")).iter() {
+                if js::get_str(&row, "id") != item_id {
+                    items.push(&row);
+                }
+            }
+            let next = js::obj();
+            js::set(&next, "items", &items.into());
+            js::set_str(&next, "reason", &js::get_str(&queue, "reason"));
+            js::set(&s, "queue", &next.into());
+        }
+        mjs::redraw();
+    });
+    JsValue::UNDEFINED
 }
 
 fn clear_stream(s: &JsValue) {
@@ -354,7 +457,9 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
         }
         content.push_str(&format!("![image]({image})"));
     }
-    if content.is_empty() || js::get_bool(&s, "waiting") || owns_turn(&js::get_str(&s, "activeId")) {
+    // No `waiting` guard: a message sent while another runs simply queues
+    // behind it, and the "waiting for" card shows the line.
+    if content.is_empty() {
         return JsValue::UNDEFINED;
     }
     // A session you are talking in is one you mean to keep: submitting
@@ -381,19 +486,19 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let turn: JsValue = turn.into();
     OWN_TURNS.with(|t| t.borrow_mut().push(turn.clone()));
 
-    // Echo the prompt immediately: the turn is already durable server-side,
-    // and waiting for the round trip would make the UI feel dead.
+    // No user prompt card: the message is queued first and the "waiting
+    // for" card draws it — until its turn starts, it is pending work, not
+    // something that was said. The local row is the queue's own shape, so
+    // the server's first snapshot replaces it rather than doubling it.
     crate::components::composer::reset_history(&s);
-    push_message(&s, "user", &content, "");
+    queue_locally(&s, &content);
     js::set_str(&s, "draft", "");
     js::set_str(&s, "image", "");
-    js::set_bool(&s, "waiting", true);
     js::set_bool(&s, "stopping", false);
     js::set_bool(&s, "stopUnconfirmed", false);
     js::set_bool(&s, "stopPending", false);
     js::set(&s, "approvals", &js_sys::Array::new().into());
     apply_cached_approvals();
-    clear_stream(&s);
     // Sending is an explicit "show me the bottom", even if the reader had
     // scrolled up a moment ago.
     pin_to_bottom();
@@ -521,7 +626,8 @@ pub(crate) fn receive_turn_snapshot(snapshot: JsValue) {
     if id.is_empty() { return; }
     let turn_id = js::get_str(&snapshot, "turnId");
     for row in js_sys::Array::from(&js::get(&snapshot, "rows")).iter() {
-        if js::get_str(&row, "type") == "done" {
+        // A dequeued request never ran: nothing completed.
+        if js::get_str(&row, "type") == "done" && !js::get_bool(&row, "dequeued") {
             crate::components::notification_toggle::completed(&id, &turn_id, None);
         }
     }
@@ -537,7 +643,7 @@ pub(crate) fn receive_turn_event(event: JsValue) {
     let id = js::get_str(&event, "sessionId");
     let turn_id = js::get_str(&event, "turnId");
     let row = js::get(&event, "row");
-    if js::get_str(&row, "type") == "done" {
+    if js::get_str(&row, "type") == "done" && !js::get_bool(&row, "dequeued") {
         crate::components::notification_toggle::completed(&id, &turn_id, None);
     }
     let cached = TURNS.with(|t| {
@@ -575,14 +681,19 @@ fn replay_active_turn(id: &str) -> bool {
     for row in baseline.iter() { add_html(&row); }
     js::set(&s, "messages", &baseline.into());
     clear_stream(&s);
-    js::set_bool(&s, "waiting", true);
-    let prompt = js::get_str(&turn, "prompt");
-    if !prompt.is_empty() { push_message(&s, "user", &prompt, ""); }
+    // No echo of the prompt: the turn's own user card row carries it, and
+    // while a message is still queued there is no row at all — it is not
+    // history yet. `waiting` follows the live rule: a turn is running once
+    // its message has left the queue, never while it merely waits.
     let mut done = false;
+    let mut started = false;
     for row in js_sys::Array::from(&js::get(&turn, "rows")).iter() {
         done |= js::get_str(&row, "type") == "done";
+        let card = js::get(&row, "card");
+        started |= js::get_str(&row, "type") == "card" && js::get_str(&card, "kind") == "user";
         on_row(&row);
     }
+    js::set_bool(&s, "waiting", started && !done);
     if done { TURNS.with(|t| { t.borrow_mut().remove(id); }); }
     done
 }
@@ -626,7 +737,6 @@ fn on_row(row: &JsValue) {
             if !id.is_empty() {
                 add_open_id(&id);
                 set_active(&s, &id);
-                js::set_bool(&s, "waiting", true);
                 // A mention may have invited an agent as this turn began.
                 load_roster(&id);
                 // Stop was pressed before the server said which session it
@@ -716,7 +826,13 @@ fn on_row(row: &JsValue) {
                 // streaming turn and a reloaded one draw the same rail.
                 "tool_call" | "tool_result" | "system_prompt" | "agent_prompt"
                 | "decision" => push_card(&s, &card, &kind, None),
-                "queued" => push_card(&s, &card, "queued", None),
+                // The message left the queue and became the turn's first
+                // row — the only place a queued message becomes history.
+                // From here the composer shows Stop: there is a turn.
+                "user" => {
+                    push_card(&s, &card, "user", None);
+                    js::set_bool(&s, "waiting", true);
+                }
                 "error" => push_card(&s, &card, "error", None),
                 // The server explaining itself — e.g. that the conversation
                 // has no agents in it yet.
@@ -747,7 +863,7 @@ fn push_card(s: &JsValue, card: &JsValue, kind: &str, text_override: Option<&str
     let list = js_sys::Array::from(&js::get(s, "messages"));
     let m = js::obj();
     js::set_str(&m, "kind", kind);
-    for key in ["text", "handle", "turn", "eventId", "name", "model", "error", "ts", "spec"] {
+    for key in ["text", "handle", "turn", "eventId", "name", "model", "error", "ts", "from"] {
         let v = js::get_str(card, key);
         if !v.is_empty() {
             js::set_str(&m, key, &v);
@@ -756,7 +872,7 @@ fn push_card(s: &JsValue, card: &JsValue, kind: &str, text_override: Option<&str
     if let Some(t) = text_override {
         js::set_str(&m, "text", t);
     }
-    for key in ["bytes", "historyTurns", "confidence", "round", "position"] {
+    for key in ["bytes", "historyTurns", "confidence", "round"] {
         if let Some(n) = js::get(card, key).as_f64() {
             js::set_num(&m, key, n);
         }
@@ -1069,6 +1185,9 @@ pub fn register() {
         // True while the session runs with `*`. The rules survive it.
         .bool("unrestricted", false)
         .bool("waiting", false)
+        // The messages waiting to become turns — pending work the
+        // "waiting for" card draws. Never history.
+        .val("queue", &empty_queue())
         // Set by a project-tree row click: the Edit session form opens when
         // that session's meta finishes loading (see `open_session_row`).
         .bool("editorOnLoad", false)
@@ -1200,6 +1319,7 @@ pub fn register() {
         .method("accentOf", accent_of)
         .method("iconOf", icon_of)
         .method("stop", stop)
+        .method("dequeue", dequeue)
         .method("decideApproval", decide_approval)
         .method("setModel", set_model)
         .method("refreshModels", refresh_models)

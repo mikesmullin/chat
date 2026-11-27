@@ -28,9 +28,41 @@ pub fn button() -> Node {
         .child(Node::icon_dyn("($store.mode.advanced ? 'tree-view' : 'tree')"))
 }
 
+/// Where the mode is remembered. It is a preference of this person at this
+/// machine — not of the conversation, which is why it is here and not in
+/// the session's meta.
+const MODE_KEY: &str = "mjs-chat.mode";
+
+fn saved_advanced() -> bool {
+    let ls = js::get(&js::global(), "localStorage");
+    if !ls.is_undefined() && !ls.is_null() {
+        if let Some(v) = js::call(&ls, "getItem", &[JsValue::from_str(MODE_KEY)]).as_string() {
+            return v == "advanced";
+        }
+    }
+    false
+}
+
+fn remember(advanced: bool) {
+    let ls = js::get(&js::global(), "localStorage");
+    if ls.is_undefined() || ls.is_null() {
+        return;
+    }
+    js::call(
+        &ls,
+        "setItem",
+        &[
+            JsValue::from_str(MODE_KEY),
+            JsValue::from_str(if advanced { "advanced" } else { "simple" }),
+        ],
+    );
+}
+
 fn toggle(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref("mode");
-    js::set_bool(&s, "advanced", !js::get_bool(&s, "advanced"));
+    let advanced = !js::get_bool(&s, "advanced");
+    js::set_bool(&s, "advanced", advanced);
+    remember(advanced);
     mjs::redraw();
     JsValue::UNDEFINED
 }
@@ -38,6 +70,7 @@ fn toggle(_this: JsValue, _args: js_sys::Array) -> JsValue {
 pub fn register() {
     css::inject("mode-toggle", CSS);
     let mut d = Def::new().named("store mode");
-    d.bool("advanced", false).method("toggle", toggle);
+    // First paint is the mode this browser was left in, not a default.
+    d.bool("advanced", saved_advanced()).method("toggle", toggle);
     mjs::store("mode", &d.finish());
 }

@@ -12,8 +12,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Default)]
 struct Snapshot {
-    values: [Option<Value>; 4],
-    versions: [u64; 4],
+    values: [Option<Value>; 5],
+    versions: [u64; 5],
     turns: HashMap<u64, Turn>,
     turn_version: u64,
 }
@@ -44,6 +44,13 @@ fn feed() -> &'static Feed {
 /// appear in their sidebar without waiting for a row edit or the poll.
 pub fn bump_sessions() {
     publish(0, crate::api::sessions(0));
+}
+
+/// The message queue changed: re-publish it **now**. The "waiting for" card
+/// is live state — a queued message must appear in it, and leave it, the
+/// moment it happens rather than at the next poll.
+pub fn bump_queues() {
+    publish(4, crate::api::queues_topic(0));
 }
 
 pub(crate) fn publish_models(value: Value) {
@@ -175,6 +182,36 @@ fn visible_to(viewer: Option<i64>, value: &Value) -> Value {
     out
 }
 
+/// The message queue as one viewer may see it: a queued message is text
+/// typed into a conversation, so it travels to exactly the people the
+/// conversation does (PLAN44 C4) — dropped before the diff, same as the
+/// sessions themselves.
+fn queues_visible_to(viewer: Option<i64>, value: &Value) -> Value {
+    let Some(uid) = viewer else {
+        return value.clone();
+    };
+    let Some(map) = value.get("queues").and_then(Value::as_object) else {
+        return value.clone();
+    };
+    let names: Vec<String> = map.keys().cloned().collect();
+    let keep: HashSet<String> = crate::api::visible_session_ids(Some(uid), &names)
+        .into_iter()
+        .collect();
+    let mut out = value.clone();
+    if let Some(outer) = out.as_object_mut() {
+        outer.insert(
+            "queues".into(),
+            Value::Object(
+                map.iter()
+                    .filter(|(sid, _)| keep.contains(*sid))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            ),
+        );
+    }
+    out
+}
+
 /// May this viewer see a turn's session at all? A running turn in an
 /// unshared conversation is not theirs to watch.
 /// A turn in a conversation this viewer cannot see is not theirs to watch —
@@ -225,6 +262,9 @@ pub fn start(state: Arc<State>) {
                 publish(1, crate::api::models());
                 model_at = Instant::now();
             }
+            // Cheap self-healing for a missed bump: the same value does not
+            // re-publish, only a real change moves the topic.
+            publish(4, crate::api::queues_topic(state.config.port));
             let mut pending = serde_json::Map::new();
             if let Some(rows) = sessions.get("sessions").and_then(Value::as_array) {
                 for row in rows {
@@ -326,8 +366,8 @@ pub fn stream(out: &mut Stream<'_>, viewer: Option<i64>) {
         return;
     }
     let f = feed();
-    let mut seen = [0; 4];
-    let mut previous: [Option<Value>; 4] = [None, None, None, None];
+    let mut seen = [0; 5];
+    let mut previous: [Option<Value>; 5] = [None, None, None, None, None];
     let mut turns_seen: HashMap<u64, usize> = HashMap::new();
     let mut turn_version = 0;
     let mut initial = true;
@@ -341,7 +381,7 @@ pub fn stream(out: &mut Stream<'_>, viewer: Option<i64>) {
             guard = g;
         }
         let mut frames = Vec::new();
-        for (i, name) in ["sessions", "models", "approvals", "sandboxes"].iter().enumerate() {
+        for (i, name) in ["sessions", "models", "approvals", "sandboxes", "queues"].iter().enumerate() {
             if guard.versions[i] != seen[i] {
                 seen[i] = guard.versions[i];
                 if let Some(value) = &guard.values[i] {
@@ -359,6 +399,10 @@ pub fn stream(out: &mut Stream<'_>, viewer: Option<i64>) {
                                 .as_ref()
                                 .map(|p| sandboxes_visible_to(viewer, p)),
                             sandboxes_visible_to(viewer, value),
+                        ),
+                        "queues" => (
+                            previous[i].as_ref().map(|p| queues_visible_to(viewer, p)),
+                            queues_visible_to(viewer, value),
                         ),
                         _ => (previous[i].clone(), value.clone()),
                     };

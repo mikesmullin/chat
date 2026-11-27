@@ -950,30 +950,49 @@ pub fn reap_all_session_worktrees(root: &Path) {
     }
 }
 
-/// The gate's readiness answer for one session's meta: the workspace root
-/// set, and a provisioned worktree whose directory is still there.
+/// The gate's readiness answer for one session's meta, for one agent.
 ///
-/// A vanished worktree is re-provisioned here — the recorded branch is
-/// used verbatim — so a hand-deleted checkout is repaired rather than
-/// parked on forever.
-pub fn session_worktree_ready(root: &Path, meta: &Value) -> Result<(), String> {
+/// The rules, in order of how little they ask for:
+///
+/// * **An agent with a Containerfile needs nothing.** Its container is the
+///   containment boundary — no workspace root, no checkout, no host path at
+///   all is required of the session to run it.
+/// * **The workspace root is optional.** "No root" is a real answer (the
+///   tools fall back to the project root); a root that is *named* must be
+///   usable — absolute, and a directory.
+/// * **The checkout is optional too.** "No repo" means this session does
+///   not manage git at all and its sandbox mounts nothing. A worktree that
+///   *is* configured must be provisioned and present — and a vanished one
+///   is repaired here rather than parked on forever.
+pub fn session_worktree_ready(
+    root: &Path,
+    meta: &Value,
+    def: &angela::agent_loader::AgentDef,
+) -> Result<(), String> {
+    if !def.containerfile.trim().is_empty() {
+        return Ok(());
+    }
+
     let ws = meta
         .get("workspaceRoot")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim()
         .to_string();
-    if ws.is_empty() {
-        return Err("workspace root is not set".into());
-    }
-    if !ws.starts_with('/') {
-        return Err(format!("workspace root must be absolute: {ws}"));
-    }
-    if !Path::new(&ws).is_dir() {
-        return Err(format!("workspace root is not a directory: {ws}"));
+    if !ws.is_empty() {
+        if !ws.starts_with('/') {
+            return Err(format!("workspace root must be absolute: {ws}"));
+        }
+        if !Path::new(&ws).is_dir() {
+            return Err(format!("workspace root is not a directory: {ws}"));
+        }
     }
 
-    let Some(record) = meta.get("worktree").and_then(Value::as_object) else {
+    // No record, or a cleared one: "No repo" — no git management at all.
+    let Some(record) = meta.get("worktree").filter(|w| !w.is_null()) else {
+        return Ok(());
+    };
+    let Some(record) = record.as_object() else {
         return Err("worktree not provisioned".into());
     };
     let provisioned = record.get("provisioned").and_then(Value::as_bool).unwrap_or(false);
@@ -1365,18 +1384,45 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_refuses_an_unconfigured_session() {
+    fn the_gate_lets_the_unconfigured_run() {
+        // Nothing named is not the same as something broken: "No repo" and
+        // "no workspace root" are the honest answers for a session that does
+        // not work on a checkout — a transcription box, say.
         let root = temp_dir("gate");
-        let bad = json!({ "id": "session-1" });
-        let err = session_worktree_ready(&root, &bad).unwrap_err();
-        assert!(err.contains("workspace root"), "{err}");
+        let host = angela::agent_loader::AgentDef::default();
+        assert!(session_worktree_ready(&root, &json!({ "id": "session-1" }), &host).is_ok());
+        assert!(session_worktree_ready(&root, &Value::Null, &host).is_ok());
+        assert!(
+            session_worktree_ready(&root, &json!({ "id": "s", "worktree": null }), &host).is_ok()
+        );
+
+        // And an agent that runs in its own container needs no host path at
+        // all: its container is the boundary, and the session's git record
+        // is bookkeeping, not a requirement.
+        let mut sandboxed = angela::agent_loader::AgentDef::default();
+        sandboxed.containerfile = "/workspace/models/sbox/video/Containerfile".into();
+        let bad = json!({
+            "id": "s",
+            "workspaceRoot": "relative/path",
+            "worktree": { "provisioned": false, "path": "/tmp/x" },
+        });
+        assert!(session_worktree_ready(&root, &bad, &sandboxed).is_ok());
+    }
+
+    #[test]
+    fn the_gate_refuses_a_broken_configuration() {
+        // What IS named must hold: a root that is set must be usable, and a
+        // worktree that is configured must be provisioned. (A host agent —
+        // no Containerfile.)
+        let root = temp_dir("gate");
+        let host = angela::agent_loader::AgentDef::default();
 
         let bad_relative = json!({ "id": "session-1", "workspaceRoot": "relative/path" });
-        let err = session_worktree_ready(&root, &bad_relative).unwrap_err();
+        let err = session_worktree_ready(&root, &bad_relative, &host).unwrap_err();
         assert!(err.contains("workspace root"), "{err}");
 
         let bad_dir = json!({ "id": "session-1", "workspaceRoot": root.join("no-such") });
-        let err = session_worktree_ready(&root, &bad_dir).unwrap_err();
+        let err = session_worktree_ready(&root, &bad_dir, &host).unwrap_err();
         assert!(err.contains("workspace root"), "{err}");
 
         let bad_wt = json!({
@@ -1384,7 +1430,7 @@ mod tests {
             "workspaceRoot": root,
             "worktree": { "provisioned": false, "path": "/tmp/x" },
         });
-        let err = session_worktree_ready(&root, &bad_wt).unwrap_err();
+        let err = session_worktree_ready(&root, &bad_wt, &host).unwrap_err();
         assert!(err.contains("worktree not provisioned"), "{err}");
 
         let bad_path = json!({
@@ -1392,7 +1438,7 @@ mod tests {
             "workspaceRoot": root,
             "worktree": { "provisioned": true, "path": "" },
         });
-        assert!(session_worktree_ready(&root, &bad_path).is_err());
+        assert!(session_worktree_ready(&root, &bad_path, &host).is_err());
     }
 
     #[test]
@@ -1409,7 +1455,8 @@ mod tests {
             "workspaceRoot": root,
             "worktree": record,
         });
-        let r = session_worktree_ready(&root, &meta);
+        let host = angela::agent_loader::AgentDef::default();
+        let r = session_worktree_ready(&root, &meta, &host);
         assert!(r.is_ok(), "ready: {r:?}");
         assert!(Path::new(&path).is_dir());
         // The recorded branch is re-created in the repo.

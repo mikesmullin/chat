@@ -115,6 +115,7 @@ pub fn start() {
         "approvals-delta",
         "sandboxes",
         "sandboxes-delta",
+        "queues",
         "turn-snapshot",
         "turn-event",
         "turn-finished",
@@ -143,6 +144,10 @@ pub fn start() {
                         crate::components::live::apply_sandboxes(&value);
                     }
                     "sandboxes-delta" => sandbox_delta(&value),
+                    // The message queue: what the "waiting for" card draws.
+                    // One snapshot per change, keyed by session — the
+                    // transcript reads the active one.
+                    "queues" => crate::components::live::apply_queue(value),
                     "turn-snapshot" => crate::components::live::receive_turn_snapshot(value),
                     "turn-event" => crate::components::live::receive_turn_event(value),
                     "turn-finished" => crate::components::notification_toggle::completed(

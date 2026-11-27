@@ -36,6 +36,10 @@ fn main() {
     // automation scheduler below can never win the race to build it with a
     // placeholder port.
     let _ = api::angela(config.port);
+    // Messages left in the queue by the last run: their request threads are
+    // gone, so they are re-submitted through the normal pipeline here or
+    // they would wait forever.
+    automations::recover_queue();
     // The perimeter gate runs in front of every route (PLAN44 D12): session
     // cookies, the login form, Shields Up/Down and the ban list.
     let perimeter = std::sync::Arc::new(auth::Perimeter::load(&root));

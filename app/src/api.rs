@@ -28,6 +28,19 @@ pub fn abort<F: FnMut(JsValue) + 'static>(session_id: &str, then: F) {
     rustex1_kit::api::post_json("/api/abort", &payload.into(), then);
 }
 
+/// `POST /api/sessions/:id/dequeue` — take a queued message back before it
+/// runs. Answers the message's text (it goes back to the composer: it was
+/// typed and never said).
+pub fn dequeue<F: FnMut(JsValue) + 'static>(session_id: &str, item_id: &str, then: F) {
+    let payload = js::obj();
+    js::set_str(&payload, "itemId", item_id);
+    rustex1_kit::api::post_json(
+        &format!("/api/sessions/{session_id}/dequeue"),
+        &payload.into(),
+        then,
+    );
+}
+
 /// Answer one. `allow` runs it once, `always` stops asking for this exact
 /// call in this conversation, `deny` refuses and tells the model so.
 pub fn approve<F: FnMut(JsValue) + 'static>(id: &str, decision: &str, then: F) {

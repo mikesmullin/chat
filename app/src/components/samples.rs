@@ -50,9 +50,6 @@ struct Row {
     open: bool,
     /// Tool rows only.
     name: &'static str,
-    /// Queued rows only: the model being waited on, and the place in line.
-    spec: &'static str,
-    position: u32,
     /// User rows only: who said it (PLAN44 A6) — blank is "you".
     from: &'static str,
 }
@@ -67,8 +64,6 @@ const BLANK: Row = Row {
     last: false,
     open: false,
     name: "",
-    spec: "",
-    position: 0,
     from: "",
 };
 
@@ -118,16 +113,6 @@ fn rows() -> Vec<Row> {
             handle: "fish",
             turn: true,
             text: "",
-            ..BLANK
-        },
-        Row {
-            id: "q1",
-            kind: "queued",
-            handle: "fish",
-            turn: true,
-            text: "waiting for llama-server:default slot…",
-            spec: "llama-server:default",
-            position: 3,
             ..BLANK
         },
         Row {
@@ -204,6 +189,58 @@ fn rows() -> Vec<Row> {
     ]
 }
 
+/// The queue card's sample: two messages waiting on the session's
+/// properties — exactly the shape the `queues` topic pushes.
+fn queue_sample() -> JsValue {
+    let items = js_sys::Array::new();
+    for (id, text) in [
+        ("q-sample-1", "re-record the spike trap demo with narration"),
+        ("q-sample-2", "and bump the tomb's ember light"),
+    ] {
+        let item = js::obj();
+        js::set_str(&item, "id", id);
+        js::set_str(&item, "text", text);
+        js::set_str(&item, "reason", "waiting for the session's workspace root and worktree");
+        items.push(&item);
+    }
+    let q = js::obj();
+    js::set(&q, "items", &items.into());
+    js::set_str(
+        &q,
+        "reason",
+        "waiting for the session's workspace root and worktree",
+    );
+    q.into()
+}
+
+/// `dequeue(itemId)` — the guide's dequeue really takes the message back:
+/// the row goes and its text returns to the draft, because that is what the
+/// card promises. (A demo that visibly did nothing would read as a broken
+/// component, not as an inert one.)
+fn dequeue_sample(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let id = js::arg_str(&args, 0);
+    let s = mjs::store_ref(STORE);
+    let queue = js::get(&s, "queue");
+    let items = js_sys::Array::new();
+    let mut text = String::new();
+    for row in js_sys::Array::from(&js::get(&queue, "items")).iter() {
+        if js::get_str(&row, "id") == id {
+            text = js::get_str(&row, "text");
+        } else {
+            items.push(&row);
+        }
+    }
+    let next = js::obj();
+    js::set(&next, "items", &items.into());
+    js::set_str(&next, "reason", &js::get_str(&queue, "reason"));
+    js::set(&s, "queue", &next.into());
+    if !text.is_empty() {
+        js::set_str(&s, "draft", &text);
+    }
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
 fn messages() -> JsValue {
     let out = js_sys::Array::new();
     let now = js_sys::Date::new_0()
@@ -226,8 +263,6 @@ fn messages() -> JsValue {
         js::set_bool(&o, "turnLast", r.last);
         js::set_bool(&o, "expanded", r.open);
         js::set_bool(&o, "ok", true);
-        js::set_str(&o, "spec", r.spec);
-        js::set_num(&o, "position", r.position as f64);
         js::set_str(&o, "from", r.from);
         if !r.name.is_empty() {
             js::set_str(&o, "name", r.name);
@@ -964,6 +999,9 @@ pub fn register() {
     d
         // ── the conversation ───────────────────────────────────────
         .val("messages", &messages())
+        // Pending work, drawn by the "waiting for" card — live state in the
+        // app, a sample here.
+        .val("queue", &queue_sample())
         .val("threads", &js_sys::Array::new().into())
         // Nothing is waiting in a still picture; the guide's approvals are
         // rows in the transcript, in both of their states.
@@ -1088,6 +1126,7 @@ pub fn register() {
         .method("saveProject", inert)
         .method("renameTreeRow", rename_tree_row)
         .method("pickTarget", pick_target)
+        .method("dequeue", dequeue_sample)
         .method("pickBrowserSandbox", pick_browser_sandbox)
         // A sample mints no tickets and streams nothing.
         .method("loadViewerUrl", inert)

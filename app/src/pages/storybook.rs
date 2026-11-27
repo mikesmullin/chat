@@ -33,7 +33,7 @@
 //!   /storybook/project-tree -> Project Tree (folders + sessions, drag-drop)
 //!   /storybook/target-form  -> Target Form (create/edit in the inspector)
 //!   /storybook/system-card -> System Card (system prompt)
-//!   /storybook/queued-card -> Queued Card (waiting for a model slot)
+//!   /storybook/queued-card -> Queued Card (the messages waiting to run)
 //!   /storybook/identity-switcher -> Identity Switcher (the account chip)
 //!   /storybook/share-dialog -> Share Dialog (who else can reach this)
 //!   /storybook/profile-panel -> Profile Panel (the per-user form)

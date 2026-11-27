@@ -230,7 +230,6 @@ fn card_kids(st: &str, v: &str) -> Vec<Node> {
     out.extend(assistant_card::parts(st, v));
     out.extend(error_card::parts(st, v));
     out.extend(system_card::parts(st, v));
-    out.extend(queued_card::parts(st, v));
     out.extend(reasoning_card::parts(st, v));
     // The turn's paperwork: what the model was handed, kept apart from what
     // the user typed. "Why did it answer that?" is unanswerable without
@@ -402,7 +401,11 @@ pub fn messages_threaded(st: &str) -> Node {
                 .child(thinking::thinking()),
             m("div").class("thinking").show(&format!("{st}.waiting && ({st}.stopping || {st}.stopUnconfirmed)"))
                 .text(&format!("({st}.stopping ? 'Stopping…' : 'Stop not confirmed. Try again.')")),
-        ])
+        ]
+        .into_iter()
+        // The same card the flat transcript ends with — one definition.
+        .chain(queued_card::queue_parts(st))
+        .collect())
 }
 
 pub fn messages(st: &str) -> Node {
@@ -504,5 +507,11 @@ pub fn messages(st: &str) -> Node {
             .child(thinking::thinking()),
         m("div").class("thinking").show(&format!("{st}.waiting && ({st}.stopping || {st}.stopUnconfirmed)"))
             .text(&format!("({st}.stopping ? 'Stopping…' : 'Stop not confirmed. Try again.')")),
-    ])
+    ]
+    .into_iter()
+    // --- the messages waiting to become turns ---------------------------
+    // The "waiting for" card: pending work at the bottom of the
+    // conversation, because a queued message is the newest thing in it.
+    .chain(queued_card::queue_parts(st))
+    .collect())
 }

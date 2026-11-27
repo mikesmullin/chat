@@ -48,6 +48,11 @@ pub(crate) fn angela(port: u16) -> &'static AngelaServer {
         state.seat_sender = Some(Arc::new(|_session: &str| {
             crate::events::bump_sessions();
         }));
+        // The "waiting for" card is live state, not history: a queued
+        // message must appear in it — and leave it — the moment it happens.
+        state.queue_sender = Some(Arc::new(|| {
+            crate::events::bump_queues();
+        }));
         // Agent-owned sandboxes (PLAN55): angela owns the policy (one
         // container per session → agent, lazily launched), this module owns
         // the seam (the sbox-b client).
@@ -61,8 +66,8 @@ pub(crate) fn angela(port: u16) -> &'static AngelaServer {
         // checkout: a sandbox is disposable, a worktree is not.
         let root_check = root.clone();
         let root_delete = root.clone();
-        angela::session_props::set_check(Arc::new(move |meta| {
-            crate::hostgit::session_worktree_ready(&root_check, meta)
+        angela::session_props::set_check(Arc::new(move |meta, def| {
+            crate::hostgit::session_worktree_ready(&root_check, meta, def)
         }));
         angela::session_props::set_on_deleted(Arc::new(move |sid| {
             crate::hostgit::reap_session_worktree(&root_delete, sid)
@@ -212,8 +217,10 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
             if self.turn_id.is_none() && value.get("type").and_then(Value::as_str) == Some("session") {
                 if let Some(id) = value.get("sessionId").and_then(Value::as_str) {
                     self.session_id = id.to_string();
-                    let mut baseline = chat_messages(&angela(self.port).state.store, id);
-                    if baseline.last().is_some_and(|v| v.get("kind").and_then(Value::as_str) == Some("user") && v.get("text").and_then(Value::as_str) == Some(self.prompt.as_str())) { baseline.pop(); }
+                    // The transcript as it stood before this turn. The
+                    // prompt is not in it: a queued message becomes a row
+                    // only when its turn starts.
+                    let baseline = chat_messages(&angela(self.port).state.store, id);
                     self.turn_id = Some(crate::events::begin_turn(id, baseline, self.prompt.clone()));
                 }
             }
@@ -234,6 +241,15 @@ impl<'s, 'a> ResponseSink for DevSink<'s, 'a> {
         if let Some(id) = self.turn_id { crate::events::end_turn(id); }
         if !self.disconnected { let _ = self.out.finish(); }
     }
+}
+
+/// Every session's message queue, for the event feed's `queues` topic.
+///
+/// The messages a conversation is holding before they run — pending work,
+/// live state, and carrying text, so the feed filters this per viewer
+/// exactly as it does the sessions themselves.
+pub fn queues_topic(port: u16) -> Value {
+    serde_json::json!({ "queues": angela::queue::snapshot_all(&angela(port).state.store) })
 }
 
 /// Current model configuration, shared by the on-demand endpoint and event feed.
@@ -1401,18 +1417,25 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                     .unwrap_or_default()
                     .trim()
                     .to_string();
-                if let Err(e) = validate_workspace_root(&ws) {
-                    let _ = out.json(400, &serde_json::json!({"ok": false, "error": e}));
-                    return;
+                if ws.is_empty() {
+                    // Blank means cleared: a session need not name a root
+                    // (its tools fall back to the project root), so the form
+                    // must be able to take one back — an empty box is not a
+                    // validation error.
+                    body["workspaceRoot"] = Value::Null;
+                } else {
+                    if let Err(e) = validate_workspace_root(&ws) {
+                        let _ = out.json(400, &serde_json::json!({"ok": false, "error": e}));
+                        return;
+                    }
+                    body["workspaceRoot"] = Value::String(ws);
                 }
-                body["workspaceRoot"] = Value::String(ws);
             }
             if let Some(wt) = body.get("worktree").and_then(Value::as_object).cloned() {
                 let repo_id = wt.get("repoId").and_then(Value::as_str).unwrap_or_default().trim().to_string();
                 let branch_pattern = wt.get("branchPattern").and_then(Value::as_str).unwrap_or_default().trim().to_string();
                 let path_pattern = wt.get("pathPattern").and_then(Value::as_str).unwrap_or_default().trim().to_string();
                 // A CONFIG from the client carries repoId + branchPattern.
-                // Anything else passes through untouched.
                 if !repo_id.is_empty() && !branch_pattern.is_empty() {
                     let store = &angela(state.config.port).state.store;
                     let Some(current_session) = store.load(id) else {
@@ -1449,12 +1472,15 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                         }
                     };
                     body["worktree"] = resolved;
+                } else {
+                    // A config with no repo chosen is "No repo": this
+                    // session does not manage git, so it keeps no checkout
+                    // around either.
+                    body["worktree"] = Value::Null;
+                    crate::hostgit::reap_session_worktree(&root, id);
                 }
             } else if body.get("worktree").is_some_and(|w| w.is_null()) {
-                // "Remove worktree" — the panel drops the checkout on
-                // purpose. The record clears with the null angela stores;
-                // the checkouts themselves are reaped here, because hostgit
-                // is this module's half.
+                // "No repo" again, in its other spelling.
                 crate::hostgit::reap_session_worktree(&root, id);
             }
             pre_processed_body = Some(serde_json::to_vec(&body).unwrap_or_default());

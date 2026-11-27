@@ -1,15 +1,20 @@
-//! `queued card` — the turn is waiting for its model.
+//! `queued card` — the "waiting for" card.
 //!
-//! A local model serves one inference request at a time, so a turn can wait
-//! for a free slot of its `provider:model` before anything streams. The
-//! wait is a row on the rail, not a silent stall: the user must be able to
-//! tell "slow model" from "still in line". The row's text names the model
-//! it is waiting for; the badge, when the line is longer than one, says how
-//! many turns are ahead of it.
+//! **Live state, never history.** The card is a projection of the session's
+//! message queue: the messages waiting to become turns, why the line waits,
+//! and a way to take each one back. It is bound to the store's `queue` (the
+//! feed pushes it), not to a message row — a queued message is pending work
+//! and history has no place for it. The card is on screen exactly while the
+//! queue holds something: no enqueued message, no card.
+//!
+//! The waits of *finished* turns leave nothing behind. A turn that waited
+//! for a model slot, or a request parked on the session's configuration,
+//! used to leave a row on the rail; the rule now is the same for every
+//! wait: it is shown while it holds a message, and gone when it does not.
 
-use rustex1_kit::h::{m, Node};
+use rustex1_kit::h::{lit, m, Node};
 
-use crate::components::{samples, session};
+use crate::components::samples;
 use crate::css;
 
 pub const CSS: &str = r#"
@@ -20,43 +25,78 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .bubble-queued i { line-height: 19px; }
 :is(#sb, #home) .queued-text { overflow-wrap: anywhere; min-width: 0; }
-:is(#sb, #home) .queued-pos {
-  flex: none; padding: 0 6px; border-radius: 99px;
-  border: 1px solid var(--line); color: var(--gray-dim);
-  font: 500 10px/16px var(--mono); letter-spacing: .04em;
+
+/* One card, one line per waiting message. The reason explains the line;
+   each message can be taken back on its own. */
+:is(#sb, #home) .queue-card { align-items: flex-start; }
+:is(#sb, #home) .queue-card > i { line-height: 19px; margin-top: 1px; }
+:is(#sb, #home) .queue-lines {
+  display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto;
 }
+:is(#sb, #home) .queue-item {
+  display: flex; gap: 8px; align-items: baseline; min-width: 0;
+}
+:is(#sb, #home) .queue-text {
+  flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere;
+  color: var(--fg); opacity: .85;
+}
+:is(#sb, #home) .queue-dequeue {
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  border: 0; background: transparent; color: var(--gray-dim);
+  font: inherit; font-size: 11px; line-height: 16px;
+  cursor: pointer; padding: 1px 5px; border-radius: 6px;
+}
+:is(#sb, #home) .queue-dequeue:hover { color: var(--mjs-err); background: var(--panel-2); }
+:is(#sb, #home) .queue-dequeue:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .queued-demo { width: min(560px, 100%); }
 .queued-demo .mjs-chat.mode-sidebar { border-left: 0; }
 "#;
 
-/// What this kind contributes to a message block.
-pub fn parts(st: &str, v: &str) -> Vec<Node> {
-    vec![m("div")
-        .class("bubble-queued")
-        .iff(&format!("{v}.kind === 'queued'"))
-        .kids(vec![
-            Node::icon("hourglass").class("ph ph-hourglass"),
-            m("span").class("queued-text").text(&format!("{v}.text")),
-            // 1 is "next in line" — nothing to say. Past that, the count.
-            m("span")
-                .class("queued-pos")
-                .show(&format!("{v}.position > 1"))
-                .text(&format!("{v}.position + ' in line'")),
-            m("span")
-                .class("name-tag-when")
-                .show(&format!("{v}.ts"))
-                .text(&format!("'· ' + {st}.relAgo({v}.ts)")),
-        ])]
+/// The "waiting for" card: the messages waiting to become turns.
+///
+/// Bound to `{st}.queue` — live state the feed pushes — rather than to a
+/// message row: a queued message is pending work and history has no place
+/// for it. The line is explained by its head's reason; each message carries
+/// its own way back to the composer. The card shows itself only while the
+/// queue holds a message.
+pub fn queue_parts(st: &str) -> Vec<Node> {
+    vec![
+        m("div")
+            .class("bubble-queued queue-card")
+            .show(&format!("{st}.queue.items.length > 0"))
+            .kids(vec![
+                Node::icon("hourglass").class("ph ph-hourglass"),
+                m("div").class("queue-lines").kids(vec![
+                    m("div")
+                        .class("queued-text")
+                        .text(&format!("{st}.queue.reason || 'waiting to run'")),
+                    m("div")
+                        .class("queue-item")
+                        .for_each(&format!("(q, i) in {st}.queue.items"))
+                        .key("q.id")
+                        .kids(vec![
+                            m("span").class("queue-text").text("q.text"),
+                            m("button")
+                                .class("queue-dequeue")
+                                .attr("type", "button")
+                                .attr("title", "Dequeue — this message goes back to the composer")
+                                .on("click", &format!("{st}.dequeue(q.id)"))
+                                .kids(vec![Node::icon("x"), m("span").child(lit("Dequeue"))]),
+                        ]),
+                ]),
+            ]),
+    ]
 }
 
-/// standalone demo — the card in the row the transcript draws it in.
+/// standalone demo — the card over the guide's samples, both of its states:
+/// the line held up by the session's configuration, and the dequeue that
+/// takes a message back.
 pub fn demo() -> Node {
-    let (st, v) = (samples::EXPR, samples::row("queued"));
     m("div").class("queued-demo").child(
         m("div")
             .class("mjs-chat mode-sidebar")
-            .child(session::row(st, &v, parts(st, &v))),
+            .child(m("div").class("messages").kids(queue_parts(samples::EXPR))),
     )
 }
 

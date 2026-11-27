@@ -287,8 +287,24 @@ impl ResponseSink for RecordingSink {
 /// would deadlock a single-slot local model. Its rows reach the same event
 /// feed a typed prompt would (the `RecordingSink` bridge).
 pub fn submit_prompt(session_id: &str, content: String, agent: String, model: String) {
+    spawn_turn(session_id, content, agent, model, "coordinator", "");
+}
+
+/// Run one prompt on its own thread, through the same `/api/chat` dispatch
+/// a typed prompt takes — so it enters the message queue exactly like one,
+/// and its rows reach the same event feed (`RecordingSink`).
+fn spawn_turn(
+    session_id: &str,
+    content: String,
+    agent: String,
+    model: String,
+    tab_id: &str,
+    from: &str,
+) {
     let server = crate::api::angela(0);
     let session_id = session_id.to_string();
+    let tab_id = tab_id.to_string();
+    let from = from.to_string();
     std::thread::spawn(move || {
         let mut sink = RecordingSink {
             session_id: session_id.clone(),
@@ -304,14 +320,51 @@ pub fn submit_prompt(session_id: &str, content: String, agent: String, model: St
             body: serde_json::to_vec(&json!({
                 "content": content,
                 "sessionId": session_id,
-                "tabId": "coordinator",
+                "tabId": tab_id,
                 "agent": if agent.is_empty() { Value::Null } else { json!(agent) },
                 "model": if model.is_empty() { Value::Null } else { json!(model) },
+                "from": if from.is_empty() { Value::Null } else { json!(from) },
             }))
             .unwrap_or_default(),
         };
         server.dispatch(&req, &mut sink);
     });
+}
+
+/// Messages that were still queued when the server last stopped.
+///
+/// Their request threads died with the process, so nothing would ever run
+/// them — and a queued message is text a user typed and never got back. Each
+/// one is taken out of the queue and re-submitted through the pipeline a
+/// typed prompt takes (which queues it afresh, at the back of the line).
+/// Called once at boot.
+pub fn recover_queue() {
+    let server = crate::api::angela(0);
+    let rows = server.state.store.queue_all();
+    if rows.is_empty() {
+        return;
+    }
+    eprintln!("queue: re-submitting {} message(s) left waiting", rows.len());
+    for row in rows {
+        let Some(session) = row.get("sessionId").and_then(Value::as_str).map(str::to_string) else {
+            continue;
+        };
+        let Some(id) = row.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        // Taken back first: the dispatch below re-queues it as a fresh row,
+        // and one message must never have two.
+        server.state.store.queue_remove(&session, id);
+        spawn_turn(
+            &session,
+            row.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
+            row.get("agent").and_then(Value::as_str).unwrap_or_default().to_string(),
+            row.get("model").and_then(Value::as_str).unwrap_or_default().to_string(),
+            row.get("tabId").and_then(Value::as_str).unwrap_or_default(),
+            row.get("from").and_then(Value::as_str).unwrap_or_default(),
+        );
+    }
+    crate::events::bump_queues();
 }
 
 /// One request through the same router the browser uses, answered
