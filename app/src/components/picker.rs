@@ -537,17 +537,17 @@ pub fn project(st: &str) -> Node {
 /// repos — one picker brick, the form's own value. "Open from folder" is
 /// the only way a clone enters the list (there is no scan), so the footer
 /// carries it here too.
-pub fn repo(st: &str) -> Node {
+pub fn repo(st: &str, draft: &str) -> Node {
     picker(&Picker {
         key: "repo",
         icon: "folder",
         extra: "dd-repo",
         search: "Search repos…",
         items: &format!("{st}.repos"),
-        value: "$store.sessionDraft.worktreeRepoId",
+        value: &format!("{draft}.worktreeRepoId"),
         null: Some(("No repo", "no worktree")),
         null_icon: "folder",
-        on_pick: "$store.sessionDraft.pickRepo({})",
+        on_pick: &format!("{draft}.pickRepo({{}})"),
         // No per-row edit: a registered repo is a path, and the path form
         // is the "Open from folder" action below.
         on_edit: "",

@@ -586,6 +586,7 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     if mjs::has_store("settings") {
         js::set_bool(&mjs::store_ref("settings"), "open", false);
     }
+    if mjs::has_store("groupDraft") { js::set_bool(&mjs::store_ref("groupDraft"), "open", false); }
     if mjs::has_store("sessionDraft") {
         js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
     }

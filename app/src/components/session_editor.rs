@@ -121,7 +121,7 @@ pub const CSS: &str = r#"
 
 /// One labelled row, in the inspector's idiom. `rows` 0 is an input, any other
 /// number a textarea of that height.
-fn field(label: &str, hint: &str, model: &str, placeholder: &str, rows: usize) -> Node {
+pub(crate) fn field(label: &str, hint: &str, model: &str, placeholder: &str, rows: usize) -> Node {
     let input = if rows == 0 {
         m("input")
             .attr("type", "text")
@@ -133,6 +133,11 @@ fn field(label: &str, hint: &str, model: &str, placeholder: &str, rows: usize) -
             .attr("placeholder", placeholder)
             .model(model)
     };
+    let input = if let Some(key) = model.strip_prefix("$store.sessionDraft.") {
+        if ["purpose", "notes", "workspaceRoot"].contains(&key) {
+            input.bind("placeholder", &format!("({model} ? '{}' : ($store.sessionDraft.inherited.{key} ? '-' : '{}'))", placeholder, placeholder))
+        } else { input }
+    } else { input };
     m("div").class("ae-field").kids(vec![
         m("label").class("ae-label").kids(vec![
             m("span").child(lit(label)),
@@ -143,13 +148,21 @@ fn field(label: &str, hint: &str, model: &str, placeholder: &str, rows: usize) -
 }
 
 /// The two-way routing switch, in the agent editor's `.ae-mode` shape.
-fn mode(value: &str, label: &str, icon: &str) -> Node {
+fn mode(draft: &str, value: &str, label: &str, icon: &str) -> Node {
     m("button")
         .class("ae-mode")
         .attr("type", "button")
-        .bind("class", &format!("({ST}.routing === '{value}' ? 'is-on' : '')"))
-        .on("click", &format!("{ST}.setRouting('{value}')"))
+        .bind("class", &format!("({draft}.routing === '{value}' ? 'is-on' : '')"))
+        .on("click", &format!("{draft}.setRouting('{value}')"))
         .kids(vec![m("i").class(&format!("ph {icon}")), m("span").child(lit(label))])
+}
+
+pub(crate) fn routing_modes(draft: &str) -> Node {
+    m("div").class("ae-modes").kids(vec![
+        mode(draft, "", "Inherit", "ph-arrow-up"),
+        mode(draft, "everyone", "Everyone", "ph-chats-circle"),
+        mode(draft, "lead", "Lead", "ph-megaphone"),
+    ])
 }
 
 /// Who is seated, and the row that adds one.
@@ -215,47 +228,29 @@ fn project_block(st: &str) -> Node {
 /// patterns that name it, where it lands, and the action that takes it away.
 /// The resolved-path readout reads the session's live record — the server
 /// re-resolves it on save, so the path shown is the path the gate checks.
-fn worktree_section(st: &str) -> Node {
-    let readout = format!(
-        "({ST}.worktreeRepoId ? ({st}.session.worktree && {st}.session.worktree.provisioned ? {st}.session.worktree.path : 'will be provisioned on save') : 'no worktree — this session does not manage git')"
-    );
-    m("div").class("se-worktree").kids(vec![
+pub(crate) fn worktree_config(st: &str, draft: &str) -> Vec<Node> {
+    vec![
         m("label").class("ae-label").kids(vec![
             m("span").child(lit("Worktree")),
             m("span").class("hint").child(lit("optional — pick a repo, or none")),
         ]),
-        picker::repo(st),
-        field(
-            "Branch pattern",
-            "the branch to check out; {{hex}} draws a fresh suffix",
-            &format!("{ST}.worktreeBranchPattern"),
-            "chat/{{hex}}",
-            0,
-        )
-        // Nothing to configure without a repo: "No repo" means this session
-        // does not manage git, and its sandbox mounts nothing.
-        .show(&format!("{ST}.worktreeRepoId")),
-        field(
-            "Path pattern",
-            "where the checkout lands",
-            &format!("{ST}.worktreePathPattern"),
-            "{{parent}}/{{repo}}/{{prefix}}-{{hash}}",
-            0,
-        )
-        .show(&format!("{ST}.worktreeRepoId")),
-        m("p").class("se-worktree-path").text(&readout),
-        m("div").class("se-worktree-actions").kids(vec![
-            m("button")
-                .class("ae-btn")
-                .attr("type", "button")
-                .show(&format!("({st}.session.worktree && {st}.session.worktree.provisioned)"))
-                .on("click", &format!("{ST}.removeWorktree()"))
-                .kids(vec![
-                    Node::icon("trash"),
-                    m("span").child(lit("Remove worktree")),
-                ]),
-        ]),
-    ])
+        picker::repo(st, draft),
+        field("Branch pattern", "the branch to check out; {{hex}} draws a fresh suffix", &format!("{draft}.worktreeBranchPattern"), "chat/{{hex}}", 0).show(&format!("{draft}.worktreeRepoId")),
+        field("Path pattern", "where the checkout lands", &format!("{draft}.worktreePathPattern"), "{{parent}}/{{repo}}/{{prefix}}-{{hash}}", 0).show(&format!("{draft}.worktreeRepoId")),
+    ]
+}
+
+fn worktree_section(st: &str) -> Node {
+    let readout = format!("({ST}.worktreeRepoId ? ({st}.session.worktree && {st}.session.worktree.provisioned ? {st}.session.worktree.path : 'will be provisioned on save') : ({ST}.inherited.worktree ? 'Inherited worktree' : 'no worktree — this session does not manage git'))");
+    let mut children = worktree_config(st, ST);
+    children.push(m("p").class("se-worktree-path").text(&readout));
+    children.push(m("div").class("se-worktree-actions").kids(vec![
+        m("button").class("ae-btn").attr("type", "button")
+            .show(&format!("({st}.session.worktree && {st}.session.worktree.provisioned)"))
+            .on("click", &format!("{ST}.removeWorktree()"))
+            .kids(vec![Node::icon("trash"), m("span").child(lit("Remove worktree"))]),
+    ]));
+    m("div").class("se-worktree").kids(children)
 }
 
 /// The panel. `st` is the app store behind the form — `$store.live` in the
@@ -298,10 +293,7 @@ pub fn panel(st: &str) -> Node {
                     .class("hint")
                     .child(lit("who takes a turn in a group round")),
             ]),
-            m("div").class("ae-modes").kids(vec![
-                mode("everyone", "Everyone", "ph-chats-circle"),
-                mode("lead", "Lead", "ph-megaphone"),
-            ]),
+            routing_modes(ST),
             m("p").class("ae-mode-note").text(&format!("{ST}.routingNote()")),
         ]),
         m("div").class("ae-field").kids(vec![
@@ -312,7 +304,7 @@ pub fn panel(st: &str) -> Node {
             m("input")
                 .class("ae-num")
                 .attr("type", "number")
-                .attr("placeholder", "512")
+                .bind("placeholder", &format!("({ST}.memoryHigh ? '512' : ({ST}.inherited.memoryHigh ? '-' : '512'))"))
                 .model(&format!("{ST}.memoryHigh")),
         ]),
         project_block(st),
@@ -370,7 +362,7 @@ pub fn demo() -> Node {
     // shows what the app's form shows with data in it.
     m("div")
         .class("se-editor-demo")
-        .init("$store.sessionDraft.open = true; $store.sessionDraft.seed($store.samples.session, 'samples')")
+        .init("$store.sessionDraft.open = true; $store.sessionDraft.seed($store.samples.session, 'samples'); $store.sessionDraft.workspaceRoot = ''; $store.sessionDraft.inherited = { workspaceRoot: '/workspace/example' }")
         .child(panel(crate::components::samples::EXPR))
 }
 
@@ -605,7 +597,7 @@ fn seed(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::set_str(&s, "purpose", &js::get_str(&meta, "purpose"));
     js::set_str(&s, "notes", &js::get_str(&meta, "notes"));
     let routing = js::get_str(&meta, "routing");
-    js::set_str(&s, "routing", if routing.is_empty() { "everyone" } else { &routing });
+    js::set_str(&s, "routing", &routing);
     // Numbers stay numbers: the meta's NULL/number goes straight through,
     // the same shape `save` sends back.
     let mh = js::get(&meta, "memoryHigh");
@@ -688,6 +680,7 @@ fn store_register() {
     let mut d = Def::new().named("store sessionDraft");
     d.bool("open", false)
         .bool("confirmDelete", false)
+        .val("inherited", &js::obj().into())
         .str("title", "iran war status")
         .str("purpose", "")
         .str("notes", "")

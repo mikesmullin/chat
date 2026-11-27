@@ -163,11 +163,27 @@ is suspect stale blaze state first, your code second: wipe `target/blaze`,
 rebuild, and only then start reading stack traces.
 
 The devserver's watcher covers `server/` and `vendor/rustex1`, and HMR
-covers the wasm and static files — but the path dependencies (`angela-rs`,
-`agl-rs`, whatever else `Cargo.toml` points at sideways) are **not** in the
-watch set. After changing one, restart the server (`pkill -x chat-server`
+covers the wasm and static files — but the path dependencies listed under [Dependencies](#dependencies) are
+**not** in the watch set. After changing one, restart the server (`pkill -x chat-server`
 then `./dev.sh`) or the running binary keeps serving the old code — which
 looks exactly like your change not working.
+
+## Dependencies
+
+Path dependencies — not in the devserver's watch set, so after changing one,
+restart the server: stop it (`pkill -x chat-server`), then `./dev.sh`.
+
+| Path | Crate | What it is |
+|---|---|---|
+| `/workspace/angela-rs` | `angela` | The embedded conversation engine: sessions, turns, message queues, allowlist. `server/Cargo.toml` imports it; "a new user prompt is enqueued" lives here (`angela/queue`). |
+| `/workspace/agl-rs` | `agl` | The agent/model config the picker and routing read. `server/Cargo.toml` imports it. |
+| `vendor/rustex1/kit` | `rustex1-kit` | The in-repo wasm frontend kit (`app/Cargo.toml`). Watched — HMR covers it. |
+| `vendor/rustex1/devserver` | `rustex1-devserver` | The in-repo static+HMR server, embedded in this process (`server/Cargo.toml`). Watched — `server/` is in its watch set. |
+
+Sibling services (separate repos, separate dev loops):
+
+- `/workspace/psicom/sbox-b` — the sandbox backend on :3000 (`127.0.0.1:3000`). This repo does not build it; `./dev.sh` does not expect it to exist.
+- `/workspace/psicom/sbox-a` — the wall UI. Not part of this repo or its dev loop.
 
 ## Template gotchas (m-js)
 

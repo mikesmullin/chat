@@ -67,7 +67,7 @@ pub(crate) fn angela(port: u16) -> &'static AngelaServer {
         let root_check = root.clone();
         let root_delete = root.clone();
         angela::session_props::set_check(Arc::new(move |meta, def| {
-            crate::hostgit::session_worktree_ready(&root_check, meta, def)
+            crate::hostgit::session_properties_ready(&root_check, meta, def)
         }));
         angela::session_props::set_on_deleted(Arc::new(move |sid| {
             crate::hostgit::reap_session_worktree(&root_delete, sid)
@@ -450,6 +450,31 @@ fn visible_sandboxes(viewer: Option<i64>, rows: Value) -> Value {
     )
 }
 
+/// Project settings are visible only through sessions the viewer can read.
+fn visible_projects(req: &Request, store: &angela::conv_store::ConvStore) -> Value {
+    let mut body = store.projects_detail();
+    if let Some(user) = crate::auth::current_user(req) {
+        if !user.is_admin() {
+            let all = store.list_meta();
+            let names: Vec<String> = all.iter().filter_map(|v| v.get("id").and_then(Value::as_str).map(str::to_string)).collect();
+            let visible: std::collections::HashSet<String> = visible_session_ids(Some(user.id), &names).into_iter().collect();
+            let projects: Vec<String> = all.iter().filter(|v| v.get("id").and_then(Value::as_str).is_some_and(|id| visible.contains(id)))
+                .filter_map(|v| v.get("project").and_then(Value::as_str).map(str::to_string)).collect();
+            if let Some(rows) = body.get_mut("projects").and_then(Value::as_array_mut) {
+                rows.retain(|row| {
+                    let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+                    projects.iter().any(|p| p == name || p.strip_prefix(name).is_some_and(|rest| rest.starts_with('/')))
+                });
+                for row in rows {
+                    let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+                    row["count"] = serde_json::json!(projects.iter().filter(|p| p.as_str() == name).count());
+                }
+            }
+        }
+    }
+    body
+}
+
 /// Layer 1 in one call: the dev zone and the admin hold everything.
 fn actor_may(req: &Request, cap: &str) -> bool {
     match crate::auth::current_user(req) {
@@ -465,6 +490,9 @@ fn required_capability(req: &Request) -> Option<&'static str> {
         return None;
     }
     let p = req.path.as_str();
+    if p == "/api/projects/settings" {
+        return Some("project.create");
+    }
     if p == "/api/session/new" {
         return Some("session.create");
     }
@@ -1252,6 +1280,21 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         return;
     }
 
+    if req.method == "GET" && req.path.starts_with("/api/sessions/") && req.path.ends_with("/effective") {
+        let id = req.path.trim_start_matches("/api/sessions/").trim_end_matches("/effective");
+        if let Some(u) = crate::auth::current_user(req) {
+            if !session_open_to(Some(u.id), id, "read") {
+                let _ = out.json(403, &serde_json::json!({"ok": false, "error": "not allowed"}));
+                return;
+            }
+        }
+        match angela(state.config.port).state.store.effective_session(id) {
+            Some(value) => { let _ = out.json(200, &value); },
+            None => { let _ = out.json(404, &serde_json::json!({"ok": false, "error": "not found"})); },
+        }
+        return;
+    }
+
     // ── projects ───────────────────────────────────────────────────────
     // The folders conversations are filed under. Served here rather than
     // from angela's router because they are a chat-app concept: angela
@@ -1264,41 +1307,7 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
             return;
         };
         if req.method == "GET" {
-            let mut body = store.projects_detail();
-            // A group is visible iff at least one of its sessions is
-            // (PLAN44): groups are organizational, never grants — group
-            // visibility *derives* from what is shared inside it.
-            if let Some(u) = crate::auth::current_user(req) {
-                if !u.is_admin() {
-                    let all: Vec<Value> = angela(state.config.port).state.store.list_meta();
-                    let names: Vec<String> = all
-                        .iter()
-                        .filter_map(|s| s.get("id").and_then(Value::as_str).map(str::to_string))
-                        .collect();
-                    let keep: std::collections::HashSet<String> =
-                        visible_session_ids(Some(u.id), &names).into_iter().collect();
-                    let mut counts: std::collections::HashMap<String, i64> =
-                        std::collections::HashMap::new();
-                    for s in &all {
-                        if s.get("id").and_then(Value::as_str).is_some_and(|id| keep.contains(id)) {
-                            let p = s.get("project").and_then(Value::as_str).unwrap_or("").to_string();
-                            *counts.entry(p).or_default() += 1;
-                        }
-                    }
-                    if let Some(rows) = body.get_mut("projects").and_then(Value::as_array_mut) {
-                        rows.retain(|p| {
-                            counts
-                                .contains_key(p.get("id").and_then(Value::as_str).unwrap_or(""))
-                        });
-                        for p in rows.iter_mut() {
-                            let key = p.get("id").and_then(Value::as_str).unwrap_or("");
-                            if let Some(n) = counts.get(key) {
-                                p["count"] = serde_json::json!(n);
-                            }
-                        }
-                    }
-                }
-            }
+            let body = visible_projects(req, &store);
             let _ = out.json(200, &body);
             return;
         }
@@ -1326,6 +1335,44 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 // the row the picker should land on.
                 serde_json::json!({"name": n, "select": n, "selectKind": "project"})
             }),
+            "settings" => {
+                if let Some(user) = crate::auth::current_user(req) {
+                    if !user.is_admin() {
+                        let name = field("name");
+                        let affected: Vec<Value> = store.list_meta().into_iter().filter(|s| {
+                            let project = s.get("project").and_then(Value::as_str).unwrap_or("");
+                            project == name || project.strip_prefix(&name).is_some_and(|rest| rest.starts_with('/'))
+                        }).collect();
+                        let ident = store.identity();
+                        if affected.is_empty() || affected.iter().any(|s| !s.get("id").and_then(Value::as_str).is_some_and(|id| ident.can(user.id, "session", id, "edit"))) {
+                            let _ = out.json(403, &serde_json::json!({"ok": false, "error": "group settings require edit access to every affected session"}));
+                            return;
+                        }
+                    }
+                }
+                let patch = body.get("patch").cloned().unwrap_or(Value::Null);
+                let validate = (|| -> Result<(), String> {
+                    let obj = patch.as_object().ok_or("settings must be an object")?;
+                    for key in ["purpose", "notes", "routing", "workspaceRoot"] {
+                        if obj.get(key).is_some_and(|v| !v.is_null() && !v.is_string()) { return Err(format!("{key} must be text")); }
+                    }
+                    if let Some(value) = obj.get("routing").and_then(Value::as_str) {
+                        if !["", "everyone", "lead"].contains(&value) { return Err("routing must be everyone or lead".into()); }
+                    }
+                    if obj.get("memoryHigh").is_some_and(|v| !v.is_null() && v.as_u64().is_none()) { return Err("memory budget must be a non-negative integer".into()); }
+                    if let Some(ws) = obj.get("workspaceRoot").and_then(Value::as_str).filter(|v| !v.trim().is_empty()) {
+                        validate_workspace_root(ws)?;
+                    }
+                    if let Some(wt) = obj.get("worktree").filter(|v| !v.is_null()) {
+                        let wt = wt.as_object().ok_or("worktree must be an object")?;
+                        if wt.keys().any(|k| !["repoId", "branchPattern", "pathPattern"].contains(&k.as_str())) { return Err("invalid worktree setting".into()); }
+                        if wt.values().any(|v| !v.is_string()) { return Err("worktree settings must be text".into()); }
+                        if wt.get("repoId").and_then(Value::as_str).unwrap_or("").is_empty() || wt.get("branchPattern").and_then(Value::as_str).unwrap_or("").is_empty() { return Err("worktree requires a repo and branch pattern".into()); }
+                    }
+                    Ok(())
+                })();
+                validate.and_then(|()| store.set_project_props(&field("name"), &patch)).map(|props| serde_json::json!({"props": props}))
+            },
             "rename" => store
                 .rename_project(&field("from"), &field("to"))
                 .map(|n| serde_json::json!({"name": n})),
@@ -1345,7 +1392,7 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
             Ok(mut v) => {
                 if let Value::Object(map) = &mut v {
                     map.insert("ok".into(), serde_json::json!(true));
-                    if let Some(Value::Array(list)) = store.projects_detail().get("projects") {
+                    if let Some(Value::Array(list)) = visible_projects(req, &store).get("projects") {
                         map.insert("projects".into(), Value::Array(list.clone()));
                     }
                 }
@@ -1477,11 +1524,15 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                     // session does not manage git, so it keeps no checkout
                     // around either.
                     body["worktree"] = Value::Null;
-                    crate::hostgit::reap_session_worktree(&root, id);
+                    if angela(state.config.port).state.store.load(id).and_then(|s| s.get("worktree").cloned()).is_some_and(|w| !w.is_null()) {
+                        crate::hostgit::reap_session_worktree(&root, id);
+                    }
                 }
             } else if body.get("worktree").is_some_and(|w| w.is_null()) {
                 // "No repo" again, in its other spelling.
-                crate::hostgit::reap_session_worktree(&root, id);
+                if angela(state.config.port).state.store.load(id).and_then(|s| s.get("worktree").cloned()).is_some_and(|w| !w.is_null()) {
+                    crate::hostgit::reap_session_worktree(&root, id);
+                }
             }
             pre_processed_body = Some(serde_json::to_vec(&body).unwrap_or_default());
             // fall through — the rewritten body reaches angela below

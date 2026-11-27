@@ -446,6 +446,7 @@ fn aside() -> Node {
                 profile_panel::panel(),
                 target_form::panel(),
                 session_editor::panel(LIVE),
+                crate::components::group_editor::panel(LIVE),
                 share_dialog::panel(),
             ]),
         ])

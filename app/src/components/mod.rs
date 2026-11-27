@@ -47,6 +47,7 @@ pub mod relative_timestamp;
 pub mod sandboxes_menu;
 pub mod session;
 pub mod session_editor;
+pub mod group_editor;
 pub mod session_panel;
 pub mod session_state;
 pub mod settings;
@@ -115,6 +116,7 @@ pub fn register() {
     reltime::register();
     session::register();
     session_editor::register();
+    group_editor::register();
     session_panel::register();
     session_state::register();
     share_dialog::register();

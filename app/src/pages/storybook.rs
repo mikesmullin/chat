@@ -540,6 +540,9 @@ pub fn register(rt: &mut Runtime) {
     });
 
     // the panel the cluster's `+` opens: rename + purpose + routing + the seats.
+    rt.route("/storybook/group-editor", "Group Editor", |_| {
+        route_def("route /storybook/group-editor", "Group Editor", crate::components::group_editor::demo())
+    });
     rt.route("/storybook/session-editor", "Session Editor", |_| {
         route_def(
             "route /storybook/session-editor",

@@ -88,6 +88,7 @@ fn close_settings() {
 /* Shut the session editor, which shares the inspector column. */
 fn close_session_editor() {
     js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
+    js::set_bool(&mjs::store_ref("groupDraft"), "open", false);
 }
 
 /// `loadAgents()` — the rail.

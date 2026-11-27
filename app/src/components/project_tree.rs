@@ -41,6 +41,7 @@
 //! folder has to be as easy as putting it in — otherwise the only way back
 //! is the composer's picker, on a session you may not have open.
 //!
+//! Folder rows open the group editor; the caret collapses the folder.
 //! Folders themselves are not draggable here. Double-clicking a folder edits
 //! its last path segment in place; moving it between parents remains in the
 //! inspector. Double-clicking a conversation edits its title in the same row.
@@ -195,8 +196,8 @@ pub fn tree(st: &str, on_open: &str, on_new: &str) -> Node {
 fn row(st: &str, on_open: &str) -> Node {
     let rows = format!("$store.{STORE}.rows({st}.projects, {st}.sessions)");
     let click = format!(
-        "(r.kind === 'session' ? {} : $store.{STORE}.toggle(r.drop))",
-        on_open.replace("{}", "r.id")
+        "(r.kind === 'session' ? {} : {st}.openTreeFolder(r.kind, r.drop, '{}'))",
+        on_open.replace("{}", "r.id"), st.trim_start_matches("$store.")
     );
     m("div")
         .class("ptree-row")
@@ -240,7 +241,7 @@ fn row(st: &str, on_open: &str) -> Node {
             ),
         )
         .kids(vec![
-            m("i").class("ph ph-caret-right ptree-caret"),
+            m("i").class("ph ph-caret-right ptree-caret").on("click.stop", &format!("$store.{STORE}.toggle(r.drop)")),
             Node::icon_dyn("r.icon").class("ph ptree-icon"),
             // The tooltip is the untruncated name: the label ellipsises on
             // screen, the hover shows all of it.

@@ -1117,6 +1117,7 @@ pub fn register() {
         .val("messages", &js_sys::Array::new().into())
         .val("session", &js::obj().into())
         .str("activeId", "")
+        .str("activeProject", "")
         .bool("notifyEnabled", crate::components::notification_toggle::enabled())
         .val("unreadSessions", &crate::components::notification_toggle::unread())
         // ── the composer's target row ─────────────────────────────────
@@ -1298,6 +1299,8 @@ pub fn register() {
         .method("toggleThread", toggle_thread)
         .method("removeAgent", remove_agent)
         .method("openSessionRow", open_session_row)
+        .method("openGroupEditor", crate::components::group_editor::open)
+        .method("openTreeFolder", crate::components::group_editor::open_folder)
         .method("refreshBrowserSandbox", refresh_browser_sandbox)
         .method("loadViewerUrl", load_viewer_url)
         .method("pickBrowserSandbox", pick_browser_sandbox)
@@ -2697,7 +2700,9 @@ fn open_session_row(_this: JsValue, args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let home = mjs::store_ref("home");
     if js::get_str(&s, "activeId") == id {
-        if js::get_bool(&home, "asideOpen") {
+        if js::get_bool(&mjs::store_ref("groupDraft"), "open") {
+            open_session_editor(JsValue::UNDEFINED, js_sys::Array::new());
+        } else if js::get_bool(&home, "asideOpen") {
             js::set_bool(&home, "asideOpen", false);
             let draft = mjs::store_ref("sessionDraft");
             js::set_bool(&draft, "open", false);
@@ -2722,10 +2727,20 @@ fn open_session_row(_this: JsValue, args: js_sys::Array) -> JsValue {
 fn open_session_editor(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let live = mjs::store_ref(STORE);
     let draft = mjs::store_ref("sessionDraft");
+    js::set_bool(&mjs::store_ref("groupDraft"), "open", false);
     let meta = js::get(&live, "session");
     // The fields — including the workspace root and the worktree config —
     // seed through the draft's own `seed`, the same call the guide makes.
     js::call(&draft, "seed", &[meta, JsValue::from_str(STORE)]);
+    js::set(&draft, "inherited", &js::obj().into());
+    let id = js::get_str(&live, "activeId");
+    let expected = id.clone();
+    rustex1_kit::api::get(&format!("/api/sessions/{id}/effective"), None, move |v| {
+        if js::get_str(&mjs::store_ref(STORE), "activeId") == expected {
+            js::set(&mjs::store_ref("sessionDraft"), "inherited", &js::get(&v, "inherited"));
+            mjs::redraw();
+        }
+    });
     let seats = js_sys::Array::new();
     for p in js_sys::Array::from(&js::get(&live, "others")).iter() {
         let copy = js::obj();

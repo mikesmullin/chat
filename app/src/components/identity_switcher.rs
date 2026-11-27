@@ -285,6 +285,7 @@ fn open_profile(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_bool(&mjs::store_ref("agents"), "open", false);
     js::set_str(&mjs::store_ref("agents"), "selected", "");
     js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
+    js::set_bool(&mjs::store_ref("groupDraft"), "open", false);
     js::set_bool(&mjs::store_ref("settings"), "open", false);
     js::set_bool(&mjs::store_ref(STORE), "panelOpen", true);
     js::set_bool(&mjs::store_ref("home"), "asideOpen", true);

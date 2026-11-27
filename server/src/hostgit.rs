@@ -950,6 +950,47 @@ pub fn reap_all_session_worktrees(root: &Path) {
     }
 }
 
+/// Resolve inherited configuration into a session-owned runtime record before
+/// validating it. The record is separate from authored session properties.
+pub fn session_properties_ready(root: &Path, meta: &Value, def: &angela::agent_loader::AgentDef) -> Result<(), String> {
+    if !def.containerfile.trim().is_empty() {
+        return Ok(());
+    }
+    let id = meta.get("id").and_then(Value::as_str).unwrap_or("");
+    let store = angela::conv_store::ConvStore::new(root).map_err(|e| e.to_string())?;
+    let authored = store.load(id).unwrap_or(Value::Null);
+    let mut resolved = meta.clone();
+    let mut workspace_only = meta.clone();
+    workspace_only["worktree"] = Value::Null;
+    crate::hostgit::session_worktree_ready(root, &workspace_only, def)?;
+    if authored.get("worktree").is_none_or(Value::is_null) {
+        if let Some(wt) = meta.get("worktree").filter(|v| v.is_object()) {
+            let repo = wt.get("repoId").and_then(Value::as_str).unwrap_or("");
+            let branch = wt.get("branchPattern").and_then(Value::as_str).unwrap_or("");
+            let path = wt.get("pathPattern").and_then(Value::as_str).unwrap_or("");
+            if repo.is_empty() || branch.is_empty() { return Err("worktree requires a repo and branch pattern".into()); }
+            static PROVISION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _guard = PROVISION.lock().map_err(|e| e.to_string())?;
+            let cached = store.inherited_worktree(id).filter(|v| {
+                v.get("repoId").and_then(Value::as_str) == Some(repo)
+                    && v.get("branchPattern").and_then(Value::as_str) == Some(branch)
+                    && v.get("pathPattern").and_then(Value::as_str).unwrap_or("") == path
+            });
+            let record = match cached {
+                Some(record) => record,
+                None => {
+                    let record = crate::hostgit::provision_session_worktree(root, id, repo, branch, path)?;
+                    store.set_inherited_worktree(id, &record)?;
+                    record
+                }
+            };
+            resolved["worktree"] = record;
+        }
+    }
+    crate::hostgit::session_worktree_ready(root, &resolved, def)
+}
+
+
 /// The gate's readiness answer for one session's meta, for one agent.
 ///
 /// The rules, in order of how little they ask for:
@@ -1381,6 +1422,43 @@ mod tests {
         // owns is not this module's to reap.
         assert!(rows[0].get("sessionId").map(|v| v.is_string()).unwrap_or(false) == false
             || rows[0]["sessionId"].as_str().map(|s| s.is_empty()).unwrap_or(true));
+    }
+
+    #[test]
+    fn inherited_invalid_workspace_blocks_before_provisioning() {
+        let root = temp_dir("inherited-invalid");
+        let (_, repo_id) = fixture_repo(&root);
+        let store = angela::conv_store::ConvStore::new(&root).unwrap();
+        let session = store.create(angela::session_store::NewSession::default()).unwrap();
+        let id = session["id"].as_str().unwrap();
+        store.assign_project(id, "parent/child").unwrap();
+        store.set_project_props("parent", &json!({"workspaceRoot": root.join("missing").to_string_lossy(), "worktree": {"repoId": repo_id, "branchPattern": "feature/{{hex}}"}})).unwrap();
+        let meta = store.effective_session(id).unwrap()["effective"].clone();
+        let error = session_properties_ready(&root, &meta, &angela::agent_loader::AgentDef::default()).unwrap_err();
+        assert!(error.contains("not a directory"));
+        assert!(store.inherited_worktree(id).is_none());
+        assert!(list_of(&load(&root), "worktrees").is_empty());
+    }
+
+    #[test]
+    fn inherited_worktree_is_provisioned_once_without_becoming_authored() {
+        let root = temp_dir("inherited-gate");
+        let (_, repo_id) = fixture_repo(&root);
+        let store = angela::conv_store::ConvStore::new(&root).unwrap();
+        let session = store.create(angela::session_store::NewSession::default()).unwrap();
+        let id = session["id"].as_str().unwrap();
+        store.assign_project(id, "parent/child").unwrap();
+        store.set_project_props("parent", &json!({"worktree": {"repoId": repo_id, "branchPattern": "feature/{{hex}}", "pathPattern": ""}})).unwrap();
+        let meta = store.effective_session(id).unwrap()["effective"].clone();
+        let host = angela::agent_loader::AgentDef::default();
+        session_properties_ready(&root, &meta, &host).unwrap();
+        let record = store.inherited_worktree(id).unwrap();
+        assert!(Path::new(record["path"].as_str().unwrap()).is_dir());
+        assert!(store.load(id).unwrap()["worktree"].is_null());
+        session_properties_ready(&root, &meta, &host).unwrap();
+        assert_eq!(store.inherited_worktree(id).unwrap(), record);
+        assert_eq!(list_of(&load(&root), "worktrees").len(), 1);
+        reap_session_worktree(&root, id);
     }
 
     #[test]

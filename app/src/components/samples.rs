@@ -418,6 +418,12 @@ fn targets(rows: &[(&str, &str, &str, &str)]) -> JsValue {
         js::set_str(&o, "name", name);
         js::set_str(&o, "icon", icon);
         js::set_str(&o, "hint", hint);
+        if *id == "psicom/chat" {
+            let props = js::obj();
+            js::set_str(&props, "purpose", "Build the chat experience");
+            js::set_str(&props, "workspaceRoot", "/workspace/example");
+            js::set(&o, "props", &props.into());
+        }
         out.push(&o);
     }
     out.into()
@@ -1027,6 +1033,7 @@ pub fn register() {
         .str("sboxConfirmId", "")
         .str("sboxError", "")
         .val("automations", &sample_automations())
+        .str("activeProject", "")
         .val("projects", &targets(PROJECTS))
         .val("worktrees", &targets(WORKTREES))
         .val("repos", &targets(REPOS))
@@ -1122,6 +1129,8 @@ pub fn register() {
         .method("setModel", inert)
         .method("setPolicy", inert)
         .method("setReasoning", inert)
+        .method("openGroupEditor", crate::components::group_editor::open)
+        .method("openTreeFolder", crate::components::group_editor::open_folder)
         .method("dropSession", drop_session)
         .method("refreshModels", inert)
         .method("loadProjects", inert)

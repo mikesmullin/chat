@@ -217,6 +217,7 @@ fn open(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::set_bool(&mjs::store_ref("agents"), "open", false);
     js::set_str(&mjs::store_ref("agents"), "selected", "");
     js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
+    js::set_bool(&mjs::store_ref("groupDraft"), "open", false);
     js::set_bool(&mjs::store_ref("settings"), "open", false);
     js::set_bool(&mjs::store_ref("ident"), "panelOpen", true);
     js::set_bool(&mjs::store_ref("home"), "asideOpen", true);

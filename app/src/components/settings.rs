@@ -57,6 +57,7 @@ fn open_panel(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_bool(&agents, "open", false);
     js::set_str(&agents, "selected", "");
     js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
+    js::set_bool(&mjs::store_ref("groupDraft"), "open", false);
     js::set_bool(&mjs::store_ref("ident"), "panelOpen", false);
     // Opening with the column collapsed would look like the click did
     // nothing.
