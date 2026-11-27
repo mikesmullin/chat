@@ -1142,6 +1142,12 @@ pub fn register() {
         // Which image groups are expanded in the sandboxes menu (absent =
         // open) — collapse state, not data, so the recompute cannot wipe it.
         .val("sandboxOpen", &js::obj().into())
+        // The rail's per-row destroy button: which container is armed —
+        // one, like the form's confirming flag — and the last destroy
+        // failure, shown as a line in the menu. Cleared on open and after a
+        // successful destroy.
+        .str("sboxConfirmId", "")
+        .str("sboxError", "")
         .val("projects", &js_sys::Array::new().into())
         .val("worktrees", &js_sys::Array::new().into())
         .val("repoBranches", &js_sys::Array::new().into())
@@ -1312,7 +1318,8 @@ pub fn register() {
         .method("decideApproval", decide_approval)
         .method("setModel", set_model)
         .method("refreshModels", refresh_models)
-        .method("toggleSandboxGroup", crate::components::sandboxes_menu::toggle_group);
+        .method("toggleSandboxGroup", crate::components::sandboxes_menu::toggle_group)
+        .method("sboxRemove", sbox_remove);
     mjs::store(STORE, &d.finish());
 }
 
@@ -1926,6 +1933,55 @@ fn pick_browser_sandbox(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+/// `sboxRemove(id)` — the rail row's trash button. First press arms the
+/// row (the button turns armed and says so), the second destroys the
+/// container through the same endpoint the Sandbox form's Delete uses.
+///
+/// The destroy sends the id the row carries, and nothing else: a sandbox is
+/// its container id. The response answers the fresh listing, which
+/// `apply_targets` adopts — the row disappears through the same recompute
+/// the listing already runs, and the open Sandbox form (if the user was
+/// editing the same box) tracks its now-gone container. A refusal re-arms
+/// the button and says why on a line in the menu, so a failure is a
+/// re-click, not a mystery.
+fn sbox_remove(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let id = js::arg_str(&args, 0);
+    if id.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let s = mjs::store_ref(STORE);
+    if js::get_str(&s, "sboxConfirmId") != id {
+        // First press: arm the row. The button goes red and stays armed
+        // for 3 seconds only — the timer in `arm_row` puts it back grey.
+        crate::components::sandboxes_menu::arm_row(STORE, &id);
+        return JsValue::UNDEFINED;
+    }
+    // Second press: disarm first, then destroy. The button going back to
+    // dim on the second press is the honest read of "this is in flight".
+    js::set_str(&s, "sboxConfirmId", "");
+    js::set_str(&s, "sboxError", "");
+    mjs::redraw();
+    let payload = js::obj();
+    js::set_str(&payload, "id", &id);
+    let callback = move |v: JsValue| {
+        let s = mjs::store_ref(STORE);
+        if js::get(&v, "ok").as_bool().unwrap_or(false) {
+            apply_targets(&v);
+            return;
+        }
+        // The destroy failed: the row is still there, so the armed button
+        // comes back — the user asked for a retry, and the 3-second timer
+        // applies to it too — with the error line saying why.
+        let msg = js::get_str(&v, "error");
+        let msg = if msg.trim().is_empty() { "That sandbox could not be destroyed.".to_string() } else { msg };
+        crate::components::sandboxes_menu::arm_row(STORE, &id);
+        js::set_str(&s, "sboxError", &msg);
+        mjs::redraw();
+    };
+    api::target_action("sandbox-remove", &payload.into(), callback);
+    JsValue::UNDEFINED
+}
+
 fn apply_targets(v: &JsValue) {
     let s = mjs::store_ref(STORE);
     // `automations` rides along because automation writes answer with the
@@ -2190,6 +2246,11 @@ fn create_target(_this: JsValue, args: js_sys::Array) -> JsValue {
 }
 
 fn edit_target(_this: JsValue, args: js_sys::Array) -> JsValue {
+    // Opening the form is the one other interaction the armed trash button
+    // yields to: the rail's armed state is one row's worth, never two.
+    let s = mjs::store_ref(STORE);
+    js::set_str(&s, "sboxConfirmId", "");
+    js::set_str(&s, "sboxError", "");
     js::call(
         &mjs::store_ref("tform"),
         "openEdit",

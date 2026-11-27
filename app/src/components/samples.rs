@@ -514,6 +514,11 @@ fn create_target(_this: JsValue, args: js_sys::Array) -> JsValue {
 }
 
 fn edit_target(_this: JsValue, args: js_sys::Array) -> JsValue {
+    // Opening the form is the one other interaction the armed trash button
+    // yields to: the rail's armed state is one row's worth, never two.
+    let s = mjs::store_ref(STORE);
+    js::set_str(&s, "sboxConfirmId", "");
+    js::set_str(&s, "sboxError", "");
     js::call(
         &mjs::store_ref("tform"),
         "openEdit",
@@ -1017,6 +1022,10 @@ pub fn register() {
         .bool("viewerFetching", false)
         .val("sandboxGroups", &crate::components::sandboxes_menu::group_rows(&sandbox_rows()))
         .val("sandboxOpen", &js::obj().into())
+        // The rail's per-row destroy button: which container is armed, and
+        // the last failure (the guide never fails — the note stays empty).
+        .str("sboxConfirmId", "")
+        .str("sboxError", "")
         .val("automations", &sample_automations())
         .val("projects", &targets(PROJECTS))
         .val("worktrees", &targets(WORKTREES))
@@ -1131,8 +1140,42 @@ pub fn register() {
         .method("persistComposerSettings", inert)
         // The guide's rail heads have buttons; the guide creates nothing.
         .method("noop", inert)
-        .method("toggleSandboxGroup", crate::components::sandboxes_menu::toggle_group);
+        .method("toggleSandboxGroup", crate::components::sandboxes_menu::toggle_group)
+        .method("sboxRemove", sbox_remove_sample);
     mjs::store(STORE, &d.finish());
+}
+
+/// `sboxRemove(id)` — the guide's rail row trash button, behaving exactly
+/// like the app's: first press arms, second press removes the row locally.
+/// Inert here would be worse than absent: the guide's rows really arm-and-
+/// confirm, and the row really goes.
+fn sbox_remove_sample(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let id = js::arg_str(&args, 0);
+    if id.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let s = mjs::store_ref(STORE);
+    if js::get_str(&s, "sboxConfirmId") != id {
+        crate::components::sandboxes_menu::arm_row(STORE, &id);
+        return JsValue::UNDEFINED;
+    }
+    js::set_str(&s, "sboxConfirmId", "");
+    js::set_str(&s, "sboxError", "");
+    // The guide's listing recomputes from the rows, exactly like the live
+    // store's.
+    let rows = js_sys::Array::new();
+    for row in js_sys::Array::from(&js::get(&s, "sandboxes")).iter() {
+        if js::get_str(&row, "id") != id { rows.push(&row); }
+    }
+    let rows_js: JsValue = rows.into();
+    js::set(&s, "sandboxes", &rows_js);
+    js::set(
+        &s,
+        "sandboxGroups",
+        &crate::components::sandboxes_menu::group_rows(&rows_js),
+    );
+    mjs::redraw();
+    JsValue::UNDEFINED
 }
 
 fn rename_tree_row(_this: JsValue, args: js_sys::Array) -> JsValue {
