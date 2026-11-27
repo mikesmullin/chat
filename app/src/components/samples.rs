@@ -945,6 +945,13 @@ fn inert(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+fn refresh_stream(this: JsValue, args: js_sys::Array) -> JsValue {
+    let answer = crate::helpers::markdown_to_html(&js::get_str(&this, "streamText"));
+    let reasoning = crate::helpers::markdown_to_html(&js::get_str(&this, "streamReasoning"));
+    crate::components::session::refresh_stream_nodes(&js::arg(&args, 0), &answer, &reasoning);
+    JsValue::UNDEFINED
+}
+
 pub fn register() {
     let accents = js::obj();
     js::set_str(&accents, "fish", "#38bdf8");
@@ -1081,9 +1088,7 @@ pub fn register() {
         .num("totalTokens", 1975.0)
         // ── nothing is streaming in a still picture ────────────────
         .str("streamText", "")
-        .str("streamHtml", "")
         .str("streamReasoning", "")
-        .str("streamReasoningHtml", "")
         .str("streamHandle", "")
         .bool("streamReasoningOpen", false)
         // ── methods ────────────────────────────────────────────────
@@ -1106,6 +1111,7 @@ pub fn register() {
         .method("statusParts", crate::components::system_card::status_parts)
         .method("turnEdges", crate::components::session::turn_edges)
         .method("streamEdges", crate::components::session::stream_edges)
+        .method("refreshStream", refresh_stream)
         .method("relAgo", crate::components::live::rel_ago)
         .method("keepPinned", inert)
         .method("onScroll", inert)

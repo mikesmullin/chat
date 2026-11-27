@@ -341,6 +341,24 @@ pub fn row(st: &str, v: &str, parts: Vec<Node>) -> Node {
         ])
 }
 
+/// One ignored node is the shared fast-update surface for an in-flight answer.
+fn streaming_answer() -> Node {
+    m("div").class("bubble-assistant md-body streaming")
+        .attr("data-live-stream", "answer").ignore()
+}
+
+/// Bring either mounted transcript up to date after a structural view change.
+/// The high-frequency writer updates the same ignored nodes directly.
+pub(crate) fn refresh_stream_nodes(el: &JsValue, answer: &str, reasoning: &str) {
+    if js::is_missing(el) { return; }
+    for (kind, html) in [("answer", answer), ("reasoning", reasoning)] {
+        let node = js::call(el, "querySelector", &[JsValue::from_str(&format!("[data-live-stream='{kind}']"))]);
+        if !js::is_missing(&node) && js::get_str(&node, "innerHTML") != html {
+            js::set_str(&node, "innerHTML", html);
+        }
+    }
+}
+
 /// The threaded history: the memory tree's view, oldest first.
 ///
 /// One keyed `x-for` over a flat list whose rows carry their own `depth`.
@@ -354,7 +372,7 @@ pub fn messages_threaded(st: &str) -> Node {
         // way up the history must not drag the reader to the bottom. Only a
         // live turn pins, which is the one case they asked to follow.
         .effect(&format!(
-            "({st}.streamText, {st}.waiting, {st}.keepPinned($el))"
+            "({st}.streamText, {st}.compacted, {st}.treeOpen, {st}.waiting, {st}.refreshStream($el), {st}.keepPinned($el))"
         ))
         .on("scroll", &format!("{st}.onScroll($event)"))
         // A markdown image is markup inside innerHTML — the click is
@@ -391,9 +409,7 @@ pub fn messages_threaded(st: &str) -> Node {
                 .class("msg-block")
                 .show(&format!("{st}.streamText"))
                 .child(
-                    m("div")
-                        .class("bubble-assistant md-body streaming")
-                        .inner_html(&format!("{st}.streamHtml || {st}.streamText")),
+                    streaming_answer(),
                 ),
             m("div")
                 .class("msg-block thinking-block")
@@ -419,7 +435,8 @@ pub fn messages(st: &str) -> Node {
         // dragged back down by every arriving token.
         .effect(&format!(
             "({st}.messages.length, {st}.streamText, {st}.streamReasoning, \
-              {st}.waiting, {st}.keepPinned($el))"
+              {st}.compacted, {st}.treeOpen, $store.mode.advanced, {st}.waiting, \
+              {st}.refreshStream($el), {st}.keepPinned($el))"
         ))
         .on("scroll", &format!("{st}.onScroll($event)"))
         // A markdown image is markup inside innerHTML — the click is
@@ -476,9 +493,8 @@ pub fn messages(st: &str) -> Node {
                     ]),
                     m("div")
                         .class("fold-body md-body")
-                        .inner_html(&format!(
-                            "{st}.streamReasoningHtml || {st}.streamReasoning"
-                        )),
+                        .attr("data-live-stream", "reasoning")
+                        .ignore(),
                 ]),
             )]),
         // The in-flight bubble renders markdown as it arrives. The renderer
@@ -492,9 +508,7 @@ pub fn messages(st: &str) -> Node {
             .kids(vec![
                 m("div").class("turn-rail").child(m("span").class("turn-dot")),
                 m("div").class("msg-block").child(
-                    m("div")
-                        .class("bubble-assistant md-body streaming")
-                        .inner_html(&format!("{st}.streamHtml || {st}.streamText")),
+                    streaming_answer(),
                 ),
             ]),
         // Visible for the WHOLE turn, not just before the first token: the

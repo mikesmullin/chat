@@ -441,6 +441,17 @@ impl angela::sandbox::Backend for SboxBackend {
     fn create(&self, image: &str, worktree_path: &str, repo_git_dir: &str) -> Result<String, String> {
         create(&self.root, image, worktree_path, repo_git_dir)
     }
+    fn prepare_worktree(&self, id: &str) -> Result<(), String> {
+        // The host worktree is owned by the mapped sandbox user; Git inside
+        // the image may see another uid. Trust this one guest path for both
+        // desktop and sudo Git, rather than disabling the ownership check.
+        let output = std::process::Command::new(runtime_bin())
+            .args(["exec", id, "sudo", "git", "config", "--system", "--replace-all", "safe.directory", "/work", "^/work$"])
+            .output().map_err(|e| format!("could not configure sandbox Git: {e}"))?;
+        if output.status.success() { Ok(()) } else {
+            Err(format!("could not configure sandbox Git: {}", String::from_utf8_lossy(&output.stderr).trim()))
+        }
+    }
     fn state(&self, id: &str) -> Option<String> {
         state(id)
     }

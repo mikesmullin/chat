@@ -953,9 +953,6 @@ pub fn reap_all_session_worktrees(root: &Path) {
 /// Resolve inherited configuration into a session-owned runtime record before
 /// validating it. The record is separate from authored session properties.
 pub fn session_properties_ready(root: &Path, meta: &Value, def: &angela::agent_loader::AgentDef) -> Result<(), String> {
-    if !def.containerfile.trim().is_empty() {
-        return Ok(());
-    }
     let id = meta.get("id").and_then(Value::as_str).unwrap_or("");
     let store = angela::conv_store::ConvStore::new(root).map_err(|e| e.to_string())?;
     let authored = store.load(id).unwrap_or(Value::Null);
@@ -995,9 +992,6 @@ pub fn session_properties_ready(root: &Path, meta: &Value, def: &angela::agent_l
 ///
 /// The rules, in order of how little they ask for:
 ///
-/// * **An agent with a Containerfile needs nothing.** Its container is the
-///   containment boundary — no workspace root, no checkout, no host path at
-///   all is required of the session to run it.
 /// * **The workspace root is optional.** "No root" is a real answer (the
 ///   tools fall back to the project root); a root that is *named* must be
 ///   usable — absolute, and a directory.
@@ -1010,10 +1004,7 @@ pub fn session_worktree_ready(
     meta: &Value,
     def: &angela::agent_loader::AgentDef,
 ) -> Result<(), String> {
-    if !def.containerfile.trim().is_empty() {
-        return Ok(());
-    }
-
+    let _ = def;
     let ws = meta
         .get("workspaceRoot")
         .and_then(Value::as_str)
@@ -1424,6 +1415,41 @@ mod tests {
             || rows[0]["sessionId"].as_str().map(|s| s.is_empty()).unwrap_or(true));
     }
 
+    /// Requires the local sbox-b service and headed image. Exercises the real
+    /// bind mount and git common dir using an isolated temporary repository.
+    #[test]
+    #[ignore]
+    fn inherited_checkout_is_mounted_in_a_real_sandbox() {
+        let root = temp_dir("real-inherited-sandbox");
+        let (_, repo_id) = fixture_repo(&root);
+        let store = angela::conv_store::ConvStore::new(&root).unwrap();
+        let session = store.create(angela::session_store::NewSession::default()).unwrap();
+        let id = session["id"].as_str().unwrap();
+        store.assign_project(id, "parent/child").unwrap();
+        store.set_project_props("parent", &json!({"worktree": {"repoId": repo_id, "branchPattern": "chat/{{hex}}"}})).unwrap();
+        let gate_root = root.clone();
+        angela::session_props::set_check(std::sync::Arc::new(move |meta, agent| session_properties_ready(&gate_root, meta, agent)));
+        angela::sandbox::set_backend(Box::new(crate::sbox::SboxBackend { root: root.clone() }));
+        let mut def = angela::agent_loader::AgentDef::default();
+        def.name = "coder".into();
+        def.containerfile = "/workspace/models/sbox/headed/Containerfile".into();
+        let result = (|| -> Result<(), String> {
+            let cid = angela::sandbox::ensure(&store, id, &def, &angela::cancel::Cancel::never())?.ok_or("no sandbox")?;
+            let output = Command::new("podman").args(["exec", &cid, "sh", "-c", "test -d /work && printf verified > /work/mount-check && sudo git -C /work rev-parse --is-inside-work-tree"])
+                .output().map_err(|e| e.to_string())?;
+            if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).to_string()); }
+            if String::from_utf8_lossy(&output.stdout).trim() != "true" { return Err("/work is not a git checkout".into()); }
+            let record = store.inherited_worktree(id).ok_or("no inherited checkout")?;
+            let marker = Path::new(record["path"].as_str().ok_or("no checkout path")?).join("mount-check");
+            if std::fs::read_to_string(&marker).map_err(|e| e.to_string())? != "verified" { return Err("guest write did not reach the checkout".into()); }
+            std::fs::remove_file(marker).map_err(|e| e.to_string())?;
+            Ok(())
+        })();
+        angela::sandbox::destroy_for_session(&store, id);
+        reap_session_worktree(&root, id);
+        assert!(result.is_ok(), "{result:?}");
+    }
+
     #[test]
     fn inherited_invalid_workspace_blocks_before_provisioning() {
         let root = temp_dir("inherited-invalid");
@@ -1474,9 +1500,8 @@ mod tests {
             session_worktree_ready(&root, &json!({ "id": "s", "worktree": null }), &host).is_ok()
         );
 
-        // And an agent that runs in its own container needs no host path at
-        // all: its container is the boundary, and the session's git record
-        // is bookkeeping, not a requirement.
+        // A configured sandbox mount must pass the same checks as a host
+        // checkout; the container otherwise would start with a broken mount.
         let mut sandboxed = angela::agent_loader::AgentDef::default();
         sandboxed.containerfile = "/workspace/models/sbox/video/Containerfile".into();
         let bad = json!({
@@ -1484,7 +1509,7 @@ mod tests {
             "workspaceRoot": "relative/path",
             "worktree": { "provisioned": false, "path": "/tmp/x" },
         });
-        assert!(session_worktree_ready(&root, &bad, &sandboxed).is_ok());
+        assert!(session_worktree_ready(&root, &bad, &sandboxed).is_err());
     }
 
     #[test]

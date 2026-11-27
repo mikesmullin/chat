@@ -11,9 +11,9 @@
 //! | composer | `draft`, `waiting` |
 //!
 //! Streaming rows land here as they arrive. Per the m-js guidance on
-//! high-frequency updates, a token delta appends to one store string rather
-//! than rebuilding the message list — the list is only rewritten at turn
-//! boundaries, which is a low-frequency change the diff handles happily.
+//! high-frequency updates, streamed text stays outside the reactive store and
+//! updates the rendered markdown directly. The store changes at stream and
+//! card boundaries, when m-js needs to mount, hide, or replace a row.
 
 use wasm_bindgen::JsValue;
 
@@ -254,10 +254,9 @@ fn dequeue(_this: JsValue, args: js_sys::Array) -> JsValue {
 }
 
 fn clear_stream(s: &JsValue) {
+    STREAM_TEXT.with(|v| *v.borrow_mut() = StreamText::default());
     js::set_str(s, "streamText", "");
-    js::set_str(s, "streamHtml", "");
     js::set_str(s, "streamReasoning", "");
-    js::set_str(s, "streamReasoningHtml", "");
     // Each turn's reasoning starts shut, whatever the reader did with the
     // last one: leaving it open would make the next turn's reasoning the
     // biggest thing on screen without them asking for it again.
@@ -331,8 +330,18 @@ fn keep_tab(id: &str) {
 /// `newSession()` — the tab bar's `+`.
 fn new_session(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let payload = js::obj();
+    let current = mjs::store_ref(STORE);
+    let project = if js::get_str(&current, "activeId").is_empty() { String::new() }
+        else { js::get_str(&js::get(&current, "session"), "project") };
+    js::set_str(&payload, "project", &project);
     api::new_session(&payload.into(), |v| {
         let s = mjs::store_ref(STORE);
+        if js::get(&v, "ok").as_bool() == Some(false) {
+            let error = js::get_str(&v, "error");
+            notice(&s, &format!("Could not create session: {error}"));
+            mjs::redraw();
+            return;
+        }
         let id = js::get_str(&js::get(&v, "session"), "id");
         if !id.is_empty() {
             close_preview_on_leave(&s, &id);
@@ -515,10 +524,15 @@ fn send(_this: JsValue, _args: js_sys::Array) -> JsValue {
     }
 
     let row_turn = turn.clone();
+    let row_boot = rustex1_kit::lifecycle::token();
+    let done_boot = row_boot.clone();
     api::chat_stream(
         &payload.into(),
-        move |row| on_owned_row(&row_turn, &row),
+        move |row| {
+            if rustex1_kit::lifecycle::am_current_token(&row_boot) { on_owned_row(&row_turn, &row); }
+        },
         move |err| {
+            if !rustex1_kit::lifecycle::am_current_token(&done_boot) { return; }
             let s = mjs::store_ref(STORE);
             let id = js::get_str(&turn, "sessionId");
             OWN_TURNS.with(|t| t.borrow_mut().retain(|other| !js_sys::Object::is(other, &turn)));
@@ -603,6 +617,98 @@ fn stop(_this: JsValue, _args: js_sys::Array) -> JsValue {
         mjs::redraw();
     });
     JsValue::UNDEFINED
+}
+
+#[derive(Default)]
+struct StreamText {
+    answer: String,
+    reasoning: String,
+    answer_html: String,
+    reasoning_html: String,
+    answer_dirty: bool,
+    reasoning_dirty: bool,
+    paint_scheduled: bool,
+    last_scroll_ms: f64,
+}
+
+thread_local! {
+    static STREAM_TEXT: std::cell::RefCell<StreamText> = std::cell::RefCell::new(StreamText::default());
+}
+
+fn stream_html() -> (String, String) {
+    STREAM_TEXT.with(|v| {
+        let mut text = v.borrow_mut();
+        if text.answer_dirty {
+            text.answer_html = helpers::markdown_to_html(&text.answer);
+            text.answer_dirty = false;
+        }
+        if text.reasoning_dirty {
+            text.reasoning_html = helpers::markdown_to_html(&text.reasoning);
+            text.reasoning_dirty = false;
+        }
+        (text.answer_html.clone(), text.reasoning_html.clone())
+    })
+}
+
+fn refresh_stream(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let (answer, reasoning) = stream_html();
+    crate::components::session::refresh_stream_nodes(&js::arg(&args, 0), &answer, &reasoning);
+    JsValue::UNDEFINED
+}
+
+/// One frame batches all tokens received since the last paint. The template
+/// owns row visibility; the ignored markdown node has exactly one DOM writer.
+fn schedule_stream_paint() {
+    let scheduled = STREAM_TEXT.with(|v| {
+        let mut text = v.borrow_mut();
+        if text.paint_scheduled { true } else { text.paint_scheduled = true; false }
+    });
+    if scheduled { return; }
+    let boot = rustex1_kit::lifecycle::token();
+    let callback = wasm_bindgen::closure::Closure::once_into_js(move || {
+        if !rustex1_kit::lifecycle::am_current_token(&boot) { return; }
+        STREAM_TEXT.with(|v| v.borrow_mut().paint_scheduled = false);
+        let (answer, reasoning) = stream_html();
+        paint_stream_node("answer", &answer);
+        paint_stream_node("reasoning", &reasoning);
+        pin_stream_if_due();
+    });
+    js::call(&js_sys::global(), "requestAnimationFrame", &[callback]);
+}
+
+fn paint_stream_node(kind: &str, html: &str) {
+    let Some(nodes) = js::query_all(&format!("#home [data-live-stream='{kind}']")) else { return; };
+    let count = js::get_num(&nodes, "length") as u32;
+    for i in 0..count {
+        let node = js_sys::Reflect::get(&nodes, &JsValue::from(i)).unwrap_or(JsValue::UNDEFINED);
+        let messages = js::call(&node, "closest", &[JsValue::from_str(".messages")]);
+        if js::is_missing(&messages) || js::is_missing(&js::get(&messages, "offsetParent")) { continue; }
+        let rect = js::call(&messages, "getBoundingClientRect", &[]);
+        if js::get_num(&rect, "height") <= 0.0 { continue; }
+        if js::get_str(&node, "innerHTML") != html { js::set_str(&node, "innerHTML", html); }
+    }
+}
+
+/// Follow growing streaming text at a low frequency without turning each
+/// token into a reactive scroll update. Explicit reader scrolling still wins.
+fn pin_stream_if_due() {
+    if !js::get_bool(&mjs::store_ref(STORE), "stickBottom") { return; }
+    let now = js_sys::Date::now();
+    let due = STREAM_TEXT.with(|v| {
+        let mut text = v.borrow_mut();
+        if now - text.last_scroll_ms < 1500.0 { false } else { text.last_scroll_ms = now; true }
+    });
+    if !due { return; }
+    let Some(nodes) = js::query_all("#home .messages") else { return; };
+    for i in 0..js::get_num(&nodes, "length") as u32 {
+        let node = js_sys::Reflect::get(&nodes, &JsValue::from(i)).unwrap_or(JsValue::UNDEFINED);
+        if js::is_missing(&js::get(&node, "offsetParent")) { continue; }
+        let rect = js::call(&node, "getBoundingClientRect", &[]);
+        if js::get_num(&rect, "height") > 0.0 {
+            js::set(&node, "scrollTop", &js::get(&node, "scrollHeight"));
+            break;
+        }
+    }
 }
 
 thread_local! {
@@ -740,54 +846,41 @@ fn on_row(row: &JsValue) {
                     crate::api::abort(&id, |_| {});
                 }
             }
-            mjs::redraw();
         }
         // High-frequency: append to one string, never rebuild the list.
         // Who the in-flight rows belong to, so they take that agent's colour
         // before the sealed card arrives to say so.
         "speaking" => {
             js::set_str(&s, "streamHandle", &js::get_str(row, "handle"));
-            mjs::redraw();
         }
-        "assistant_delta" => {
+        "assistant_delta" | "reasoning_delta" => {
+            let reasoning = js::get_str(row, "type") == "reasoning_delta";
             let h = js::get_str(row, "handle");
-            if !h.is_empty() {
+            if !h.is_empty() && js::get_str(&s, "streamHandle") != h {
                 js::set_str(&s, "streamHandle", &h);
             }
-            let next = js::get_str(&s, "streamText") + &js::get_str(row, "text");
-            js::set_str(&s, "streamText", &next);
-            // Re-render on each delta rather than in a template binding: a
-            // binding re-evaluates on every redraw, so a 10 KB message would
-            // be re-parsed on every frame instead of once per token. The
-            // renderer is prefix-safe (see helpers::streaming_md_tests), so
-            // rendering half-arrived markdown cannot emit broken markup.
-            js::set_str(&s, "streamHtml", &helpers::markdown_to_html(&next));
-            mjs::redraw();
-        }
-        "reasoning_delta" => {
-            // Reasoning usually streams before any content does, so this is
-            // where the live card learns whose colour to wear.
-            let h = js::get_str(row, "handle");
-            if !h.is_empty() {
-                js::set_str(&s, "streamHandle", &h);
+            let fragment = js::get_str(row, "text");
+            if fragment.is_empty() { return; }
+            let first = STREAM_TEXT.with(|v| {
+                let mut text = v.borrow_mut();
+                let target = if reasoning { &mut text.reasoning } else { &mut text.answer };
+                let first = target.is_empty();
+                target.push_str(&fragment);
+                if reasoning { text.reasoning_dirty = true; } else { text.answer_dirty = true; }
+                first
+            });
+            if first {
+                // Only the transition from absent to present belongs in the
+                // reactive tree. Subsequent tokens never write to the store.
+                js::set_str(&s, if reasoning { "streamReasoning" } else { "streamText" }, &fragment);
             }
-            let next = js::get_str(&s, "streamReasoning") + &js::get_str(row, "text");
-            js::set_str(&s, "streamReasoning", &next);
-            // Same prefix-safe renderer as the answer: half-arrived markdown
-            // renders as itself rather than leaking broken tags.
-            js::set_str(
-                &s,
-                "streamReasoningHtml",
-                &helpers::markdown_to_html(&next),
-            );
-            mjs::redraw();
+            schedule_stream_paint();
         }
         "usage" => {
             let p = js::get(row, "prompt_tokens").as_f64().unwrap_or(0.0);
             let t = js::get(row, "total_tokens").as_f64().unwrap_or(0.0);
             js::set_num(&s, "promptTokens", p);
             js::set_num(&s, "totalTokens", t);
-            mjs::redraw();
         }
         "card" => {
             let card = js::get(row, "card");
@@ -795,9 +888,8 @@ fn on_row(row: &JsValue) {
             let text = js::get_str(&card, "text");
             match kind.as_str() {
                 // The sealed bubble replaces the streamed one.
-                // The sealed bubble replaces the streamed one.
                 "assistant" => {
-                    let streamed = js::get_str(&s, "streamText");
+                    let streamed = STREAM_TEXT.with(|v| v.borrow().answer.clone());
                     let final_text = if text.is_empty() { streamed } else { text.clone() };
                     // Fold this turn into the running totals. The rates come
                     // from this turn's telemetry; the counts accumulate.
@@ -805,15 +897,15 @@ fn on_row(row: &JsValue) {
                     if !final_text.trim().is_empty() {
                         push_card(&s, &card, "assistant", Some(&final_text));
                     }
+                    STREAM_TEXT.with(|v| { let mut text = v.borrow_mut(); text.answer.clear(); text.answer_html.clear(); });
                     js::set_str(&s, "streamText", "");
-                    js::set_str(&s, "streamHtml", "");
                 }
                 "reasoning" => {
                     if !text.trim().is_empty() {
                         push_card(&s, &card, "reasoning", None);
                     }
+                    STREAM_TEXT.with(|v| { let mut text = v.borrow_mut(); text.reasoning.clear(); text.reasoning_html.clear(); });
                     js::set_str(&s, "streamReasoning", "");
-                    js::set_str(&s, "streamReasoningHtml", "");
                 }
                 // Everything the turn produced goes through one path, so a
                 // streaming turn and a reloaded one draw the same rail.
@@ -832,7 +924,6 @@ fn on_row(row: &JsValue) {
                 "system" => push_message(&s, "system", &text, ""),
                 _ => {}
             }
-            mjs::redraw();
         }
         "done" => {
             js::set_bool(&s, "waiting", false);
@@ -842,7 +933,6 @@ fn on_row(row: &JsValue) {
             // A new message changes the tree's leaf set, so a threaded view
             // on screen is now one message short.
             load_view(JsValue::UNDEFINED, js_sys::Array::new());
-            mjs::redraw();
         }
         _ => {}
     }
@@ -1168,8 +1258,6 @@ pub fn register() {
         .num("historyPosition", -1.0)
         .str("historyDraft", "")
         .str("streamText", "")
-        .str("streamHtml", "")
-        .str("streamReasoningHtml", "")
         // Reasoning opens on a click and starts shut, including the one
         // streaming right now — it is how the answer was reached, not the
         // answer, so it should not be the biggest thing on screen.
@@ -1270,6 +1358,7 @@ pub fn register() {
         .method("statusParts", crate::components::system_card::status_parts)
         .method("turnEdges", crate::components::session::turn_edges)
         .method("streamEdges", crate::components::session::stream_edges)
+        .method("refreshStream", refresh_stream)
         .method("relAgo", rel_ago)
         .method("onScroll", on_scroll)
         .method("keepPinned", keep_pinned)
@@ -1739,7 +1828,9 @@ fn on_scroll(_this: JsValue, args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     // Written directly rather than through a redraw: this fires on every
     // scroll frame, and the value only gates the next auto-scroll.
-    js::set_bool(&s, "stickBottom", at_bottom);
+    if js::get_bool(&s, "stickBottom") != at_bottom {
+        js::set_bool(&s, "stickBottom", at_bottom);
+    }
     // Reaching the bottom of the transcript means the reader has caught up:
     // whatever this session had queued as unread is now read. The guard is
     // cheap (an `all()` over the unread list) and runs only on real scroll.

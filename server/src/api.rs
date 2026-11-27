@@ -968,6 +968,27 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
         }
     }
 
+    // New sessions may only inherit a group visible to this user. Otherwise
+    // guessing a name would expose another group's settings and mounts.
+    if req.method == "POST" && req.path == "/api/session/new" {
+        if let Some(user) = crate::auth::current_user(req) {
+            if !user.is_admin() {
+                let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+                let project = body.get("project").and_then(Value::as_str).unwrap_or("").trim();
+                if !project.is_empty() {
+                    let store = &angela(state.config.port).state.store;
+                    let allowed = angela::projects::normalize(project).ok().is_some_and(|name| {
+                        visible_projects(req, store)["projects"].as_array().is_some_and(|rows| rows.iter().any(|row| row.get("name").and_then(Value::as_str) == Some(name.as_str())))
+                    });
+                    if !allowed {
+                        let _ = out.json(403, &serde_json::json!({"ok": false, "error": "no such project"}));
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     // ---- Layer 2: reads and posts on named resources --------------------
     if req.method == "POST" && req.path == "/api/chat" {
         let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
@@ -1353,8 +1374,17 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
                 let patch = body.get("patch").cloned().unwrap_or(Value::Null);
                 let validate = (|| -> Result<(), String> {
                     let obj = patch.as_object().ok_or("settings must be an object")?;
-                    for key in ["purpose", "notes", "routing", "workspaceRoot"] {
+                    for key in ["purpose", "notes", "routing", "workspaceRoot", "soulAppendage"] {
                         if obj.get(key).is_some_and(|v| !v.is_null() && !v.is_string()) { return Err(format!("{key} must be text")); }
+                    }
+                    if let Some(agents) = obj.get("defaultAgents").filter(|v| !v.is_null()) {
+                        let names = agents.as_array().ok_or("default agents must be a list")?;
+                        let mut seen = std::collections::HashSet::new();
+                        for name in names {
+                            let name = name.as_str().filter(|n| !n.trim().is_empty()).ok_or("agent names must be text")?;
+                            if !seen.insert(name) { return Err(format!("duplicate default agent: {name}")); }
+                            if store.agents().get(name).is_none() { return Err(format!("unknown agent: {name}")); }
+                        }
                     }
                     if let Some(value) = obj.get("routing").and_then(Value::as_str) {
                         if !["", "everyone", "lead"].contains(&value) { return Err("routing must be everyone or lead".into()); }

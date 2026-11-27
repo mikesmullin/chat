@@ -14,6 +14,8 @@ pub fn panel(st: &str) -> Node {
         validation_info::live(&format!("({ST}.messageTone ? ' ' + {ST}.messageTone : '')"), &format!("{ST}.message")),
         field("Purpose", "optional", &format!("{ST}.purpose"), "", 0),
         field("Notes", "optional", &format!("{ST}.notes"), "", 3),
+        field("Soul appendage", "added to each agent's soul; blank inherits", &format!("{ST}.soulAppendage"), "", 4),
+        field("Default agents", "one agent name per line; blank inherits", &format!("{ST}.defaultAgents"), "coder", 3),
         m("div").class("ae-field").kids(vec![m("label").class("ae-label").kids(vec![m("span").child(lit("Routing")), m("span").class("hint").child(lit("optional"))]), session_editor::routing_modes(ST)]),
         field("Memory budget", "optional", &format!("{ST}.memoryHigh"), "", 0),
         field("Workspace root", "optional absolute path", &format!("{ST}.workspaceRoot"), "", 0),
@@ -37,7 +39,12 @@ fn seed(_this: JsValue, args: js_sys::Array) -> JsValue {
     for row in js_sys::Array::from(&js::get(&source, "projects")).iter() {
         if js::get_str(&row, "name") == name { props = js::get(&row, "props"); break; }
     }
-    for key in ["purpose", "notes", "routing", "workspaceRoot"] { js::set_str(&draft, key, &js::get_str(&props, key)); }
+    for key in ["purpose", "notes", "routing", "workspaceRoot", "soulAppendage"] { js::set_str(&draft, key, &js::get_str(&props, key)); }
+    let value = js::get(&props, "defaultAgents");
+    let names: Vec<String> = if js_sys::Array::is_array(&value) {
+        js_sys::Array::from(&value).iter().filter_map(|v| v.as_string()).collect()
+    } else { Vec::new() };
+    js::set_str(&draft, "defaultAgents", &names.join("\n"));
     let n = js::get(&props, "memoryHigh");
     js::set_str(&draft, "memoryHigh", &n.as_f64().map(|n| n.to_string()).unwrap_or_default());
     let wt = js::get(&props, "worktree");
@@ -112,7 +119,14 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let payload = js::obj();
     js::set_str(&payload, "name", &js::get_str(&s, "name"));
     let patch = js::obj();
-    for key in ["purpose", "notes", "routing", "workspaceRoot"] { js::set_str(&patch, key, &js::get_str(&s, key)); }
+    for key in ["purpose", "notes", "routing", "workspaceRoot", "soulAppendage"] { js::set_str(&patch, key, &js::get_str(&s, key)); }
+    let names_text = js::get_str(&s, "defaultAgents");
+    let names = js_sys::Array::new();
+    for name in names_text.lines().map(str::trim).map(|s| s.trim_start_matches('@')).filter(|s| !s.is_empty()) {
+        names.push(&JsValue::from_str(name));
+    }
+    if names.length() == 0 { js::set(&patch, "defaultAgents", &JsValue::NULL); }
+    else { js::set(&patch, "defaultAgents", &names.into()); }
     let memory = js::get_str(&s, "memoryHigh");
     if memory.trim().is_empty() { js::set(&patch, "memoryHigh", &JsValue::NULL); }
     else if let Ok(n) = memory.trim().parse::<u64>() { js::set(&patch, "memoryHigh", &JsValue::from_f64(n as f64)); }
@@ -138,6 +152,6 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
 
 pub fn register() {
     let mut d = Def::new().named("store groupDraft");
-    d.bool("open", false).str("from", "samples").str("name", "").str("purpose", "").str("notes", "").str("routing", "").str("memoryHigh", "").str("workspaceRoot", "").str("worktreeRepoId", "").str("worktreeBranchPattern", "").str("worktreePathPattern", "").str("message", "").str("messageTone", "").method("seed", seed).method("save", save).method("pickRepo", pick_repo).method("setRouting", set_routing);
+    d.bool("open", false).str("from", "samples").str("name", "").str("purpose", "").str("notes", "").str("soulAppendage", "").str("defaultAgents", "").str("routing", "").str("memoryHigh", "").str("workspaceRoot", "").str("worktreeRepoId", "").str("worktreeBranchPattern", "").str("worktreePathPattern", "").str("message", "").str("messageTone", "").method("seed", seed).method("save", save).method("pickRepo", pick_repo).method("setRouting", set_routing);
     mjs::store("groupDraft", &d.finish());
 }

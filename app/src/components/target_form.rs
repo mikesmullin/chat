@@ -43,7 +43,7 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::css;
-use crate::components::{name_tag, validation_info};
+use crate::components::{name_tag, picker, validation_info};
 
 const STORE: &str = "tform";
 const ST: &str = "$store.tform";
@@ -154,10 +154,23 @@ pub fn panel() -> Node {
                         .attr("spellcheck", "false")
                         .attr("placeholder", "psicom/chat")
                         .model(&format!("{ST}.name"))
+                        .on("input", &format!("{ST}.name = $event.target.value"))
                         // Enter saves: this form is one field, and reaching
                         // for the mouse to commit a single word is friction
                         // the agent editor does not have because it has ten.
                         .on("keydown.enter", &format!("{ST}.save()")),
+                ]),
+            m("div").class("ae-field se-project")
+                .show(&format!("{ST}.kind === 'project' && {ST}.mode === 'create'"))
+                .kids(vec![
+                    m("label").class("ae-label").kids(vec![m("span").child(lit("Project group")), m("span").class("hint").child(lit("optional parent"))]),
+                    picker::picker(&picker::Picker {
+                        key: "project-parent", icon: "folder", extra: "dd-project",
+                        search: "Search projects…", items: &format!("{ST}.projects()"),
+                        value: &format!("{ST}.parentProject"), null: Some(("No parent", "Top level")),
+                        null_icon: "folder", on_pick: &format!("{ST}.pickParent({{}})"),
+                        on_edit: "", actions: &[],
+                    }),
                 ]),
             // The hierarchy the name implies, as it is typed.
             m("div")
@@ -545,6 +558,10 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     js::set_str(&s, "store", store);
     js::set_str(&s, "name", name);
     js::set_str(&s, "original", name);
+    let parent = if kind == "project" && mode == "create" && mjs::has_store(store) {
+        js::get_str(&js::get(&mjs::store_ref(store), "session"), "project")
+    } else { String::new() };
+    js::set_str(&s, "parentProject", &parent);
     // The bare Phosphor name: the template hands this to `Node::icon_dyn`,
     // which supplies the `ph ph-` prefix itself. Writing the prefix here too
     // yields `ph ph-ph-folder-plus`, which draws nothing.
@@ -706,6 +723,20 @@ fn repos(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::get(&mjs::store_ref(&host_name), "repos")
 }
 
+fn projects(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let form = mjs::store_ref(STORE);
+    let source = js::get_str(&form, "store");
+    if source.is_empty() || !mjs::has_store(&source) { return js_sys::Array::new().into(); }
+    js::get(&mjs::store_ref(&source), "projects")
+}
+
+fn pick_parent(_this: JsValue, args: js_sys::Array) -> JsValue {
+    js::set_str(&mjs::store_ref(STORE), "parentProject", &js::arg_str(&args, 0));
+    js::call(&mjs::store_ref("dropdown"), "closeIf", &[JsValue::from_str("project-parent")]);
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
 /// `ready()` — is there enough here to submit?
 ///
 /// Per kind, because the required field differs: a repo needs a path, a
@@ -786,8 +817,11 @@ fn close(_this: JsValue, _args: js_sys::Array) -> JsValue {
 /// `segments()` — the folders the typed name implies, for the preview.
 fn segments(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let out = js_sys::Array::new();
-    let name = js::get_str(&mjs::store_ref(STORE), "name");
-    for seg in name.split('/').map(str::trim).filter(|s| !s.is_empty()) {
+    let form = mjs::store_ref(STORE);
+    let name = js::get_str(&form, "name");
+    let parent = if js::get_str(&form, "mode") == "create" { js::get_str(&form, "parentProject") } else { String::new() };
+    let path = if parent.is_empty() { name } else { format!("{parent}/{name}") };
+    for seg in path.split('/').map(str::trim).filter(|s| !s.is_empty()) {
         out.push(&JsValue::from_str(seg));
     }
     out.into()
@@ -892,7 +926,15 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
         }
         return JsValue::UNDEFINED;
     }
-    let name = js::get_str(&s, "name");
+    let editing = js::get_str(&s, "mode") == "edit";
+    let entered = js::get_str(&s, "name");
+    let parent = js::get_str(&s, "parentProject");
+    if let Some(msg) = invalid(&entered) {
+        crate::components::validation_info::note("tform", "error", &msg);
+        mjs::redraw();
+        return JsValue::UNDEFINED;
+    }
+    let name = if !editing && !parent.is_empty() { format!("{parent}/{}", entered.trim()) } else { entered };
     if let Some(msg) = invalid(&name) {
         crate::components::validation_info::note("tform", "error", &msg);
         mjs::redraw();
@@ -900,7 +942,6 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
     }
     let host = mjs::store_ref(&js::get_str(&s, "store"));
     let original = js::get_str(&s, "original");
-    let editing = js::get_str(&s, "mode") == "edit";
     let args = if editing {
         vec![
             JsValue::from_str("rename"),
@@ -1051,6 +1092,7 @@ pub fn register() {
         .str("store", "live")
         .str("name", "")
         .str("original", "")
+        .str("parentProject", "")
         .str("heading", "")
         .str("icon", "folder-plus")
         .str("note", "")
@@ -1086,6 +1128,8 @@ pub fn register() {
         .method("remove", remove)
         .method("segments", segments)
         .method("repos", repos)
+        .method("projects", projects)
+        .method("pickParent", pick_parent)
         .method("ready", ready)
         .method("deletable", deletable);
     mjs::store(STORE, &d.finish());

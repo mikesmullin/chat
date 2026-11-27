@@ -134,7 +134,7 @@ pub(crate) fn field(label: &str, hint: &str, model: &str, placeholder: &str, row
             .model(model)
     };
     let input = if let Some(key) = model.strip_prefix("$store.sessionDraft.") {
-        if ["purpose", "notes", "workspaceRoot"].contains(&key) {
+        if ["purpose", "notes", "workspaceRoot", "soulAppendage"].contains(&key) {
             input.bind("placeholder", &format!("({model} ? '{}' : ($store.sessionDraft.inherited.{key} ? '-' : '{}'))", placeholder, placeholder))
         } else { input }
     } else { input };
@@ -286,6 +286,7 @@ pub fn panel(st: &str) -> Node {
             0,
         ),
         field("Notes", "free text", &format!("{ST}.notes"), "", 3),
+        field("Soul appendage", "added to each agent's soul; blank inherits", &format!("{ST}.soulAppendage"), "", 4),
         m("div").class("ae-field").kids(vec![
             m("label").class("ae-label").kids(vec![
                 m("span").child(lit("Routing")),
@@ -472,6 +473,7 @@ fn save(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_str(&payload, "title", &title);
     js::set_str(&payload, "purpose", &js::get_str(&s, "purpose").trim().to_string());
     js::set_str(&payload, "notes", &js::get_str(&s, "notes").trim().to_string());
+    js::set_str(&payload, "soulAppendage", &js::get_str(&s, "soulAppendage"));
     js::set_str(&payload, "routing", &js::get_str(&s, "routing"));
     // `x-model` on a number input stores a number or null, never a string —
     // sending the box's "" would store text in an INTEGER column.
@@ -596,6 +598,7 @@ fn seed(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::set_str(&s, "title", &title);
     js::set_str(&s, "purpose", &js::get_str(&meta, "purpose"));
     js::set_str(&s, "notes", &js::get_str(&meta, "notes"));
+    js::set_str(&s, "soulAppendage", &js::get_str(&meta, "soulAppendage"));
     let routing = js::get_str(&meta, "routing");
     js::set_str(&s, "routing", &routing);
     // Numbers stay numbers: the meta's NULL/number goes straight through,
@@ -684,6 +687,7 @@ fn store_register() {
         .str("title", "iran war status")
         .str("purpose", "")
         .str("notes", "")
+        .str("soulAppendage", "")
         .str("routing", "everyone")
         .str("memoryHigh", "")
         .str("workspaceRoot", "")
