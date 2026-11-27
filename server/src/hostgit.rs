@@ -243,11 +243,14 @@ fn run_with_timeout(mut cmd: Command) -> Result<Output, String> {
 /// mapping cannot be determined.
 ///
 /// Rootless containers run with a user namespace: their uid 0 is this host
-/// user, and their uid 1000 (the desktop user) lands at `<this user's
-/// subuid base> + 1000`. Files meant to be owned by the guest's working
-/// user must be chowned to that out here — ownership is exactly what the
-/// mapping rewrites. Read from `/etc/subuid`; a failure returns `None` and
-/// the caller falls back to permissions alone.
+/// user, and their uid N≥1 lands at `<this user's subuid base> + (N-1)` —
+/// the subuid range starts at container uid 1, which is the one detail that
+/// makes this off-by-one easy to get wrong (verified against the mapping:
+/// guest-created files land on the host at base+999). The guest's `desktop`
+/// is uid 1000, so base + 999. Files meant to be owned by the guest's
+/// working user must be chowned to that out here — ownership is exactly
+/// what the mapping rewrites. Read from `/etc/subuid`; a failure returns
+/// `None` and the caller falls back to permissions alone.
 fn subuid_mapped_uid() -> Option<u32> {
     let euid = current_euid()?;
     let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
@@ -264,9 +267,8 @@ fn subuid_mapped_uid() -> Option<u32> {
         let base: u64 = rest.split(':').next()?.parse().ok()?;
         (user == name).then_some(base)
     })?;
-    // The guest's `desktop` user is uid 1000 inside (the image's adduser
-    // -D desktop), which lands at base + 1000 out here.
-    u32::try_from(base + 1000).ok()
+    // container uid 1000 (desktop) → base + (1000 - 1); see the doc.
+    u32::try_from(base + 999).ok()
 }
 
 /// This process's effective uid (the owner of everything provisioned).
