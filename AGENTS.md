@@ -249,5 +249,6 @@ app/src/
 - **No real names in committed files.** The placeholders are **Bob** and
   **Alice**; the databases may keep real names (they are gitignored), git
   may not. cover ALL-CAPS variants too (`\bBob\b` misses `BOB`).
+- please do not commit code comments or unit tests in this repo (ie. we treat these as temporary and seek to avoid maintaining them)
 - Say so when a request seems off, and propose the correction instead of
   building it — a wrong premise caught early is cheaper than a wrong build.
