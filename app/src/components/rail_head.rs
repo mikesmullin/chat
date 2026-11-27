@@ -91,14 +91,6 @@ pub fn add(tip: &str, on: &str) -> Node {
     button("plus", tip, on)
 }
 
-/// The same 22px ghost button with a pencil: the session header edit
-/// control. It lives beside the presence cluster but is not part of the
-/// indicator - it edits the session the cluster belongs to. Same brick,
-/// different glyph, so the two never drift into two button styles.
-pub fn edit(tip: &str, on: &str) -> Node {
-    button("pencil-simple", tip, on)
-}
-
 /// `title` is what the section is called, written the way it is written in
 /// prose. `icon` is the section's phosphor glyph (`"folders"`, `"robot"`),
 /// static because a section never changes what it is. `add` is `(tooltip,

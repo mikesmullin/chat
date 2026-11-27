@@ -325,8 +325,9 @@ fn rail() -> Node {
                     ))
                     .child(project_tree::tree(
                         LIVE,
-                        // A session row is the Edit-session-form toggle as
-                        // well as the selection (openSessionRow).
+                        // A session row selects the session; the current
+                        // session's row additionally toggles the inspector's
+                        // edit form (openSessionRow).
                         &format!("{LIVE}.openSessionRow({{}})"),
                         &format!("{LIVE}.createTarget('project')"),
                     )),

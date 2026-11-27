@@ -130,13 +130,6 @@ fn open_session_by_id(id: &str) {
         // attribution map is ready before the first row renders.
         store_roster(&s, &js_sys::Array::from(&js::get(&v, "participants")));
         js::set_str(&s, "cursor", &js::get_str(&v, "cursor"));
-        // A project-tree row click asked for the Edit session form with this
-        // session's meta: open it now the meta is fresh (the row is the
-        // toggle — see `open_session_row`).
-        if js::get_bool(&s, "editorOnLoad") {
-            js::set_bool(&s, "editorOnLoad", false);
-            open_session_editor(JsValue::UNDEFINED, js_sys::Array::new());
-        }
         // The browser pane shows this session's boxes (or nothing).
         refresh_browser_sandbox(JsValue::UNDEFINED, js_sys::Array::new());
         SESSION_LOADING.with(|v| v.borrow_mut().clear());
@@ -1188,9 +1181,6 @@ pub fn register() {
         // The messages waiting to become turns — pending work the
         // "waiting for" card draws. Never history.
         .val("queue", &empty_queue())
-        // Set by a project-tree row click: the Edit session form opens when
-        // that session's meta finishes loading (see `open_session_row`).
-        .bool("editorOnLoad", false)
         .val("approvals", &js_sys::Array::new().into())
         // Sticky scroll: true while the reader is at (or near) the bottom.
         .bool("stickBottom", true)
@@ -1301,7 +1291,6 @@ pub fn register() {
         .method("compact", compact)
         .method("toggleThread", toggle_thread)
         .method("removeAgent", remove_agent)
-        .method("openSessionEditor", open_session_editor)
         .method("openSessionRow", open_session_row)
         .method("refreshBrowserSandbox", refresh_browser_sandbox)
         .method("loadViewerUrl", load_viewer_url)
@@ -2632,33 +2621,39 @@ fn store_roster(s: &JsValue, list: &js_sys::Array) {
     js::set_bool(s, "isGroup", agents > 1.0);
 }
 
-/// `openSessionRow(id)` — a project-tree session row click: select the
-/// session and **toggle** the Edit session form for it. The row is the
-/// toggle: clicking the row whose form is showing closes the form and the
-/// right sidebar with it; any other row opens the form for that session.
+/// `openSessionRow(id)` — a project-tree session row click.
+///
+/// The row is the toggle for the right sidebar — and the edit form riding
+/// in it — but only for the session already current: clicking the current
+/// session's row shows the inspector with the edit form in it, or hides both.
+/// Clicking another session just selects it quietly: the transcript is what
+/// changed, and the column keeps whatever it was showing.
 fn open_session_row(_this: JsValue, args: js_sys::Array) -> JsValue {
     let id = js::arg_str(&args, 0);
     if id.is_empty() {
         return JsValue::UNDEFINED;
     }
     let s = mjs::store_ref(STORE);
-    let draft = mjs::store_ref("sessionDraft");
-    if js::get_bool(&draft, "open") && js::get_str(&s, "activeId") == id {
-        js::set_bool(&draft, "open", false);
-        js::set_bool(&mjs::store_ref("home"), "asideOpen", false);
+    let home = mjs::store_ref("home");
+    if js::get_str(&s, "activeId") == id {
+        if js::get_bool(&home, "asideOpen") {
+            js::set_bool(&home, "asideOpen", false);
+            let draft = mjs::store_ref("sessionDraft");
+            js::set_bool(&draft, "open", false);
+        } else {
+            // Opening the sidebar shows the edit form — the one thing the
+            // row is for. It seeds from the active session's own meta.
+            open_session_editor(JsValue::UNDEFINED, js_sys::Array::new());
+        }
         mjs::redraw();
         return JsValue::UNDEFINED;
     }
-    // The form seeds from the session's meta and `previewSession` fetches
-    // that asynchronously — so it opens from the load completion
-    // (`editorOnLoad`), not here.
-    js::set_bool(&s, "editorOnLoad", true);
+    // Not current: select it quietly — no sidebar toggle, no form.
     preview_session(JsValue::UNDEFINED, args)
 }
 
-/// `openSessionEditor()` — the pencil beside the presence cluster.
-///
-/// Seeds the draft from the live conversation — its meta for the five fields,
+/// `openSessionEditor()` — the edit form, opened from the current session's
+/// project-tree row. Seeds the draft from the live conversation — its meta for the five fields,
 /// its roster for the seats — closes the panels it displaces, and opens the
 /// column. The seats are copies, not the roster's own objects: unseating in
 /// the editor must not dim the live cluster before anything is saved, and

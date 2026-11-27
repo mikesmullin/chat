@@ -1,19 +1,17 @@
 //! `item-group` — a labelled group: state-coloured name + inline counter,
 //! then a list of rows.
 //!
-//! Each row = robot icon + bold name + truncated summary + relative time + a
-//! per-state symbol — the shared ring of `session_state`: the state is its
-//! colour, the session's context usage is its fill.
+//! Each row = robot icon + bold name + truncated summary + relative time.
+//! The group carries the state colour in its own name — no per-row symbol:
+//! the status ball lives on the projects list items, never here.
 //!
-//! `tone` is `done` / `working` / `idle`; it drives both the group's colour and
-//! every row's symbol (a group is homogenous in the storybook).
+//! `tone` is `done` / `working` / `idle`; it drives the group's colour.
 //!
 //! Owns its CSS; injected at boot by `components::register`.
 
 use rustex1_kit::h::{lit, m, Node};
-use crate::components::session_state;
 
-/// the item group's styles (group + head + list + rows + state symbols' layout).
+/// the item group's styles (group + head + list + rows).
 pub const CSS: &str = r#"
 .item-group { color: var(--muted); margin-bottom: 18px; max-width: 480px; width: 100%; }
 .item-group.idle { color: var(--gray-dim); }
@@ -51,10 +49,7 @@ pub const CSS: &str = r#"
 "#;
 
 /// one agent row.
-fn row(name: &str, summary: &str, reltime: &str, tone: &str) -> Node {
-    // per-state symbol — the shared `uiSessionState` unit, so the row's
-    // symbol is literally the same markup featured at /storybook/session-state.
-    let symbol = session_state::symbol(tone);
+fn row(name: &str, summary: &str, reltime: &str) -> Node {
     m("li")
         .class("item-row")
         .kids(vec![
@@ -63,7 +58,6 @@ fn row(name: &str, summary: &str, reltime: &str, tone: &str) -> Node {
             m("span").class("item-summary").child(lit(summary)),
             m("span").class("item-meta").kids(vec![
                 m("span").class("relative-timestamp").child(lit(reltime)),
-                symbol,
             ]),
         ])
 }
@@ -86,6 +80,6 @@ pub fn item_group(tone: &str, label: &str, count: &str, rows: &[(String, String,
             head(label, count),
             m("ul")
                 .class("item-list")
-                .kids(rows.iter().map(|r| row(&r.0, &r.1, &r.2, tone)).collect()),
+                .kids(rows.iter().map(|r| row(&r.0, &r.1, &r.2)).collect()),
         ])
 }

@@ -3,10 +3,11 @@
 //! `addTab`/`pickTab`/`closeTab` store methods).
 //!
 //! ## Structure
-//! The display (icon + title + state symbol) is the reusable `uiTab` unit:
-//! a robot icon by default (the same glyph the agents-menu rows use), a
-//! title that may be a number or text, and the shared `uiSessionState`
-//! symbol. The *actions* (pick / close) live on the `x-for` **row**, as
+//! The display (icon + title) is the reusable `uiTab` unit: a session
+//! glyph by default (the same chat-circle the project-tree rows use) and a
+//! title that may be a number or text. No state symbol — a session's status is the ball on the
+//! projects list items, and its context is the session header's ring; a tab
+//! is neither. The *actions* (pick / close) live on the `x-for` **row**, as
 //! direct children, matching the chat app's tab row exactly — mjs reliably
 //! handles `@click` handlers on row-level elements, but not on elements
 //! nested inside a sub-component (that nesting is what made the close
@@ -14,7 +15,7 @@
 //!
 //! - `.tab` row: `@click` → `pickTab(tab.id)`
 //! - `.tab-x` button (direct row child): `@click.stop` → `closeTab(tab.id)`
-//! - `uiTab` (display host): icon + title + `uiSessionState` symbol
+//! - `uiTab` (display host): icon + title
 
 
 use rustex1_kit::h::{m, Node};
@@ -23,7 +24,6 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, lifecycle};
 use wasm_bindgen::prelude::*;
 
-use crate::components::session_state;
 use crate::css;
 
 pub const NAME: &str = "uiTab";
@@ -104,22 +104,17 @@ const CSS: &str = r#"
   background: var(--accent-tint);
   color: var(--accent-soft);
 }
-/* the display unit: icon + title + state symbol. A true flex row — the
-   title stretches, the icon and symbol are fixed-size, so the ring (14x14
-   square, flex 0 0 auto via the global .pie-ring rules) never squishes in
-   a tight row. */
+/* the display unit: icon + title. A true flex row — the title stretches,
+   the icon is fixed-size, so the title never squashes the glyph in a tight
+   row. */
 .ui-tab {
   display: flex; align-items: center;
   gap: 6px;
   width: 100%;
   min-height: 1.3em;
 }
-/* the icon: the only <i> inside a tab, styled here (robot glyph by default,
-   named phosphor icon via the `icon` prop) */
-.ui-tab i {
-  flex: 0 0 auto;
-  font-size: 14px; line-height: 1.3;
-}
+/* the icon is the shared session glyph (`.ptree-icon`, defined in
+   `project_tree`): the same look the project-tree rows use. */
 .ui-tab .ui-tab-title {
   flex: 1 1 0;
   min-width: 0;
@@ -172,19 +167,17 @@ const CSS: &str = r#"
 
 /// One tab DISPLAY host for the STATIC feature demo. Strings are wrapped in
 /// single quotes so m-js reads a JS string literal.
-pub fn tab_display(icon: &str, label: &str, tone: &str) -> Node {
+pub fn tab_display(icon: &str, label: &str) -> Node {
     Node::host_bound("uiTab", &[
         ("class", "ui-tab"),
         ("icon", &format!("'{}'", icon)),
         ("label", &format!("'{}'", label)),
-        ("tone", &format!("'{}'", tone)),
     ])
 }
 
-/// Feature demo: three static tabs — one active numeric, one numeric
-/// working, one text-titled idle; each shows the full composition (icon +
-/// title + symbol + close), the close button being inert in this static
-/// sample (no store).
+/// Feature demo: three static tabs — one active numeric, one numeric, one
+/// text-titled; each shows the full composition (icon + title + close), the
+/// close button being inert in this static sample (no store).
 pub fn demo() -> Node {
     let close = m("button")
         .class("tab-x")
@@ -196,17 +189,17 @@ pub fn demo() -> Node {
             m("span")
                 .class("tab active")
                 .attr("aria-pressed", "true")
-                .child(tab_display("robot", "1", "done"))
+                .child(tab_display("chat-circle", "1"))
                 .child(close.clone()),
             m("span")
                 .class("tab")
                 .attr("aria-pressed", "false")
-                .child(tab_display("robot", "2", "working"))
+                .child(tab_display("chat-circle", "2"))
                 .child(close.clone()),
             m("span")
                 .class("tab")
                 .attr("aria-pressed", "false")
-                .child(tab_display("robot", "Idle", "idle"))
+                .child(tab_display("chat-circle", "Idle"))
                 .child(close.clone()),
         ])
 }
@@ -244,45 +237,30 @@ pub fn start() {
 /// Props (host-provided, with defaults). Prop names are HTML attributes,
 /// so they are single lowercase words — a camelCase name like `titleHint`
 /// is lowercased by the parser and silently never reaches the component.
-/// - `icon`  — phosphor glyph name; empty string means the robot icon (default "")
+/// - `icon`  — phosphor glyph name; empty string means the chat-circle icon (default "")
 /// - `label` — the tab's short text; a number or text (default "")
 /// - `title` — the label's tooltip: the full session title behind the
 ///   short label (default "")
-/// - `tone`  — `done` / `working` / `idle` (default `done`)
-/// - `fraction` — passed to the state symbol: the ring's context-window
-///   fill (default 0.68, the symbol's showcase fill)
-/// - `hint`  — passed to the state symbol as its tooltip: the status and
-///   context counts of `session_state::hint_of` (default "")
 fn def() -> Def {
     let mut d = Def::new().named(NAME);
     d.prop_str("icon", "")
         .prop_str("label", "")
         .prop_str("title", "")
-        .prop_str("tone", "done")
-        .prop_num("fraction", 0.68)
-        .prop_str("hint", "")
         .tree(
             m("span")
                 .class("ui-tab")
                 .kids(vec![
-                    // icon: robot by default, otherwise a named phosphor glyph.
+                    // icon: chat-circle by default, otherwise a named phosphor glyph.
                     // Parens are required: without them the ternary binds looser
                     // than `+`/`===` and m-js evaluates it to just the glyph.
-                    Node::icon_dyn("(icon === '' ? 'robot' : icon)")
-                        .class("ui-tab-icon"),
+                    Node::icon_dyn("(icon === '' ? 'chat-circle' : icon)")
+                        .class("ph ptree-icon"),
                     // label: number or text, ellipsised when it overflows;
                     // its tooltip is the full title it cannot show.
                     m("span")
                         .class("ui-tab-title")
                         .text("label")
                         .bind("title", "title"),
-                    // state symbol: the shared `uiSessionState` unit, so a tab's
-                    // symbol is literally the same markup featured alone at
-                    // /storybook/session-state.
-                    Node::host("uiSessionState", &[])
-                        .bind("tone", "tone")
-                        .bind("fraction", "fraction")
-                        .bind("title", "hint"),
                 ]),
         );
     d
@@ -291,7 +269,9 @@ fn def() -> Def {
 /// The tab strip, over whichever store holds the open tabs.
 ///
 /// One definition: `/` passes the live store, the design guide passes the
-/// samples, where opening a tab really does switch it.
+/// samples, where opening a tab really does switch it. A tab carries no state
+/// symbol: the ball lives on the projects list, the ring lives in the session
+/// header, and a tab simply labels the panel below it.
 pub fn tab_bar(st: &str) -> Node {
     m("div").class("tab-bar").kids(vec![
         m("span")
@@ -312,7 +292,7 @@ pub fn tab_bar(st: &str) -> Node {
                     "uiTab",
                     &[
                         ("class", "ui-tab"),
-                        ("icon", "'robot'"),
+                        ("icon", "'chat-circle'"),
                         // The tab shows its session's stable 1-based number,
                         // not the prompt: a title is far too long for a tab,
                         // and the number is what the user counts by.
@@ -320,15 +300,6 @@ pub fn tab_bar(st: &str) -> Node {
                         // …and its tooltip is the full session title the
                         // short label cannot show.
                         ("title", "(s.title || s.id)"),
-                        // The conversation's state, by the one rule the
-                        // project tree uses too.
-                        ("tone", &session_state::tone_of("s")),
-                        // The ring fills with the conversation's context
-                        // window, by the one rule as well.
-                        ("fraction", &session_state::fraction_of("s")),
-                        // The symbol's tooltip is the status and context
-                        // counts, by the one rule the tree uses.
-                        ("hint", &session_state::hint_of("s")),
                     ],
                 ),
                 m("button")

@@ -64,41 +64,7 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .thread-text.unbuilt { color: var(--gray-dim); font-style: italic; }
 :is(#sb, #home) .thread-spinner { font-size: 11px; color: var(--gray-dim); }
 
-/* the compact action */
-:is(#sb, #home) .memory-bar {
-  display: flex; justify-content: flex-end; align-items: center;
-  padding: 6px 10px; margin-bottom: 8px;
-  font-size: 11px; color: var(--gray-dim);
-}
-:is(#sb, #home) .memory-bar button {
-  display: inline-flex; gap: 5px; align-items: center;
-  background: var(--panel-2); color: var(--gray);
-  border: 0; border-radius: 7px; padding: 4px 9px;
-  font: inherit; cursor: pointer; line-height: 18px;
-}
-:is(#sb, #home) .memory-bar button:hover { color: var(--fg); }
 "#;
-
-/// The compact action above the transcript.
-pub fn memory_bar(st: &str) -> Node {
-    m("div")
-        .class("memory-bar")
-        .show(&format!("$store.mode.advanced && {st}.activeId"))
-        .kids(vec![
-            // Compaction spends model calls and re-shapes what the reader is
-            // looking at, so it is asked for, never done underneath them.
-            m("button")
-                .on("click", &format!("{st}.compact()"))
-                .bind("disabled", &format!("{st}.compacting"))
-                .attr("title", "Summarise older messages into threads")
-                .kids(vec![
-                    Node::icon("stack").class("ph ph-stack"),
-                    m("span").text(&format!(
-                        "({st}.compacting ? 'Compacting…' : 'Compact')"
-                    )),
-                ]),
-        ])
-}
 
 /// One thread row: the toggle, the count, and the summary line.
 ///

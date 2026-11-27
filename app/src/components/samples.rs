@@ -313,10 +313,10 @@ fn messages() -> JsValue {
 /// `turns` and the age are here because the project tree renders both: a
 /// sample missing a field the tree reads is a guide that shows less than the
 /// app does, which is how the two versions of one component drift. The same
-/// goes for `contextWindow` and `totalTokens` — the pair the state symbol's
-/// ring (and the composer's context pie) fills by. The open
+/// goes for `contextWindow` and `totalTokens` — the pair the context ring
+/// (and the composer's context pie) fills by. The open
 /// conversation's numbers match the store's own `totalTokens` /
-/// `session.contextWindow`, so the guide's pie and its rings agree.
+/// `session.contextWindow`, so the guide's pie and its ring agree.
 const SESSIONS: &[(f64, &str, &str, &str, &str, f64, f64, f64, f64)] = &[
     // ordinal, id, title, status, project, turns, minutes since it started,
     // context window, tokens used
@@ -1108,10 +1108,6 @@ pub fn register() {
         .method("compact", inert)
         .method("toggleThread", inert)
         .method("removeAgent", inert)
-        // The pencil beside the cluster. Inert like the rest: the editor it
-        // will open is not mounted yet, and a missing method is a template
-        // error, not a quiet nothing.
-        .method("openSessionEditor", inert)
         .method("saveAllowlist", inert)
         .method("revertAllowlist", inert)
         .method("setModel", inert)

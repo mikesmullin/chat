@@ -26,7 +26,7 @@
 //!   /storybook/validation -> Validation Info (error / ok)
 //!   /storybook/session   -> Session (transcript of message cards)
 //!   /storybook/session-panel -> Session Panel (transcript + composer)
-//!   /storybook/composer  -> Composer (draft + row: dropdowns, ctx pie, send)
+//!   /storybook/composer  -> Composer (draft + row: dropdowns, send)
 //!   /storybook/dropdown  -> Dropdown (themed select: icon + value + caret)
 //!   /storybook/picker    -> Picker (instance menu: search, null row, create)
 //!   /storybook/rail-head  -> Rail Head (a section title + its add button)
@@ -479,7 +479,10 @@ pub fn register(rt: &mut Runtime) {
         route_def("route /storybook/task-list", "Task List", task_list::demo())
     });
 
-    // the state symbol unit — done / working / idle, featured alone.
+    // the status ball unit — done / working / idle, featured alone. The
+    // tone, here for three of the samples' conversations: a done one with
+    // an answer waiting, the running one mid-turn, an idle one with nothing
+    // in it yet. The tooltip is the tone itself, the one thing the ball shows.
     rt.route("/storybook/session-state", "Session State", |_| {
         route_def(
             "route /storybook/session-state",
@@ -487,46 +490,38 @@ pub fn register(rt: &mut Runtime) {
             m("div")
                 .class("state-demo")
                 .kids(vec![
-                    // One shape in every state — the ring — and the state is
-                    // the colour. The fill is the conversation's context
-                    // window in every state, here three of the samples'
-                    // conversations: a done one nearly full, the running one
-                    // mid-way, an idle one with nothing in it yet. The
-                    // tooltip is the status with the counts behind the fill.
                     Node::host("uiSessionState", &[])
                         .bind(
-                            "fraction",
-                            &session_state::fraction_of("$store.samples.sessions[2]"),
+                            "tone",
+                            &session_state::tone_of("$store.samples.sessions[2]"),
                         )
                         .bind(
                             "title",
-                            &session_state::hint_of("$store.samples.sessions[2]"),
+                            &session_state::tone_of("$store.samples.sessions[2]"),
                         ),
                     Node::host("uiSessionState", &[])
-                        .bind("tone", "'working'")
                         .bind(
-                            "fraction",
-                            &session_state::fraction_of("$store.samples.sessions[1]"),
+                            "tone",
+                            &session_state::tone_of("$store.samples.sessions[1]"),
                         )
                         .bind(
                             "title",
-                            &session_state::hint_of("$store.samples.sessions[1]"),
+                            &session_state::tone_of("$store.samples.sessions[1]"),
                         ),
                     Node::host("uiSessionState", &[])
-                        .bind("tone", "'idle'")
                         .bind(
-                            "fraction",
-                            &session_state::fraction_of("$store.samples.sessions[3]"),
+                            "tone",
+                            &session_state::tone_of("$store.samples.sessions[3]"),
                         )
                         .bind(
                             "title",
-                            &session_state::hint_of("$store.samples.sessions[3]"),
+                            &session_state::tone_of("$store.samples.sessions[3]"),
                         ),
                 ]),
         )
     });
     // a single tab unit, featured alone: three static samples
-    // (n=1 active, n=2 working, n=3 idle).
+    // (n=1 active, n=2, n=3 text-titled).
     rt.route("/storybook/tab", "Tab", |_| {
         route_def("route /storybook/tab", "Tab", tab::demo())
     });

@@ -42,7 +42,6 @@
 
 use rustex1_kit::h::{m, Node};
 
-use crate::components::rail_head;
 use crate::css;
 
 /// The colour a seat falls back to when its agent has none — the same default
@@ -161,25 +160,17 @@ pub fn seats(kids: Vec<Node>) -> Node {
     m("div").class("presence-seats").kids(kids)
 }
 
-/// The row: the cluster, then the session edit control beside it.
-///
-/// That control is `rail_head::edit` - the same 22px ghost button as the
-/// rail add, with a pencil. It belongs to the session header, not to the
-/// indicator: it edits the session the cluster belongs to.
-/// `add` is `(tooltip, click expression)` — the same shape `rail_head::head`
-/// takes, and the same button: it is `rail_head`'s, not a second one.
-pub fn row(cluster: Node, add: Option<(&str, &str)>) -> Node {
-    let mut kids = vec![cluster];
-    if let Some((tip, on)) = add {
-        kids.push(rail_head::edit(tip, on));
-    }
-    m("div").class("presence").kids(kids)
+/// The row: the cluster alone. No edit control rides beside it — the
+/// session header keeps the context ring in its place, and the Session edit
+/// form is toggled from the projects list, not here.
+pub fn row(cluster: Node) -> Node {
+    m("div").class("presence").child(cluster)
 }
 
 /// An empty room shows its one member: you. A cluster of nothing is
 /// indistinguishable from a component that failed to render, and the person
 /// reading an empty conversation is never nobody. All three are expressions,
-/// so the guide passes literals and the live roster will pass the settings
+/// so the guide passes literals and the live roster passes the settings
 /// name. The user wears their own neutral accent.
 pub fn empty(handle: &str, icon: &str, accent: &str) -> Node {
     seats(vec![seat(handle, icon, accent, "false", "1")])
@@ -198,7 +189,6 @@ pub fn demo() -> Node {
         ("bowser", "browser", "#96949e"),
         ("dummy", "lego-smiley", "#eeff00"),
     ];
-    let inert = "$store.samples.noop()";
     // You, first and on top in every row. Takes the row top z so the
     // agents descending numbers never have to know the count.
     let you = |z: &str| seat("'Bob'", &format!("'{USER_ICON}'"), &format!("'{USER_ACCENT}'"), "false", z);
@@ -232,12 +222,11 @@ pub fn demo() -> Node {
     mixed.push(seat("'bowser'", "'browser'", "'#96949e'", "true", "0"));
 
     m("div").class("presence-demo").kids(vec![
-        row(seats(seven), Some(("Edit session", inert))),
-        row(seats(three), Some(("Edit session", inert))),
-        row(seats(mixed), Some(("Edit session", inert))),
+        row(seats(seven)),
+        row(seats(three)),
+        row(seats(mixed)),
         row(
             empty("'Bob'", &format!("'{USER_ICON}'"), &format!("'{USER_ACCENT}'")),
-            Some(("Edit session", inert)),
         ),
     ])
 }

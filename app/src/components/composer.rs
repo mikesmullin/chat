@@ -1,7 +1,7 @@
 //! `composer` — the prompt bar under the transcript: the `task list`
 //! panel, then one rounded dark-gray envelope holding the draft box and
 //! its control row (allowlist toggle, the model and reasoning-level
-//! dropdowns, context pie, send/stop).
+//! dropdowns, send/stop).
 //!
 //! Verbatim app classes. The draft is two-way-bound to the shared `demo`
 //! store so typing works; send/stop flip the waiting flag through it; the
@@ -22,11 +22,10 @@ use wasm_bindgen::JsValue;
 
 use crate::components::dropdown;
 use crate::components::samples;
-use crate::components::session_state;
 use crate::css;
 
 pub const CSS: &str = r#"
-/* ---- the composer envelope, the draft box, the context pie and the send/stop pair ----
+/* ---- the composer envelope, the draft box and the send/stop pair ----
    Out of `web/styles.css`, where these were the only rules dressing
    this component — a look kept in a global sheet outlives the markup
    it was written for. Copied unchanged, still scoped under
@@ -68,30 +67,6 @@ pub const CSS: &str = r#"
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-}
-.mjs-chat .ctx-pie {
-  position: relative;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-}
-.mjs-chat .ctx-pie-track { color: var(--mjs-panel-2); }
-.mjs-chat .ctx-pie-fill { color: var(--mjs-accent); }
-.mjs-chat .ctx-pie-label {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  color: #fff;
-  font-size: 9px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  text-shadow: 0 0 2px rgba(0, 0, 0, 0.85);
 }
 .mjs-chat .btn-primary,
 .mjs-chat .btn-stop {
@@ -222,11 +197,9 @@ pub const CSS: &str = r#"
 /* borderless until touched — chrome, not a boxed control */
 
 /* `margin-left:auto` on the first of the pair is what splits the row
-   into two clusters: allowlist left, model + level + context + send right. */
+   into two clusters: allowlist left, model + level + send right. */
 .mjs-chat .composer-box .dropdown.dd-model { margin-left: auto; }
 .mjs-chat .composer-box .dropdown-value { max-width: 150px; }
-
-.mjs-chat .composer-box .ctx-pie { width: 28px; height: 28px; }
 
 /* ---- the allowlist editor ---------------------------------------
    Ported from cowork's `chat.css`: a labelled mono textarea above the
@@ -388,8 +361,8 @@ pub fn history_move(st: &JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-/// The composer wired to angela: the draft, the send/stop flip and the
-/// context pie all read the live store.
+/// The composer wired to angela: the draft and the send/stop flip read the
+/// live store.
 ///
 /// Same markup as [`panel`] — the envelope, the dropdowns, the round send
 /// button — so the design guide and the running composer stay one thing.
@@ -458,7 +431,6 @@ pub fn panel(st: &str) -> Node {
                     dropdown::policy("dd-policy", st),
                     dropdown::model("dd-model", st),
                     dropdown::level("", st),
-                    ctx_pie(st),
                     // Stop. It was an indicator with a title that said so;
                     // a round button where Send had been, in a composer
                     // that is waiting, is read as a control — so it is one.
@@ -488,59 +460,6 @@ pub fn panel(st: &str) -> Node {
             ]),
         ]),
     )
-}
-
-/// Context pie driven by the provider's own token counts.
-///
-/// `stroke-dasharray` is bound rather than animated: usage lands once per
-/// turn, which is a low-frequency change the diff handles fine.
-fn ctx_pie(st: &str) -> Node {
-    // r=15.5 → circumference ≈ 97.4, as in the app.
-    // The fill is context-window fullness — the one formula the state
-    // symbol's ring fills by, so the two gauges cannot disagree.
-    let frac = session_state::ctx_fraction(
-        &format!("{st}.totalTokens"),
-        &format!("{st}.session.contextWindow"),
-    );
-    m("div")
-        .class("ctx-pie")
-        .bind(
-            "title",
-            &format!(
-                "({st}.promptTokens || 0) + ' prompt / ' + \
-                 ({st}.totalTokens || 0) + ' total tokens'"
-            ),
-        )
-        .kids(vec![
-            m("svg")
-                .at(&[("viewBox", "0 0 36 36"), ("width", "28"), ("height", "28")])
-                .kids(vec![
-                    m("circle").at(&[
-                        ("cx", "18"), ("cy", "18"), ("r", "15.5"),
-                        ("fill", "none"), ("stroke", "currentColor"),
-                        ("class", "ctx-pie-track"), ("stroke-width", "4"),
-                    ]),
-                    m("circle")
-                        .at(&[
-                            ("cx", "18"), ("cy", "18"), ("r", "15.5"),
-                            ("fill", "none"), ("stroke", "currentColor"),
-                            ("class", "ctx-pie-fill"), ("stroke-width", "4"),
-                            ("stroke-linecap", "round"),
-                            ("transform", "rotate(-90 18 18)"),
-                        ])
-                        .bind(
-                            "stroke-dasharray",
-                            &format!("({frac} * 97.4).toFixed(1) + ' 97.4'"),
-                        ),
-                ]),
-            m("span").class("ctx-pie-label").text(
-                &format!(
-                    "({st}.totalTokens || 0) >= 1000 ? \
-                     Math.round(({st}.totalTokens || 0) / 1000) + 'k' : \
-                     ({st}.totalTokens || 0)"
-                ),
-            ),
-        ])
 }
 
 /// The allowlist editor, toggled by the shield button.

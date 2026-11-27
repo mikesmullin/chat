@@ -29,10 +29,10 @@
 //!   ▾ (ungrouped)                  <- not a project; the drop target for "none"
 //! ```
 //!
-//! Each conversation carries the shared `uiSessionState` symbol — the same
-//! ring the tab strip wears, tinted by state (amber working: a turn is in
-//! flight; accent done: an answer to review; gray idle: nothing said yet)
-//! and filled with the conversation's context usage — then its age.
+//! Each conversation carries the shared `uiSessionState` ball — the status
+//! alone, in the one color that means it (amber working: a turn is in
+//! flight; accent done: an answer to review; gray idle: nothing said yet) —
+//! the only place the ball appears — then its age.
 //!
 //! ## Drag and drop
 //!
@@ -260,16 +260,14 @@ fn row(st: &str, on_open: &str) -> Node {
                 .on("keydown.enter", &format!("$event.preventDefault(); $store.{STORE}.editing === r.key && ({st}.renameTreeRow(r.kind, r.name, r.id, $el.value), $store.{STORE}.finish())"))
                 .on("keydown.escape", &format!("$store.{STORE}.finish()"))
                 .on("focusout", &format!("$store.{STORE}.editing === r.key && ({st}.renameTreeRow(r.kind, r.name, r.id, $el.value), $store.{STORE}.finish())")),
-            // The conversation's state, immediately left of its age: the
-            // shared `uiSessionState` unit, so a tree row wears the same
-            // symbol the tab strip and the agents rail wear. Folders have no
-            // state of their own, so they render none. The ring fills with
-            // this conversation's context window, and its tooltip names the
-            // status and the counts behind the fill.
+            // The conversation's status, immediately left of its age: the
+            // shared `uiSessionState` ball — the one status symbol, in the
+            // one color that means it, resting on the floor line or
+            // bouncing while a turn is in flight. Folders have no state of
+            // their own, so they render none.
             Node::host("uiSessionState", &[])
                 .bind("tone", &session_state::tone_of("r"))
-                .bind("fraction", &session_state::fraction_of("r"))
-                .bind("title", &session_state::hint_of("r"))
+                .bind("title", &session_state::tone_of("r"))
                 .iff("r.kind === 'session'"),
             // Sessions only; folders have no event timestamp. The tooltip is
             // the two instants behind the age, in long form.
@@ -472,18 +470,13 @@ fn session_row(s: &JsValue, depth: usize) -> JsValue {
     js::set_str(&r, "icon", "chat-circle");
     // Use the most recent event, falling back for a session with no events.
     js::set_str(&r, "lastEventAt", &session_event_time(s));
-    // The state symbol reads these two. A row that carries neither renders
+    // The status symbol reads these two. A row that carries neither renders
     // the widget's default tone, which looks like every conversation is done.
     js::set_str(&r, "status", &js::get_str(s, "status"));
     let turns = js::get(s, "turns");
     if !turns.is_undefined() && !turns.is_null() {
         js::set_num(&r, "turns", turns.as_f64().unwrap_or(0.0));
     }
-    // The working ring's fill: how full this conversation's context window
-    // is. `totalTokens` is the last generation's total — the row contract's
-    // copy of what the `usage` row streams to the composer's context pie.
-    js::set(&r, "contextWindow", &js::get(s, "contextWindow"));
-    js::set(&r, "totalTokens", &js::get(s, "totalTokens"));
     // The age's tooltip names the two instants behind it.
     js::set(&r, "createdAt", &js::get(s, "createdAt"));
     js::set(&r, "updatedAt", &js::get(s, "updatedAt"));

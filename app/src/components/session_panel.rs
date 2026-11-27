@@ -16,7 +16,7 @@
 
 use rustex1_kit::h::{m, Node};
 
-use crate::components::{composer, history_tree, roster, session, thread};
+use crate::components::{composer, history_tree, roster, session};
 use crate::css;
 
 /// The live app's store — what `/` mounts the panel against.
@@ -114,7 +114,6 @@ pub fn panel(st: &str) -> Node {
                 // the next turn does, so both belong above the transcript
                 // rather than in a menu.
                 roster::roster(st),
-                m("div").show(&format!("!{st}.treeOpen")).child(thread::memory_bar(st)),
                 // Without summaries, the transcript retains the evidence and
                 // streaming rows that are not part of the memory tree. Once
                 // compacted, the tree presents the summaries and their leaves.

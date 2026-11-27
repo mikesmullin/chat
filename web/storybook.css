@@ -7,7 +7,7 @@
      - shared type tokens used by several components:
          .counter           (nav rail, item heads, demo)
          .relative-timestamp (item rows + reltime demo set)
-         .pie-ring          (pie route + the item-group "working" symbol)
+         .pie-ring          (pie route + the roster's context ring)
      - the responsive page breakpoint
    Each component's own rules live in its .rs file (see
    app/src/css.rs) and are injected into <head> at boot.
@@ -49,7 +49,7 @@
   --pastel-red: #f2adab;
   --mjs-yellow: var(--pastel-amber);
 
-  /* dim gray, near #666 - idle state + its symbol */
+  /* dim gray, near #666 - the idle state + its ball */
   --gray-dim: #6e717a;
 }
 
@@ -104,10 +104,10 @@
   white-space: nowrap;
 }
 
-/* generic cooldown ring - used by the pie-ring route AND the "working"
-   symbol inside item groups. */
+/* generic cooldown ring - used by the pie-ring route AND the roster's
+   context ring. The 22px disc matches the seat disc. */
 .pie-ring {
-  width: 14px; height: 14px;
+  width: 22px; height: 22px;
   display: inline-block;
   flex: 0 0 auto;
   vertical-align: bottom;

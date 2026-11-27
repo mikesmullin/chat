@@ -10,9 +10,9 @@
 //! - `fraction` — fill fraction 0..1 (default 0.68)
 //! - `color`    — explicit CSS colour; empty => inherit (currentColor) (default "")
 //!
-//! The shared `.pie-ring` base (14px inline) lives in the global layer — the
-//! same ring is used as the "working" symbol inside item rows. The showcase
-//! chrome (`.demo-ring`, the looping pulse) is owned here.
+//! The shared `.pie-ring` base (22px disc, the seat-disc size) lives in the
+//! global layer — the same ring is the roster's context gauge. The
+//! showcase chrome (`.demo-ring`, the looping pulse) is owned here.
 
 use rustex1_kit::h::m;
 use rustex1_kit::mjs::{self, Def};
