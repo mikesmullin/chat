@@ -7,6 +7,7 @@ use crate::components::{
     agents_menu, approval_card, assistant_card, browser_pane, composer, decision_card,
     samples, mode_toggle,
     dropdown, error_card, fold_card, identity_switcher, picker, project_tree, prompt_card, queued_card, rail_head,
+    search_input,
     share_dialog,
     target_form,
     diff_card, diff_view, field, hint_text, history_tree, input_prompt, item_group, job_card, job_panel, job_row,
@@ -17,7 +18,7 @@ use crate::components::{
     session_state,
     run_panel, run_state_badge, sandbox_chip_state, stage_timeline, system_card, tab, tag_input, task_list, text_area,
     text_input, thinking, toggle_button, tool_call_card, tool_response_card, ui_duration, ui_tooltip, user_card,
-    validation_info, worktrees_menu,
+    validation_info, switch, worktrees_menu,
 };
 
 fn shell(active: &str, content: Node) -> Node {
@@ -199,11 +200,27 @@ pub fn register(rt: &mut Runtime) {
         )
     });
 
+    rt.route("/storybook/search-input", "Search Input", |_| {
+        route_def(
+            "route /storybook/search-input",
+            "Search Input",
+            search_input::demo(),
+        )
+    });
+
     rt.route("/storybook/toggle", "Toggle Button", |_| {
         route_def(
             "route /storybook/toggle",
             "Toggle Button",
             toggle_button::demo(),
+        )
+    });
+
+    rt.route("/storybook/switch", "Switch", |_| {
+        route_def(
+            "route /storybook/switch",
+            "Switch",
+            switch::demo(),
         )
     });
 
@@ -516,6 +533,20 @@ pub fn register(rt: &mut Runtime) {
     });
 }
 
+fn scroll_active_row_into_view() {
+    let cb = Closure::once_into_js(move || {
+        let document = js::get(&js_sys::global(), "document");
+        let row = js::call(&document, "querySelector", &[JsValue::from_str("#sb .nav-item.on a")]);
+        if !js::is_missing(&row) {
+            let options = js::obj();
+            js::set_str(&options, "block", "nearest");
+            js::call(&row, "scrollIntoView", &[options.into()]);
+        }
+    });
+    let g = js_sys::global();
+    js::call(&g, "requestAnimationFrame", &[cb]);
+}
+
 fn register_spa_nav() {
     let token = lifecycle::token();
     let cb = Closure::wrap(Box::new(move |ev: JsValue| {
@@ -544,6 +575,7 @@ fn register_spa_nav() {
         }
         js::call(&ev, "preventDefault", &[]);
         mjs::router_set(&href);
+        scroll_active_row_into_view();
     }) as Box<dyn FnMut(JsValue)>);
     js::call(
         &js::document(),

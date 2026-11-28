@@ -1,6 +1,14 @@
-use rustex1_kit::h::{lit, m, Node};
+use js_sys::Array;
+use wasm_bindgen::{JsCast, JsValue};
 
-const ENTRIES: [(&'static str, &'static str, &'static str); 82] = [
+use rustex1_kit::h::{lit, m, Node};
+use rustex1_kit::mjs::{self, Def};
+use rustex1_kit::js;
+
+use crate::components::search_input;
+use crate::css;
+
+const ENTRIES: [(&'static str, &'static str, &'static str); 84] = [
     ("Approval Card", "/storybook/approval-card", "0"),
     ("Assistant Card", "/storybook/assistant-card", "0"),
     ("Counter", "/storybook/counter", "0"),
@@ -20,6 +28,7 @@ const ENTRIES: [(&'static str, &'static str, &'static str); 82] = [
     ("Rail Head", "/storybook/rail-head", "0"),
     ("Reasoning Card", "/storybook/reasoning-card", "0"),
     ("Relative Timestamp", "/storybook/reltime", "0"),
+    ("Search Input", "/storybook/search-input", "0"),
     ("Settings Menu Item", "/storybook", "0"),
     ("System Card", "/storybook/system-card", "0"),
     ("Task List", "/storybook/task-list", "0"),
@@ -38,6 +47,7 @@ const ENTRIES: [(&'static str, &'static str, &'static str); 82] = [
     ("Text Area", "/storybook/text-area", "1"),
     ("Text Input", "/storybook/text-input", "1"),
     ("Toggle Button", "/storybook/toggle", "1"),
+    ("Switch", "/storybook/switch", "1"),
     ("Browser Pane", "/storybook/browser-pane", "2"),
     ("Composer", "/storybook/composer", "2"),
     ("Presence", "/storybook/presence", "2"),
@@ -97,14 +107,41 @@ pub const CSS: &str = r#"
   overflow: hidden;
   position: relative;
 }
-.sb-rail-head { padding: 24px 20px 14px; }
-.sb-rail-head h1 { font-size: 15px; font-weight: 700; letter-spacing: -.015em; line-height: 1.2; color: var(--text); }
-.rail-group { margin-top: 18px; padding: 4px 20px 10px; }
+.sb-rail-head { padding: 14px 20px 10px; }
+.sb-rail-head h1 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: -.015em; line-height: 30px; color: var(--text); }
+.rail-group {
+  margin-top: 14px; padding: 4px 20px 10px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.rail-sort { display: flex; gap: 4px; align-items: center; }
+.rail-sort-btn {
+  width: 28px; height: 28px; display: inline-flex;
+  align-items: center; justify-content: center;
+  border: 0; border-radius: 7px;
+  background: transparent; color: var(--gray-dim);
+  cursor: pointer; padding: 0; line-height: 1;
+  transition: color .13s, background .13s;
+}
+.rail-sort-btn:hover { color: var(--text); background: var(--accent-glow); }
+.rail-sort-btn.on { color: var(--accent-soft); background: var(--accent-tint); }
+.rail-sort-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.rail-sort-btn .ph { font-size: 15px; line-height: 1; }
 .kicker {
   font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
   text-transform: uppercase; color: var(--muted);
 }
+.rail-search { padding: 2px 12px 14px; flex: 0 0 auto; }
+.nav-empty {
+  padding: 10px 12px;
+  color: var(--gray-dim);
+  font-size: 12px;
+  list-style: none;
+}
 .nav-list {
+  margin: 0;
   list-style: none; padding: 6px 12px 40px;
   display: flex; flex-direction: column; gap: 0;
   min-height: 0; overflow-y: auto;
@@ -149,6 +186,7 @@ pub const CSS: &str = r#"
 .nav-demo.collapsed { width: 56px; }
 .nav-demo.collapsed .sb-rail-head,
 .nav-demo.collapsed .rail-group,
+.nav-demo.collapsed .rail-search,
 .nav-demo.collapsed .nav-list { display: none; }
 .nav-demo .nav-list { padding-bottom: 8px; }
 .nav-demo .nav-item:hover { background: var(--accent-glow); }
@@ -175,6 +213,7 @@ pub const CSS: &str = r#"
 .sb-rail.collapsed .rail-toggle .ph { transform: scaleX(-1); }
 .sb-rail.collapsed .sb-rail-head,
 .sb-rail.collapsed .rail-group,
+.sb-rail.collapsed .rail-search,
 .sb-rail.collapsed .nav-list { display: none; }
 .sb-rail.collapsed .rail-toggle { right: 13px; }
 "#;
@@ -189,7 +228,57 @@ fn toggle_button() -> Node {
         .child(Node::icon("sidebar-simple"))
 }
 
+const STORE: &str = "navrail";
+const EXPR: &str = "$store.navrail";
+
+fn entries_js() -> JsValue {
+    let arr = Array::new();
+    for (label, url, depth) in ENTRIES {
+        let o = js::obj();
+        js::set_str(&o, "label", label);
+        js::set_str(&o, "url", url);
+        js::set_str(&o, "depth", depth);
+        arr.push(&o);
+    }
+    arr.into()
+}
+
+fn match_entries(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let list = args.get(0);
+    let out = Array::new();
+    let Ok(arr) = list.dyn_into::<Array>() else {
+        return out.into();
+    };
+    let store = mjs::store_ref(STORE);
+    let query = js::get_str(&store, "query").trim().to_lowercase();
+    let sort = js::get_str(&store, "sort");
+    let mut rows: Vec<JsValue> = arr
+        .iter()
+        .filter(|item| {
+            let label = js::get_str(item, "label").to_lowercase();
+            query.is_empty() || label.contains(&query)
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        let an = js::get_str(a, "label").to_lowercase();
+        let bn = js::get_str(b, "label").to_lowercase();
+        if sort == "alpha" {
+            an.cmp(&bn)
+        } else {
+            let ac = js::get_str(a, "depth").parse::<u32>().unwrap_or(0);
+            let bc = js::get_str(b, "depth").parse::<u32>().unwrap_or(0);
+            ac.cmp(&bc).then_with(|| an.cmp(&bn))
+        }
+    });
+    for item in rows {
+        out.push(&item);
+    }
+    out.into()
+}
+
 fn rail(active: Option<&str>, demo: bool) -> Node {
+    let active = active.unwrap_or("");
+    let matches = format!("{EXPR}.match({EXPR}.entries)");
     m(if demo { "div" } else { "aside" })
         .class(if demo { "nav-demo" } else { "sb-rail" })
         .attr("role", if demo { "figure" } else { "navigation" })
@@ -199,32 +288,53 @@ fn rail(active: Option<&str>, demo: bool) -> Node {
             m("header")
                 .class("sb-rail-head")
                 .child(m("h1").child(lit("Design Guide"))),
-            m("div").class("rail-group").child(m("span").class("kicker").child(lit("Components"))),
+            m("div")
+                .class("rail-group")
+                .kids(vec![
+                    m("span").class("kicker").child(lit("Components")),
+                    m("div")
+                        .class("rail-sort")
+                        .kids(vec![
+                            m("button")
+                                .bind("class", &format!("{EXPR}.sort === 'alpha' ? 'rail-sort-btn on' : 'rail-sort-btn'"))
+                                .attr("type", "button")
+                                .attr("title", "Sort by A–Z")
+                                .attr("aria-label", "Sort by A–Z")
+                                .on("click", &format!("{EXPR}.sort = 'alpha'"))
+                                .child(Node::icon("text-aa")),
+                            m("button")
+                                .bind("class", &format!("{EXPR}.sort === 'count' ? 'rail-sort-btn on' : 'rail-sort-btn'"))
+                                .attr("type", "button")
+                                .attr("title", "Sort by component count")
+                                .attr("aria-label", "Sort by component count")
+                                .on("click", &format!("{EXPR}.sort = 'count'"))
+                                .child(Node::icon("list-numbers")),
+                        ]),
+                ]),
+            m("div")
+                .class("rail-search")
+                .child(search_input::input(&format!("{EXPR}.query"), "Filter components…")),
             m("ul")
                 .class("nav-list")
-                .kids(
-                    ENTRIES
-                        .iter()
-                        .map(|(label, url, depth)| {
-                            let is_active = active == Some(label);
-                            row(label, url, depth, is_active)
-                        })
-                        .collect(),
-                ),
-        ])
-}
-
-fn row(label: &str, url: &str, depth: &str, active: bool) -> Node {
-    m("li")
-        .class(&format!("nav-item{}", if active { " on" } else { "" }))
-        .child(
-            m("a")
-                .attr("href", url)
                 .kids(vec![
-                    m("span").child(lit(label)),
-                    m("span").class("counter").child(lit(depth)),
+                    m("li")
+                        .bind("class", &format!("e.label === '{active}' ? 'nav-item on' : 'nav-item'"))
+                        .for_each(&format!("e in {matches}"))
+                        .key("e.url")
+                        .child(
+                            m("a")
+                                .bind("href", "e.url")
+                                .kids(vec![
+                                    m("span").text("e.label"),
+                                    m("span").class("counter").text("e.depth"),
+                                ]),
+                        ),
+                    m("li")
+                        .class("nav-empty")
+                        .show(&format!("{matches}.length === 0"))
+                        .child(lit("No matches")),
                 ]),
-        )
+        ])
 }
 
 pub fn nav_rail_demo() -> Node {
@@ -233,4 +343,14 @@ pub fn nav_rail_demo() -> Node {
 
 pub fn page_rail(active: &str) -> Node {
     rail(Some(active), false)
+}
+
+pub fn register() {
+    css::inject("nav-rail", CSS);
+    let mut d = Def::new().named("store navrail");
+    d.val("entries", &entries_js())
+        .str("query", "")
+        .str("sort", "count")
+        .method("match", match_entries);
+    mjs::store(STORE, &d.finish());
 }

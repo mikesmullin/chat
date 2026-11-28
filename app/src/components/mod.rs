@@ -36,6 +36,7 @@ pub mod mode_toggle;
 pub mod label;
 pub mod name_tag;
 pub mod nav_rail;
+pub mod search_input;
 pub mod notification_toggle;
 pub mod perf_badge;
 pub mod picker;
@@ -80,6 +81,7 @@ pub mod settings;
 pub mod settings_menu_item;
 pub mod share_dialog;
 pub mod system_card;
+pub mod switch;
 pub mod tab;
 pub mod tag_input;
 pub mod target_form;
@@ -149,6 +151,7 @@ pub fn register() {
     session_state::register();
     share_dialog::register();
     system_card::register();
+    switch::register();
     tab::register();
     tag_input::register();
     task_list::register();
@@ -166,7 +169,8 @@ pub fn register() {
     css::inject("item-group", item_group::CSS);
     agents_menu::register();
     css::inject("sandboxes-menu", sandboxes_menu::CSS);
-    css::inject("nav-rail", nav_rail::CSS);
+    nav_rail::register();
+    search_input::register();
 
     vcs::register();
     jobs::register();

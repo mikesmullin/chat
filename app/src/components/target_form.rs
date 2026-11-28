@@ -295,24 +295,20 @@ pub fn panel() -> Node {
                         .model(&format!("{ST}.name"))
                         .on("keydown.enter", &format!("{ST}.save()")),
                 ]),
-            m("label")
-                .class("ae-label")
-                .show(&format!("{ST}.kind === 'automation'"))
-                .kids(vec![
-                    m("input")
-                        .attr("type", "checkbox")
-                        .model(&format!("{ST}.enabled")),
-                    m("span").child(lit("active")),
-                ]),
-            m("label")
-                .class("ae-label")
-                .show(&format!("{ST}.kind === 'automation'"))
-                .kids(vec![
-                    m("input")
-                        .attr("type", "checkbox")
-                        .model(&format!("{ST}.catchUp")),
-                    m("span").child(lit("catch up missed runs at startup")),
-                ]),
+            crate::components::switch::switch(
+                &format!("{ST}.enabled"),
+                &format!("{ST}.toggleBool('enabled')"),
+                "'active'",
+                None,
+            )
+            .show(&format!("{ST}.kind === 'automation'")),
+            crate::components::switch::switch(
+                &format!("{ST}.catchUp"),
+                &format!("{ST}.toggleBool('catchUp')"),
+                "'catch up missed runs at startup'",
+                None,
+            )
+            .show(&format!("{ST}.kind === 'automation'")),
             m("div")
                 .class("ae-field")
                 .show(&format!("{ST}.kind === 'automation'"))
@@ -347,14 +343,19 @@ pub fn panel() -> Node {
                             .class("hint")
                             .child(lit("seated before the prompt runs")),
                     ]),
-                    m("select").model(&format!("{ST}.agent")).kids(vec![
-                        m("option").attr("value", "").child(lit("Default")),
-                        m("option")
-                            .for_each("a in $store.agents.agents")
-                            .key("a.name")
-                            .bind("value", "a.name")
-                            .text("a.name"),
-                    ]),
+                    picker::picker(&picker::Picker {
+                        key: "agent",
+                        icon: "robot",
+                        extra: "dd-agent",
+                        search: "Search agents…",
+                        items: &format!("{ST}.agentItems()"),
+                        value: &format!("{ST}.agent"),
+                        null: Some(("Default", "no agent")),
+                        null_icon: "robot",
+                        on_pick: &format!("{ST}.pickAgent({{}})"),
+                        on_edit: "",
+                        actions: &[],
+                    }),
                 ]),
             m("div")
                 .class("ae-field")
@@ -685,6 +686,35 @@ fn pick_parent(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+fn agent_items(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let out = js_sys::Array::new();
+    if !mjs::has_store("agents") {
+        return out.into();
+    }
+    let list = js_sys::Array::from(&js::get(&mjs::store_ref("agents"), "agents"));
+    for a in list.iter() {
+        let name = js::get_str(&a, "name");
+        if name.is_empty() {
+            continue;
+        }
+        let icon = js::get_str(&a, "icon");
+        let o = js::obj();
+        js::set_str(&o, "id", &name);
+        js::set_str(&o, "name", &name);
+        js::set_str(&o, "icon", &if icon.is_empty() { "robot".to_string() } else { icon });
+        js::set_str(&o, "hint", &js::get_str(&a, "description"));
+        out.push(&o);
+    }
+    out.into()
+}
+
+fn pick_agent(_this: JsValue, args: js_sys::Array) -> JsValue {
+    js::set_str(&mjs::store_ref(STORE), "agent", &js::arg_str(&args, 0));
+    js::call(&mjs::store_ref("dropdown"), "closeIf", &[JsValue::from_str("agent")]);
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
 fn ready(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let kind = js::get_str(&s, "kind");
@@ -934,6 +964,15 @@ fn cron_custom() -> Node {
         .child(m("span").child(lit("Custom")))
 }
 
+fn toggle_bool(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let field = js::arg_str(&args, 0);
+    if field != "enabled" && field != "catchUp" { return JsValue::UNDEFINED; }
+    js::set_bool(&s, &field, !js::get_bool(&s, &field));
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
 fn set_cron(_this: JsValue, args: js_sys::Array) -> JsValue {
     let cron = js::arg_str(&args, 0);
     if cron == "__custom" {
@@ -1027,6 +1066,7 @@ pub fn register() {
         .method("statusClass", status_class)
         .method("statusLabel", status_label)
         .method("setCron", set_cron)
+        .method("toggleBool", toggle_bool)
         .method("openCreate", open_create)
         .method("openEdit", open_edit)
         .method("close", close)
@@ -1036,6 +1076,8 @@ pub fn register() {
         .method("repos", repos)
         .method("projects", projects)
         .method("pickParent", pick_parent)
+        .method("agentItems", agent_items)
+        .method("pickAgent", pick_agent)
         .method("ready", ready)
         .method("deletable", deletable);
     mjs::store(STORE, &d.finish());

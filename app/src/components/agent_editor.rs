@@ -95,34 +95,6 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .ae-btn.danger:hover { color: var(--danger, #d9534f); }
 :is(#sb, #home) .ae-btn.is-confirm { color: var(--danger, #d9534f); }
 :is(#sb, #home) .ae-btn[disabled] { opacity: .5; cursor: default; }
-:is(#sb, #home) .shields-switch {
-  appearance: none; border: 0; background: transparent; cursor: pointer;
-  display: inline-flex; align-items: center; gap: 8px; padding: 0;
-  align-self: flex-start;
-}
-:is(#sb, #home) .shields-track {
-  position: relative; width: 32px; height: 17px;
-  border-radius: 999px; background: #00ad0d;
-  transition: background 140ms ease;
-}
-:is(#sb, #home) .shields-knob {
-  position: absolute; top: 50%; margin-top: -8px;
-  left: 15px;
-  width: 16px; height: 16px; border-radius: 50%; background: #fff;
-  box-shadow: 0 1px 2px rgba(0,0,0,.3);
-  display: inline-flex; align-items: center; justify-content: center;
-  transition: left 160ms cubic-bezier(.2,.8,.2,1);
-}
-:is(#sb, #home) .shields-icon {
-  font-size: 10px; color: #00ad0d;
-}
-:is(#sb, #home) .shields-label {
-  display: inline-flex; align-items: center; gap: 5px;
-  font: 500 12px/1 var(--sans); color: var(--text);
-}
-:is(#sb, #home) .shields-switch.is-down .shields-track { background: #ef4444; }
-:is(#sb, #home) .shields-switch.is-down .shields-knob { left: 1px; }
-:is(#sb, #home) .shields-switch.is-down .shields-icon { color: #b91c1c; }
 :is(#sb, #home) .ae-input-icon { position: relative; display: flex; align-items: center; }
 :is(#sb, #home) .ae-input-glyph {
   position: absolute; left: 10px; z-index: 1; pointer-events: none;
@@ -132,7 +104,6 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .ae-device-icon {
   color: #fff; font-size: 12px; line-height: 1.6; flex: 0 0 auto;
 }
-:is(#sb, #home) .shields-glyph { color: #fff; font-size: 13px; line-height: 1; }
 :is(#sb, #home) .ae-devices {
   display: flex; flex-direction: column; gap: 4px;
   padding: 8px 10px; border: 1px solid var(--line-soft, var(--line));
@@ -415,32 +386,16 @@ pub fn settings_panel() -> Node {
                     m("span").child(lit("Shields")),
                     m("span").class("hint").child(lit("up: strangers are firewalled · down: invite by name")),
                 ]),
-                m("button")
-                    .attr("type", "button")
-                    .attr("title", "Toggle shields")
-                    .bind(
+                crate::components::switch::switch(
+                    "($store.ident.shields !== 'down')",
+                    "$store.ident.setShields($store.ident.shields !== 'down')",
+                    "($store.ident.shields === 'down' ? 'Down' : 'Up')",
+                    Some(m("i").bind(
                         "class",
-                        "($store.ident.shields === 'down' ? 'shields-switch is-down' : 'shields-switch')",
-                    )
-                    .on("click", "$store.ident.setShields($store.ident.shields !== 'down')")
-                    .kids(vec![
-                        m("span").class("shields-track").child(
-                            m("span")
-                                .class("shields-knob")
-                                .child(m("i").bind(
-                                    "class",
-                                    "($store.ident.shields === 'down' ? 'ph ph-bold ph-x shields-icon' : 'ph ph-fill ph-check-fat shields-icon')",
-                                )),
-                        ),
-                        m("span").class("shields-label").kids(vec![
-                            m("i").bind(
-                                "class",
-                                "($store.ident.shields === 'down' ? 'ph ph-bold ph-shield shields-glyph' : 'ph ph-bold ph-shield-check shields-glyph')",
-                            ),
-                            m("span")
-                                .text("($store.ident.shields === 'down' ? 'Down' : 'Up')"),
-                        ]),
-                    ]),
+                        "($store.ident.shields === 'down' ? 'ph ph-bold ph-shield sw-glyph' : 'ph ph-bold ph-shield-check sw-glyph')",
+                    )),
+                )
+                .attr("title", "Toggle shields"),
                 m("div")
                     .class("ae-bans")
                     .for_each("ip in $store.ident.bans")
