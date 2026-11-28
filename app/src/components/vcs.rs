@@ -52,6 +52,43 @@ fn set_list_state(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+fn fetch_pr_detail(repo: &str, number: &str) {
+    let repo_q = repo.to_string();
+    let number_q = number.to_string();
+    api::vcs_get("pr", &format!("repo={repo}&number={number}"), move |v| {
+        let s = mjs::store_ref(STORE);
+        let pr = js::get(&v, "pr");
+        if js::get_str(&s, "prRepo") == repo_q && js::get_str(&s, "prNumber") == number_q {
+            js::set(&s, "pr", &pr);
+            let desc = js::get_str(&pr, "description");
+            js::set_str(&s, "descriptionHtml", &helpers::markdown_to_html(&if desc.trim().is_empty() { "_No description._".to_string() } else { desc }));
+            redraw();
+        }
+    });
+    let repo_q = repo.to_string();
+    let number_q = number.to_string();
+    api::vcs_get("pr-status", &format!("repo={repo}&number={number}"), move |v| {
+        let s = mjs::store_ref(STORE);
+        if js::get_str(&s, "prRepo") == repo_q && js::get_str(&s, "prNumber") == number_q {
+            js::set(&s, "status", &js::get(&v, "status"));
+            js::set(&s, "checks", &js::get(&v, "checks"));
+            redraw();
+        }
+    });
+    let repo_q = repo.to_string();
+    let number_q = number.to_string();
+    api::vcs_text("pr-diff", &format!("repo={repo_q}&number={number_q}"), move |v| {
+        let s = mjs::store_ref(STORE);
+        let text = v.as_string().unwrap_or_default();
+        if js::get_str(&s, "prRepo") == repo_q && js::get_str(&s, "prNumber") == number_q {
+            js::set_str(&s, "diffText", &text);
+            js::set(&s, "diffFiles", &crate::components::diff_view::parse_json(&text));
+            js::set_bool(&s, "diffLoading", false);
+            redraw();
+        }
+    });
+}
+
 fn open_pr(_this: JsValue, args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     crate::components::aside_panels::close();
@@ -65,61 +102,8 @@ fn open_pr(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::set_str(&s, "diffText", "");
     js::set_bool(&s, "diffLoading", true);
     js::set_bool(&mjs::store_ref("home"), "asideOpen", true);
-    let repo_q = repo.clone();
-    let number_q = number.clone();
-    api::vcs_get("pr", &format!("repo={repo}&number={number}"), move |v| {
-        let s = mjs::store_ref(STORE);
-        let pr = js::get(&v, "pr");
-        if js::get_str(&s, "prRepo") == repo_q && js::get_str(&s, "prNumber") == number_q {
-            js::set(&s, "pr", &pr);
-            let desc = js::get_str(&pr, "description");
-            js::set_str(&s, "descriptionHtml", &helpers::markdown_to_html(&if desc.trim().is_empty() { "_No description._".to_string() } else { desc }));
-            redraw();
-        }
-    });
-    let repo_q = repo.clone();
-    let number_q = number.clone();
-    api::vcs_get("pr-status", &format!("repo={repo}&number={number}"), move |v| {
-        let s = mjs::store_ref(STORE);
-        if js::get_str(&s, "prRepo") == repo_q && js::get_str(&s, "prNumber") == number_q {
-            js::set(&s, "status", &js::get(&v, "status"));
-            js::set(&s, "checks", &js::get(&v, "checks"));
-            redraw();
-        }
-    });
-    let repo_q = repo;
-    let number_q = number;
-    api::vcs_text("pr-diff", &format!("repo={repo_q}&number={number_q}"), move |v| {
-        let s = mjs::store_ref(STORE);
-        let text = v.as_string().unwrap_or_default();
-        if js::get_str(&s, "prRepo") == repo_q && js::get_str(&s, "prNumber") == number_q {
-            js::set_str(&s, "diffText", &text);
-            js::set(&s, "diffFiles", &crate::components::diff_view::parse_json(&text));
-            js::set_bool(&s, "diffLoading", false);
-            redraw();
-        }
-    });
+    fetch_pr_detail(&repo, &number);
     redraw();
-    JsValue::UNDEFINED
-}
-
-fn close_pr(_this: JsValue, _args: js_sys::Array) -> JsValue {
-    let s = mjs::store_ref(STORE);
-    js::set_bool(&s, "prOpen", false);
-    js::set(&s, "pr", &js::obj());
-    redraw();
-    JsValue::UNDEFINED
-}
-
-fn refresh_pr(_this: JsValue, args: js_sys::Array) -> JsValue {
-    let s = mjs::store_ref(STORE);
-    let repo = js::get_str(&s, "prRepo");
-    let number = js::get_str(&s, "prNumber");
-    let args2 = js_sys::Array::new();
-    args2.push(&JsValue::from_str(&repo));
-    args2.push(&JsValue::from_str(&number));
-    open_pr(JsValue::UNDEFINED, args2);
-    let _ = args;
     JsValue::UNDEFINED
 }
 
@@ -577,6 +561,38 @@ fn worktrees_for_repo(_this: JsValue, args: js_sys::Array) -> JsValue {
     out.into()
 }
 
+fn toggle_prs_group(this: JsValue, args: js_sys::Array) -> JsValue {
+    let name = js::arg_str(&args, 0);
+    if name.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let map = js::get(&this, "prsOpen");
+    let open = js::get(&map, &name).as_bool().unwrap_or(true);
+    if !map.is_object() {
+        js::set(&this, "prsOpen", &js::obj());
+    }
+    let map = js::get(&this, "prsOpen");
+    js::set(&map, &name, &JsValue::from_bool(!open));
+    redraw();
+    JsValue::UNDEFINED
+}
+
+fn toggle_wt_group(this: JsValue, args: js_sys::Array) -> JsValue {
+    let id = js::arg_str(&args, 0);
+    if id.is_empty() {
+        return JsValue::UNDEFINED;
+    }
+    let map = js::get(&this, "wtOpen");
+    let open = js::get(&map, &id).as_bool().unwrap_or(true);
+    if !map.is_object() {
+        js::set(&this, "wtOpen", &js::obj());
+    }
+    let map = js::get(&this, "wtOpen");
+    js::set(&map, &id, &JsValue::from_bool(!open));
+    redraw();
+    JsValue::UNDEFINED
+}
+
 fn checks_ok(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     for check in js_sys::Array::from(&js::get(&s, "checks")).iter() {
@@ -648,16 +664,16 @@ pub fn apply_topic(v: JsValue) {
     if !js_sys::Array::is_array(&repos) {
         return;
     }
-    if js::get_str(&s, "prRepo").is_empty() {
-        let list = js_sys::Array::from(&prs);
-        if list.length() > 0 {
-            let first = list.get(0);
-            let _ = first;
-        }
-    }
     js::set(&s, "repos", &repos);
     js::set(&s, "worktrees", &js::get(&v, "worktrees"));
     js::set(&s, "prs", &prs);
+    if js::get_bool(&s, "prOpen") {
+        let repo = js::get_str(&s, "prRepo");
+        let number = js::get_str(&s, "prNumber");
+        if !repo.is_empty() && !number.is_empty() {
+            fetch_pr_detail(&repo, &number);
+        }
+    }
     redraw();
 }
 
@@ -667,6 +683,8 @@ pub fn register() {
         .val("worktrees", &js_sys::Array::new().into())
         .val("prs", &js_sys::Array::new().into())
         .val("checks", &js_sys::Array::new().into())
+        .val("wtOpen", &js::obj().into())
+        .val("prsOpen", &js::obj().into())
         .val("pr", &js::obj().into())
         .val("status", &js::obj().into())
         .val("diffFiles", &js_sys::Array::new().into())
@@ -702,8 +720,6 @@ pub fn register() {
         .method("loadPrs", load_prs)
         .method("setListState", set_list_state)
         .method("openPr", open_pr)
-        .method("closePr", close_pr)
-        .method("refreshPr", refresh_pr)
         .method("setDiffMode", set_diff_mode)
         .method("openPrForm", open_pr_form)
         .method("openRepo", open_repo)
@@ -725,6 +741,8 @@ pub fn register() {
         .method("repoNames", repo_names)
         .method("repoLabel", repo_label)
         .method("worktreesForRepo", worktrees_for_repo)
+        .method("toggleWtGroup", toggle_wt_group)
+        .method("togglePrsGroup", toggle_prs_group)
         .method("checksOk", checks_ok)
         .method("checksPending", checks_pending)
         .method("readyToMerge", ready_to_merge)

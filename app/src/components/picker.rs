@@ -397,7 +397,7 @@ pub fn repo(st: &str, draft: &str) -> Node {
 pub fn worktree(st: &str) -> Node {
     picker(&Picker {
         key: "worktree",
-        icon: "tree-structure",
+        icon: "git-fork",
         extra: "dd-worktree",
         search: "Search worktrees…",
         items: &format!("{st}.worktrees"),

@@ -406,8 +406,8 @@ const REPOS: &[(&str, &str, &str, &str)] = &[
 ];
 
 const WORKTREES: &[(&str, &str, &str, &str)] = &[
-    ("wt-onboarding", "onboarding-flow", "tree-structure", "psicom/chat"),
-    ("wt-billing", "billing-replay", "tree-structure", "psicom/chat"),
+    ("wt-onboarding", "onboarding-flow", "git-fork", "psicom/chat"),
+    ("wt-billing", "billing-replay", "git-fork", "psicom/chat"),
 ];
 
 const BRANCHES: &[(&str, &str, &str, &str)] = &[

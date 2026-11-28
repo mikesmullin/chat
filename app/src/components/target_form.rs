@@ -125,17 +125,28 @@ pub fn panel() -> Node {
                     .for_each(&format!("seg in {ST}.segments()"))
                     .key("seg")
                     .text("seg")]),
-            m("p")
-                .class("tform-note")
+            m("div")
+                .class("ae-field")
                 .show(&format!(
                     "{ST}.mode === 'edit' && {ST}.kind !== 'project' && {ST}.kind !== 'sandbox'"
                 ))
-                .text(&format!("{ST}.original")),
+                .kids(vec![
+                    m("label").class("ae-label").kids(vec![
+                        m("span").child(lit("Original")),
+                    ]),
+                    m("span").class("tform-value").kids(vec![
+                        m("i").class("ph ph-key tform-value-icon"),
+                        m("span").text(&format!("{ST}.original")),
+                    ]),
+                ]),
             m("div").class("ae-field").show(&format!("{ST}.kind === 'sandbox'")).kids(vec![
                 m("label").class("ae-label").kids(vec![
                     m("span").child(lit("Container")),
                 ]),
-                m("p").class("tform-note").text(&format!("{ST}.original")),
+                m("span").class("tform-value").kids(vec![
+                    m("i").class("ph ph-key tform-value-icon"),
+                    m("span").text(&format!("{ST}.original")),
+                ]),
             ]),
             m("div").class("ae-field").show(&format!("{ST}.kind === 'sandbox'")).kids(vec![
                 m("label").class("ae-label").kids(vec![
@@ -178,25 +189,37 @@ pub fn panel() -> Node {
                 m("label").class("ae-label").kids(vec![
                     m("span").child(lit("Created")),
                 ]),
-                m("span").class("tform-value").text(&format!("{ST}.createdAt")),
+                m("span").class("tform-value").kids(vec![
+                    m("i").class("ph ph-calendar tform-value-icon"),
+                    m("span").text(&format!("{ST}.createdAt")),
+                ]),
             ]),
             m("div").class("ae-field").show(&format!("{ST}.kind === 'worktree'")).kids(vec![
                 m("label").class("ae-label").kids(vec![
                     m("span").child(lit("Branch")),
                 ]),
-                m("span").class("tform-value").text(&format!("{ST}.name")),
+                m("span").class("tform-value").kids(vec![
+                    m("i").class("ph ph-git-branch tform-value-icon"),
+                    m("span").text(&format!("{ST}.name")),
+                ]),
             ]),
             m("div").class("ae-field").show(&format!("{ST}.kind === 'worktree'")).kids(vec![
                 m("label").class("ae-label").kids(vec![
                     m("span").child(lit("Repo")),
                 ]),
-                m("span").class("tform-value").text(&format!("{ST}.repoName")),
+                m("span").class("tform-value").kids(vec![
+                    m("i").class("ph ph-github-logo tform-value-icon"),
+                    m("span").text(&format!("{ST}.repoName")),
+                ]),
             ]),
             m("div").class("ae-field").show(&format!("{ST}.kind === 'worktree'")).kids(vec![
                 m("label").class("ae-label").kids(vec![
                     m("span").child(lit("Path")),
                 ]),
-                m("span").class("tform-value").text(&format!("{ST}.path")),
+                m("span").class("tform-value").kids(vec![
+                    m("i").class("ph ph-folder-open tform-value-icon"),
+                    m("span").text(&format!("{ST}.path")),
+                ]),
             ]),
             m("div")
                 .class("ae-field")
@@ -437,7 +460,7 @@ fn kind_info(kind: &str) -> (&'static str, &'static str) {
         "project" => ("Project", "folder-plus"),
         "sandbox" => ("Sandbox", "cube"),
         "automation" => ("Automation", "timer"),
-        "worktree" => ("Worktree", "tree-structure"),
+        "worktree" => ("Worktree", "git-fork"),
         "branch" => ("Branch", "git-branch"),
         "repo" => ("Repo", "folder-open"),
         _ => ("", "question"),

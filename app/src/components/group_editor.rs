@@ -9,7 +9,14 @@ const ST: &str = "$store.groupDraft";
 pub fn panel(st: &str) -> Node {
     let field = session_editor::field;
     m("div").class("agent-editor session-editor").show(&format!("{ST}.open")).kids(vec![
-        m("div").class("agent-editor-head").kids(vec![Node::icon("pencil-simple"), m("span").class("agent-editor-title").text(&format!("('Edit group: ' + {ST}.name)"))]),
+        m("div").class("agent-editor-head").kids(vec![Node::icon("folder-open"), m("span").class("agent-editor-title").child(lit("Edit group"))]),
+        m("div").class("ae-field").kids(vec![
+            m("label").class("ae-label").kids(vec![m("span").child(lit("Name"))]),
+            m("span").class("tform-value").kids(vec![
+                m("i").class("ph ph-folder-open tform-value-icon"),
+                m("span").text(&format!("({ST}.name)")),
+            ]),
+        ]),
         validation_info::live(&format!("({ST}.messageTone ? ' ' + {ST}.messageTone : '')"), &format!("{ST}.message")),
         field("Purpose", "optional", &format!("{ST}.purpose"), "", 0),
         field("Notes", "optional", &format!("{ST}.notes"), "", 3),

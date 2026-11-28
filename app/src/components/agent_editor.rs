@@ -212,11 +212,11 @@ pub fn agent_editor() -> Node {
         .show(&format!("{ST}.open"))
         .kids(vec![
             m("div").class("agent-editor-head").kids(vec![
-                Node::icon_dyn(&format!("({ST}.draft.icon || 'robot')")),
+                Node::icon("robot"),
                 m("span")
                     .class("agent-editor-title")
                     .text(&format!(
-                        "({ST}.creating ? 'New agent' : ({ST}.draft.name || 'Agent'))"
+                        "({ST}.creating ? 'New agent' : 'Edit agent')"
                     )),
             ]),
             validation_info::live(

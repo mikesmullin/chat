@@ -8,6 +8,8 @@ pub const CSS: &str = r#"
   margin-bottom: 10px;
 }
 .rail-head .rail-add { margin-left: auto; }
+.rail-head .rail-middle { margin-left: auto; }
+.rail-head .rail-middle + .rail-add { margin-left: 0; }
 .rail-title {
   margin: 0;
   font-size: 13px; font-weight: 400;
@@ -22,9 +24,7 @@ button.rail-title {
 button.rail-title:hover { color: var(--text); }
 button.rail-title .ph { font-size: 11px; line-height: 1; }
 button.rail-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-.project-tree.is-collapsed > .rail-head,
-.agents-menu.is-collapsed > .rail-head,
-.sandboxes-menu.is-collapsed > .rail-head { margin-bottom: 0; }
+.is-collapsed > .rail-head { margin-bottom: 0; }
 .rail-add {
   width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -58,6 +58,16 @@ pub fn add(tip: &str, on: &str) -> Node {
 }
 
 pub fn head(title: &str, icon: &str, add: Option<(&str, &str, &str)>, section: Option<&str>) -> Node {
+    head_with(title, icon, None, add, section)
+}
+
+pub fn head_with(
+    title: &str,
+    icon: &str,
+    middle: Option<Node>,
+    add: Option<(&str, &str, &str)>,
+    section: Option<&str>,
+) -> Node {
     let title_node = match section {
         Some(key) => m("button")
             .class("rail-title")
@@ -75,6 +85,9 @@ pub fn head(title: &str, icon: &str, add: Option<(&str, &str, &str)>, section: O
             .kids(vec![Node::icon(icon), m("span").child(lit(title))]),
     };
     let mut kids = vec![title_node];
+    if let Some(m) = middle {
+        kids.push(m);
+    }
     if let Some((tip, on, guard)) = add {
         let b = self::add(tip, on);
         kids.push(if guard.is_empty() { b } else { b.show(guard) });

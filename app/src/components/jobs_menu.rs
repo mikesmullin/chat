@@ -35,6 +35,7 @@ pub fn menu(st: &str) -> Node {
     let js = jobs::EXPR;
     m("div")
         .class("jobs-menu")
+        .bind("class", "($store.home.jobsOpen ? '' : 'is-collapsed')")
         .kids(vec![
             rail_head::head(
                 "Jobs",

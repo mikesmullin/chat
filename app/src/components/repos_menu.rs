@@ -16,10 +16,11 @@ pub fn menu(live: &str) -> Node {
     let st = vcs::EXPR;
     m("div")
         .class("repos-menu")
+        .bind("class", "($store.home.reposOpen ? '' : 'is-collapsed')")
         .kids(vec![
             rail_head::head(
                 "Repos",
-                "database",
+                "github-logo",
                 Some((
                     "Add repo",
                     &format!("{live}.createTarget('repo')"),

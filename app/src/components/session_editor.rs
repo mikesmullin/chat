@@ -196,7 +196,7 @@ pub fn panel(st: &str) -> Node {
         .show(&format!("{ST}.open"))
         .kids(vec![
         m("div").class("agent-editor-head").kids(vec![
-            Node::icon("pencil-simple"),
+            Node::icon("chat-circle"),
             m("span").class("agent-editor-title").child(lit("Edit session")),
         ]),
         validation_info::live(

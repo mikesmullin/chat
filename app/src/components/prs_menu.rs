@@ -4,35 +4,73 @@ use crate::components::{pr_card, rail_head, vcs};
 use crate::css;
 
 pub const CSS: &str = r#"
-:is(#sb, #home) .prs-list { display: flex; flex-direction: column; gap: 6px; }
-:is(#sb, #home) .prs-group {
-  padding: 4px 8px 0; font-size: 10px; letter-spacing: .05em;
+:is(#sb, #home) .prs-settings { position: relative; display: inline-flex; flex: 0 0 auto; }
+:is(#sb, #home) .prs-settings.is-open .rail-add { background: var(--panel-2); color: var(--accent); }
+:is(#sb, #home) .prs-settings-menu {
+  position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 40;
+  min-width: 148px; padding: 4px;
+  display: flex; flex-direction: column; gap: 1px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .55);
+}
+:is(#sb, #home) .prs-settings-label {
+  padding: 5px 8px 3px; font-size: 10px; letter-spacing: .05em;
   text-transform: uppercase; color: var(--gray-dim);
 }
-:is(#sb, #home) .prs-group-rows { display: flex; flex-direction: column; gap: 4px; }
-:is(#sb, #home) .prs-filter {
-  display: flex; gap: 4px; padding: 4px 6px 2px;
-}
-:is(#sb, #home) .prs-filter button {
-  border: 1px solid var(--border); border-radius: 999px;
-  background: var(--panel); color: var(--gray-dim);
-  font: inherit; font-size: 10.5px; padding: 2px 9px; cursor: pointer;
-}
-:is(#sb, #home) .prs-filter button.on {
-  color: var(--accent-soft); border-color: var(--accent); background: var(--accent-tint);
-}
-:is(#sb, #home) .prs-empty { margin: 0; padding: 10px 6px; color: var(--gray-dim); font-size: 11px; }
 .prs-menu-demo { width: 300px; }
 "#;
+
+fn settings_menu() -> Node {
+    let st = vcs::EXPR;
+    m("div")
+        .class("prs-settings rail-middle")
+        .bind("class", "($store.dropdown.open === 'prs-filter' ? 'is-open' : '')")
+        .on("click.outside", "$store.dropdown.closeIf('prs-filter')")
+        .kids(vec![
+            m("button")
+                .class("rail-add")
+                .attr("type", "button")
+                .attr("title", "Filter pull requests")
+                .attr("aria-label", "Filter pull requests")
+                .on("click", "$store.dropdown.toggle('prs-filter')")
+                .child(Node::icon("funnel")),
+            m("div")
+                .class("prs-settings-menu")
+                .show("$store.dropdown.open === 'prs-filter'")
+                .kids(vec![
+                    m("span").class("prs-settings-label").child(lit("Filter")),
+                    m("button")
+                        .class("dropdown-item")
+                        .attr("type", "button")
+                        .bind("class", &format!("({st}.listState === 'active' ? 'on' : '')"))
+                        .on("click", &format!("{st}.setListState('active'); $store.dropdown.closeIf('prs-filter')"))
+                        .kids(vec![
+                            m("span").class("dropdown-item-label").child(lit("active")),
+                            m("i").class("ph ph-check dropdown-item-check").show(&format!("{st}.listState === 'active'")),
+                        ]),
+                    m("button")
+                        .class("dropdown-item")
+                        .attr("type", "button")
+                        .bind("class", &format!("({st}.listState === 'all' ? 'on' : '')"))
+                        .on("click", &format!("{st}.setListState('all'); $store.dropdown.closeIf('prs-filter')"))
+                        .kids(vec![
+                            m("span").class("dropdown-item-label").child(lit("all")),
+                            m("i").class("ph ph-check dropdown-item-check").show(&format!("{st}.listState === 'all'")),
+                        ]),
+                ]),
+        ])
+}
 
 pub fn menu() -> Node {
     let st = vcs::EXPR;
     m("div")
         .class("prs-menu")
+        .bind("class", "($store.home.prsOpen ? '' : 'is-collapsed')")
         .kids(vec![
-            rail_head::head(
+            rail_head::head_with(
                 "Pull Requests",
                 "git-pull-request",
+                Some(settings_menu()),
                 Some((
                     "Open PR",
                     &format!("{st}.openPrForm()"),
@@ -41,27 +79,22 @@ pub fn menu() -> Node {
                 Some("prs"),
             ),
             m("div")
-                .class("prs-list")
+                .class("wt-list")
                 .show("$store.home.prsOpen")
                 .kids(vec![
-                    m("div").class("prs-filter").kids(vec![
-                        m("button")
-                            .bind("class", &format!("({st}.listState === 'active' ? 'on' : '')"))
-                            .attr("type", "button")
-                            .on("click", &format!("{st}.setListState('active')"))
-                            .child(lit("active")),
-                        m("button")
-                            .bind("class", &format!("({st}.listState === 'all' ? 'on' : '')"))
-                            .attr("type", "button")
-                            .on("click", &format!("{st}.setListState('all')"))
-                            .child(lit("all")),
-                    ]),
                     m("div").for_each(&format!("r in {st}.repos")).key(&format!("'pr' + r.id")).kids(vec![
                         m("div")
-                            .class("prs-group")
+                            .class("ptree-row wt-group")
+                            .bind("class", &format!("({st}.prsOpen[r.name] === false ? '' : 'is-open')"))
                             .show(&format!("{st}.prsForRepo(r.name).length > 0"))
-                            .text("r.name"),
-                        m("div").class("prs-group-rows").kids(vec![
+                            .bind("title", "r.name")
+                            .on("click", &format!("{st}.togglePrsGroup(r.name)"))
+                            .kids(vec![
+                                m("i").class("ph ph-caret-right ptree-caret"),
+                                m("i").class("ph ph-github-logo ptree-icon"),
+                                m("span").class("ptree-name").text("r.name"),
+                            ]),
+                        m("div").class("wt-rows").show(&format!("{st}.prsOpen[r.name] !== false")).kids(vec![
                             m("div")
                                 .for_each(&format!("p in {st}.prsForRepo(r.name)"))
                                 .key("p.id")
@@ -69,7 +102,7 @@ pub fn menu() -> Node {
                         ]),
                     ]),
                     m("p")
-                        .class("prs-empty")
+                        .class("wt-empty")
                         .show(&format!("{st}.prs.length === 0"))
                         .child(lit("No pull requests yet.")),
                 ]),

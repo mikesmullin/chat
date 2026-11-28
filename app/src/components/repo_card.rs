@@ -29,7 +29,7 @@ pub fn parts(st: &str, v: &str) -> Vec<Node> {
         .attr("href", "#")
         .on("click", &format!("$event.preventDefault(); {st}.openRepo({v}.name)"))
         .kids(vec![
-            Node::icon("database"),
+            Node::icon("github-logo"),
             m("span").class("repo-name").text(&format!("{v}.name")),
         ])
     ]

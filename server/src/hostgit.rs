@@ -831,7 +831,7 @@ pub fn worktree_items(root: &Path) -> Value {
                     "name": w.get("branch").cloned().unwrap_or(Value::Null),
                     "hint": w.get("repoName").cloned().unwrap_or(Value::Null),
                     "path": w.get("path").cloned().unwrap_or(Value::Null),
-                    "icon": "tree-structure",
+                    "icon": "git-fork",
                 })
             })
             .collect::<Vec<_>>(),

@@ -8,6 +8,7 @@ use crate::css;
 pub const CSS: &str = r#"
 :is(#sb, #home) .pr-panel { display: flex; flex-direction: column; gap: 10px; }
 :is(#sb, #home) .prp-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+:is(#sb, #home) .prp-detail > .agent-editor-head + .agent-editor-head { margin-top: 10px; }
 :is(#sb, #home) .prp-title {
   flex: 1 1 auto; min-width: 0;
   font-size: 13px; font-weight: 700; color: var(--fg);
@@ -16,6 +17,8 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .prp-sub {
   display: flex; align-items: center; gap: 6px;
   font-size: 11px; color: var(--gray-dim); flex-wrap: wrap;
+  margin-top: 10px;
+  margin-bottom: 10px;
 }
 :is(#sb, #home) .prp-sub code {
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px;
@@ -23,6 +26,7 @@ pub const CSS: &str = r#"
 }
 :is(#sb, #home) .prp-attach {
   display: flex; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 10px;
 }
 :is(#sb, #home) .prp-attach a {
   display: inline-flex; align-items: center; gap: 5px;
@@ -31,7 +35,8 @@ pub const CSS: &str = r#"
   background: var(--panel-2); text-decoration: none;
 }
 :is(#sb, #home) .prp-attach a:hover { color: var(--fg); border-color: var(--accent); }
-:is(#sb, #home) .prp-tools { display: flex; gap: 6px; flex-wrap: wrap; }
+:is(#sb, #home) .prp-tools { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+:is(#sb, #home) .prp-body > * + * { margin-top: 10px; }
 :is(#sb, #home) .prp-btn {
   display: inline-flex; align-items: center; gap: 5px;
   border: 1px solid var(--border); border-radius: 8px;
@@ -141,22 +146,13 @@ fn detail(st: &str) -> Node {
     m("div").class("prp-detail").show(&format!("{st}.prOpen")).kids(vec![
             m("div").class("agent-editor-head").kids(vec![
                 Node::icon("git-pull-request"),
+                m("span").class("agent-editor-title").child(lit("Edit pull request")),
+            ]),
+            m("div").class("agent-editor-head").kids(vec![
                 m("span")
                     .class("agent-editor-title")
                     .text(&format!("'#' + {st}.pr.number + ' ' + {st}.pr.title")),
                 Node::host(pr_state_pill::NAME, &[]).bind("state", &format!("{st}.pr.state")),
-                m("button")
-                    .class("prp-btn")
-                    .attr("type", "button")
-                    .attr("title", "refresh")
-                    .on("click", &format!("{st}.refreshPr()"))
-                    .child(Node::icon("arrows-clockwise")),
-                m("button")
-                    .class("prp-btn")
-                    .attr("type", "button")
-                    .attr("title", "close")
-                    .on("click", &format!("{st}.closePr()"))
-                    .child(Node::icon("x")),
             ]),
             m("div").class("prp-sub").kids(vec![
                 m("code").text(&format!("{st}.pr.sourceBranch")),
