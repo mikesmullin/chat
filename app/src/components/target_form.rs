@@ -180,6 +180,24 @@ pub fn panel() -> Node {
                 ]),
                 m("span").class("tform-value").text(&format!("{ST}.createdAt")),
             ]),
+            m("div").class("ae-field").show(&format!("{ST}.kind === 'worktree'")).kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Branch")),
+                ]),
+                m("span").class("tform-value").text(&format!("{ST}.name")),
+            ]),
+            m("div").class("ae-field").show(&format!("{ST}.kind === 'worktree'")).kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Repo")),
+                ]),
+                m("span").class("tform-value").text(&format!("{ST}.repoName")),
+            ]),
+            m("div").class("ae-field").show(&format!("{ST}.kind === 'worktree'")).kids(vec![
+                m("label").class("ae-label").kids(vec![
+                    m("span").child(lit("Path")),
+                ]),
+                m("span").class("tform-value").text(&format!("{ST}.path")),
+            ]),
             m("div")
                 .class("ae-field")
                 .show(&format!("{ST}.kind === 'repo' && {ST}.mode !== 'edit'"))
@@ -451,9 +469,8 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     let (label, icon) = kind_info(kind);
     let s = mjs::store_ref(STORE);
     js::set_num(&s, "requestId", js::get_num(&s, "requestId") + 1.0);
+    crate::components::aside_panels::close();
     js::set_bool(&s, "open", true);
-    js::set_bool(&mjs::store_ref("ident"), "panelOpen", false);
-    js::set_bool(&mjs::store_ref("settings"), "open", false);
     js::set_str(&s, "kind", kind);
     js::set_str(&s, "mode", mode);
     js::set_str(&s, "store", store);
@@ -467,6 +484,7 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     js::set_str(&s, "dangerNote", danger_note(kind));
     js::set_bool(&s, "busy", false);
     js::set_str(&s, "path", "");
+    js::set_str(&s, "repoName", "");
     js::set_str(&s, "image", "");
     js::set_str(&s, "status", "");
     js::set_str(&s, "agentName", "");
@@ -493,16 +511,6 @@ fn open_with(kind: &str, mode: &str, store: &str, name: &str) {
     );
     js::set_str(&s, "error", "");
     js::set_bool(&s, "confirming", false);
-    if mjs::has_store("agents") {
-        js::set_bool(&mjs::store_ref("agents"), "open", false);
-    }
-    if mjs::has_store("settings") {
-        js::set_bool(&mjs::store_ref("settings"), "open", false);
-    }
-    if mjs::has_store("groupDraft") { js::set_bool(&mjs::store_ref("groupDraft"), "open", false); }
-    if mjs::has_store("sessionDraft") {
-        js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
-    }
     js::set_bool(&mjs::store_ref("home"), "asideOpen", true);
     mjs::redraw();
 }
@@ -514,6 +522,48 @@ fn seed_from_host(s: &JsValue, kind: &str, mode: &str, name: &str) {
     }
     let host = mjs::store_ref(&host_name);
     js::set_str(s, "note", "");
+
+    if kind == "worktree" && mode == "edit" {
+        let mut branch = String::new();
+        let mut repo_id = String::new();
+        let mut repo_name = String::new();
+        let mut wt_path = String::new();
+        let mut created = String::new();
+        if mjs::has_store("vcs") {
+            let vcs = mjs::store_ref("vcs");
+            for item in js_sys::Array::from(&js::get(&vcs, "worktrees")).iter() {
+                if js::get_str(&item, "id") == name {
+                    branch = js::get_str(&item, "branch");
+                    repo_id = js::get_str(&item, "repoId");
+                    wt_path = js::get_str(&item, "path");
+                    created = js::get_str(&item, "createdAt");
+                    for r in js_sys::Array::from(&js::get(&vcs, "repos")).iter() {
+                        if js::get_str(&r, "id") == repo_id {
+                            repo_name = js::get_str(&r, "name");
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        if branch.is_empty() {
+            for item in js_sys::Array::from(&js::get(&host, "worktrees")).iter() {
+                if js::get_str(&item, "id") == name {
+                    branch = js::get_str(&item, "name");
+                    repo_name = js::get_str(&item, "hint");
+                    wt_path = js::get_str(&item, "path");
+                    break;
+                }
+            }
+        }
+        js::set_str(s, "repoId", &repo_id);
+        js::set_str(s, "name", &branch);
+        js::set_str(s, "path", &wt_path);
+        js::set_str(s, "createdAt", &created);
+        js::set_str(s, "repoName", &repo_name);
+        return;
+    }
 
     if kind == "branch" || kind == "worktree" {
         let repos = js_sys::Array::from(&js::get(&host, "repos"));
@@ -932,6 +982,7 @@ pub fn register() {
         .str("error", "")
         .str("path", "")
         .str("repoId", "")
+        .str("repoName", "")
         .str("image", "")
         .str("status", "")
         .str("agentName", "")

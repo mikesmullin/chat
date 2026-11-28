@@ -4,16 +4,20 @@ use rustex1_kit::{js, lifecycle, Runtime};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use crate::components::{
-    agents_menu, approval_card, assistant_card, automation_form, automations_menu, browser_pane, composer, decision_card,
+    agents_menu, approval_card, assistant_card, browser_pane, composer, decision_card,
     samples, mode_toggle,
     dropdown, error_card, fold_card, identity_switcher, picker, project_tree, prompt_card, queued_card, rail_head,
     share_dialog,
     target_form,
-    field, hint_text, history_tree, item_group, label, nav_rail, notification_toggle, perf_badge, radio_input, range_input,
+    diff_card, diff_view, field, hint_text, history_tree, input_prompt, item_group, job_card, job_panel, job_row,
+    job_run_chip, jobs_menu, journal_tail, label, md_diff_preview, merge_panel, nav_rail, notification_toggle,
+    perf_badge, pipeline_graph, pipelines_menu, pr_avatar, pr_card, pr_panel, pr_state_badge, pr_state_pill,
+    pr_thread, prs_menu, radio_input, range_input, repo_card, repo_panel, repos_menu, review_changes, review_form,
     presence, profile_panel, reasoning_card, relative_timestamp, sandboxes_menu, session, session_editor, session_panel,
     session_state,
-    system_card, tab, tag_input, task_list, text_area, text_input, thinking, toggle_button, tool_call_card, tool_response_card,
-    user_card, validation_info,
+    run_panel, run_state_badge, sandbox_chip_state, stage_timeline, system_card, tab, tag_input, task_list, text_area,
+    text_input, thinking, toggle_button, tool_call_card, tool_response_card, ui_duration, ui_tooltip, user_card,
+    validation_info, worktrees_menu,
 };
 
 fn shell(active: &str, content: Node) -> Node {
@@ -175,14 +179,6 @@ pub fn register(rt: &mut Runtime) {
         )
     });
 
-    rt.route("/storybook/automation", "New Automation", |_| {
-        route_def(
-            "route /storybook/automation",
-            "New Automation",
-            automation_form::automation_form(),
-        )
-    });
-
     rt.route("/storybook/field", "Field", |_| {
         route_def("route /storybook/field", "Field", field::demo())
     });
@@ -292,8 +288,101 @@ pub fn register(rt: &mut Runtime) {
         route_def("route /storybook/automation-form", "Automation Form", target_form::demo_automation())
     });
 
-    rt.route("/storybook/automations", "Automations Menu", |_| {
-        route_def("route /storybook/automations", "Automations Menu", automations_menu::demo())
+    rt.route("/storybook/pr-card", "Pull Request Card", |_| {
+        route_def("route /storybook/pr-card", "Pull Request Card", pr_card::demo())
+    });
+    rt.route("/storybook/pr-thread", "PR Thread", |_| {
+        route_def("route /storybook/pr-thread", "PR Thread", pr_thread::demo())
+    });
+    rt.route("/storybook/review-form", "Review Form", |_| {
+        route_def("route /storybook/review-form", "Review Form", review_form::demo())
+    });
+    rt.route("/storybook/review-changes", "Review Changes", |_| {
+        route_def("route /storybook/review-changes", "Review Changes", review_changes::demo())
+    });
+    rt.route("/storybook/diff-card", "Diff Card", |_| {
+        route_def("route /storybook/diff-card", "Diff Card", diff_card::demo())
+    });
+    rt.route("/storybook/diff-view", "Diff View", |_| {
+        route_def("route /storybook/diff-view", "Diff View", diff_view::demo())
+    });
+    rt.route("/storybook/md-diff", "Markdown Diff Preview", |_| {
+        route_def("route /storybook/md-diff", "Markdown Diff Preview", md_diff_preview::demo())
+    });
+    rt.route("/storybook/merge-panel", "Merge Panel", |_| {
+        route_def("route /storybook/merge-panel", "Merge Panel", merge_panel::demo())
+    });
+    rt.route("/storybook/pr-state-badge", "PR State Badge", |_| {
+        route_def("route /storybook/pr-state-badge", "PR State Badge", pr_state_badge::demo())
+    });
+    rt.route("/storybook/pr-state-pill", "PR State Pill", |_| {
+        route_def("route /storybook/pr-state-pill", "PR State Pill", pr_state_pill::demo())
+    });
+    rt.route("/storybook/pr-avatar", "PR Avatar", |_| {
+        route_def("route /storybook/pr-avatar", "PR Avatar", pr_avatar::demo())
+    });
+    rt.route("/storybook/repo-card", "Repo Card", |_| {
+        route_def("route /storybook/repo-card", "Repo Card", repo_card::demo())
+    });
+    rt.route("/storybook/repos-menu", "Repos Menu", |_| {
+        route_def("route /storybook/repos-menu", "Repos Menu", repos_menu::demo())
+    });
+    rt.route("/storybook/worktrees-menu", "Worktrees Menu", |_| {
+        route_def("route /storybook/worktrees-menu", "Worktrees Menu", worktrees_menu::demo())
+    });
+    rt.route("/storybook/prs-menu", "Pull Requests Menu", |_| {
+        route_def("route /storybook/prs-menu", "Pull Requests Menu", prs_menu::demo())
+    });
+    rt.route("/storybook/job-card", "Job Card", |_| {
+        route_def("route /storybook/job-card", "Job Card", job_card::demo())
+    });
+    rt.route("/storybook/job-row", "Job Row", |_| {
+        route_def("route /storybook/job-row", "Job Row", job_row::demo())
+    });
+    rt.route("/storybook/jobs-menu", "Jobs Menu", |_| {
+        route_def("route /storybook/jobs-menu", "Jobs Menu", jobs_menu::demo())
+    });
+    rt.route("/storybook/pipeline-graph", "Pipeline Graph", |_| {
+        route_def("route /storybook/pipeline-graph", "Pipeline Graph", pipeline_graph::demo())
+    });
+    rt.route("/storybook/pipelines-menu", "Pipelines Menu", |_| {
+        route_def("route /storybook/pipelines-menu", "Pipelines Menu", pipelines_menu::demo())
+    });
+    rt.route("/storybook/stage-timeline", "Stage Timeline", |_| {
+        route_def("route /storybook/stage-timeline", "Stage Timeline", stage_timeline::demo())
+    });
+    rt.route("/storybook/journal-tail", "Journal Tail", |_| {
+        route_def("route /storybook/journal-tail", "Journal Tail", journal_tail::demo())
+    });
+    rt.route("/storybook/run-state-badge", "Run State Badge", |_| {
+        route_def("route /storybook/run-state-badge", "Run State Badge", run_state_badge::demo())
+    });
+    rt.route("/storybook/job-run-chip", "Job Run Chip", |_| {
+        route_def("route /storybook/job-run-chip", "Job Run Chip", job_run_chip::demo())
+    });
+    rt.route("/storybook/sandbox-chip", "Sandbox Chip", |_| {
+        route_def("route /storybook/sandbox-chip", "Sandbox Chip", sandbox_chip_state::demo())
+    });
+    rt.route("/storybook/input-prompt", "Input Prompt", |_| {
+        route_def("route /storybook/input-prompt", "Input Prompt", input_prompt::demo())
+    });
+    rt.route("/storybook/repo-panel", "Repo Panel", |_| {
+        route_def("route /storybook/repo-panel", "Repo Panel", repo_panel::demo())
+    });
+    rt.route("/storybook/pr-panel", "PR Panel", |_| {
+        route_def("route /storybook/pr-panel", "PR Panel", pr_panel::demo())
+    });
+    rt.route("/storybook/run-panel", "Run Panel", |_| {
+        route_def("route /storybook/run-panel", "Run Panel", run_panel::demo())
+    });
+    rt.route("/storybook/job-panel", "Job Panel", |_| {
+        route_def("route /storybook/job-panel", "Job Panel", job_panel::demo())
+    });
+    rt.route("/storybook/duration", "Duration", |_| {
+        route_def("route /storybook/duration", "Duration", ui_duration::demo())
+    });
+    rt.route("/storybook/tooltip", "Tooltip", |_| {
+        route_def("route /storybook/tooltip", "Tooltip", ui_tooltip::demo())
     });
 
     rt.route("/storybook/system-card", "System Card", |_| {

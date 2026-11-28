@@ -66,6 +66,14 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .se-worktree-actions { display: flex; }
 
 .se-editor-demo { width: 340px; }
+
+:is(#sb, #home) .ae-id-text {
+  margin: 0; box-sizing: border-box;
+  background: var(--panel-2); color: var(--gray-dim);
+  border: 1px solid transparent; border-radius: 8px;
+  padding: 7px 9px; font-family: var(--mono);
+  font-size: 11px; line-height: 1.5; overflow-wrap: anywhere;
+}
 "#;
 
 pub(crate) fn field(label: &str, hint: &str, model: &str, placeholder: &str, rows: usize) -> Node {
@@ -195,6 +203,17 @@ pub fn panel(st: &str) -> Node {
             &format!("({ST}.messageTone ? ' ' + {ST}.messageTone : '')"),
             &format!("{ST}.message"),
         ),
+        m("div").class("ae-field").kids(vec![
+            m("label").class("ae-label").kids(vec![
+                m("span").child(lit("Session id")),
+                m("span")
+                    .class("hint")
+                    .child(lit("the stable identity of this session; not editable")),
+            ]),
+            m("div")
+                .class("ae-id-text")
+                .text(&format!("({ST}.id)")),
+        ]),
         field(
             "Title",
             "the tab's tooltip; the tab itself shows the number",
@@ -452,6 +471,7 @@ fn seed(_this: JsValue, args: js_sys::Array) -> JsValue {
         if title.is_empty() { title = row_id; }
     }
     js::set_str(&s, "title", &title);
+    js::set_str(&s, "id", &js::get_str(&meta, "id"));
     js::set_str(&s, "purpose", &js::get_str(&meta, "purpose"));
     js::set_str(&s, "notes", &js::get_str(&meta, "notes"));
     js::set_str(&s, "soulAppendage", &js::get_str(&meta, "soulAppendage"));
@@ -527,6 +547,7 @@ fn store_register() {
     d.bool("open", false)
         .bool("confirmDelete", false)
         .val("inherited", &js::obj().into())
+        .str("id", "")
         .str("title", "iran war status")
         .str("purpose", "")
         .str("notes", "")

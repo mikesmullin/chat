@@ -946,6 +946,13 @@ pub fn register() {
         .str("streamReasoning", "")
         .str("streamHandle", "")
         .bool("streamReasoningOpen", false)
+        .val("prSample", &pr_sample())
+        .val("repoSample", &repo_sample())
+        .val("jobSample", &job_sample())
+        .val("diffFiles", &crate::components::diff_view::parse_json(SAMPLE_DIFF))
+        .val("journal", &journal_sample())
+        .val("runSample", &run_sample())
+        .method("sample", sample_of)
         .method("row", row_of)
         .method("decideApproval", decide_approval)
         .method("openSession", open_session)
@@ -1062,4 +1069,184 @@ fn rename_tree_row(_this: JsValue, args: js_sys::Array) -> JsValue {
     }
     mjs::redraw();
     JsValue::UNDEFINED
+}
+
+pub fn sample(kind: &str) -> String {
+    format!("{EXPR}.sample('{kind}')")
+}
+
+fn sample_of(_this: JsValue, args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    match js::arg_str(&args, 0).as_str() {
+        "pr" => js::get(&s, "prSample"),
+        "repo" => js::get(&s, "repoSample"),
+        "job" => js::get(&s, "jobSample"),
+        _ => js::obj().into(),
+    }
+}
+
+const SAMPLE_DIFF: &str = "diff --git a/darkmarch.html b/darkmarch.html
+index 111612e..87b90b7 100644
+--- a/darkmarch.html
++++ b/darkmarch.html
+@@ -18,6 +18,8 @@
+ #wave-label{margin-top:8px;font-size:15px;letter-spacing:3px}
++#ember-label{font-size:12px;letter-spacing:1.5px;margin-top:5px}
++#ember-label.hidden{display:none}
+ #gold-label{position:absolute;top:16px;right:20px}
+diff --git a/README.md b/README.md
+index 4dd30d1..9c22ee4 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,7 @@
+ # darkmarch
++
++## Ember rings
++
++Rare elite drops stack a damage multiplier.
+ The tomb fights back.";
+ 
+fn pr_sample() -> JsValue {
+    let description =
+        "Adds the **ember ring** pickup: rare elite drops that stack a `+15%` damage multiplier.\n\n- HUD chip shows the stack count\n- demo video attached";
+    let pr = js::obj();
+    js::set_num(&pr, "id", 1.0);
+    js::set_num(&pr, "number", 7.0);
+    js::set_str(&pr, "repo", "vibe-arcade");
+    js::set_str(&pr, "sourceBranch", "chat/ember-f701ab9a");
+    js::set_str(&pr, "targetBranch", "main");
+    js::set_str(&pr, "title", "Add ember ring pickups");
+    js::set_str(&pr, "description", description);
+    js::set_str(&pr, "descriptionHtml", &crate::helpers::markdown_to_html(description));
+    js::set_str(&pr, "author", "Bob");
+    js::set_str(&pr, "state", "approved");
+    js::set_str(&pr, "createdAt", "2026-11-27T22:04:00.000Z");
+    js::set_str(&pr, "updatedAt", "2026-11-27T22:31:00.000Z");
+    js::set(&pr, "mergeCommit", &JsValue::NULL);
+    js::set(&pr, "mergedBy", &JsValue::NULL);
+    let reviews = js_sys::Array::new();
+    let r1 = js::obj();
+    js::set_num(&r1, "id", 11.0);
+    js::set_str(&r1, "reviewer", "Alice");
+    js::set_str(&r1, "decision", "approve");
+    js::set_str(&r1, "comment", "Nice — the HUD chip reads well at 720p.");
+    js::set_str(&r1, "createdAt", "2026-11-27T22:12:00.000Z");
+    reviews.push(&r1);
+    let r2 = js::obj();
+    js::set_num(&r2, "id", 12.0);
+    js::set_str(&r2, "reviewer", "ajcs-bot");
+    js::set_str(&r2, "decision", "comment");
+    js::set_str(&r2, "comment", "");
+    js::set_str(&r2, "createdAt", "2026-11-27T22:13:00.000Z");
+    reviews.push(&r2);
+    js::set(&pr, "reviews", &reviews);
+    let attachments = js_sys::Array::new();
+    let at = js::obj();
+    js::set_num(&at, "id", 3.0);
+    js::set_str(&at, "name", "demo-ember-ring.mp4");
+    js::set_str(&at, "mime", "video/mp4");
+    js::set_num(&at, "size", 9029974.0);
+    attachments.push(&at);
+    js::set(&pr, "attachments", &attachments);
+    pr.into()
+}
+
+fn repo_sample() -> JsValue {
+    let repo = js::obj();
+    js::set_str(&repo, "id", "r-sample");
+    js::set_str(&repo, "name", "vibe-arcade");
+    js::set_str(&repo, "path", "/home/Bob/src/vibe-arcade");
+    js::set_str(&repo, "description", "the arcade of small games");
+    js::set_str(&repo, "defaultBranch", "main");
+    js::set_str(&repo, "createdAt", "2026-11-20T00:00:00.000Z");
+    repo.into()
+}
+
+fn job_sample() -> JsValue {
+    let job = js::obj();
+    js::set_str(&job, "id", "1");
+    js::set_str(&job, "name", "verify");
+    js::set_str(&job, "basedir", "vibe-arcade");
+    js::set_str(&job, "display", "vibe-arcade:verify");
+    js::set_str(&job, "description", "syntax-check the inline game scripts");
+    js::set_str(&job, "cron", "0 9 * * 1-5");
+    js::set_bool(&job, "enabled", true);
+    js::set_str(&job, "sourcePath", "/home/Bob/src/vibe-arcade/.psicom/Jobfile.yaml");
+    js::set_str(&job, "sourceSha", "9c22ee44ab");
+    job.into()
+}
+
+fn journal_sample() -> JsValue {
+    let rows = js_sys::Array::new();
+    for (i, (kind, stage, message)) in [
+        ("stage_start", "build", "stage 'build' started"),
+        ("step_start", "build", "shell step 1"),
+        ("note", "build", "$ node --check game.js\nok"),
+        ("step_end", "build", "shell step 1 succeeded"),
+        ("stage_end", "build", "stage 'build' success"),
+        ("qa", "test", "which browser should the smoke test drive?"),
+        ("qa", "test", "chromium — it is what the arcade serves", ),
+        ("artifact", "open", "PR opened: vibe-arcade#7"),
+        ("error", "lint", "eslint: 2 warnings"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let e = js::obj();
+        js::set_num(&e, "id", (i + 1) as f64);
+        js::set_str(&e, "kind", kind);
+        js::set_str(&e, "stage", stage);
+        js::set_str(&e, "level", if *kind == "error" { "error" } else { "info" });
+        js::set_str(&e, "message", message);
+        js::set_str(&e, "createdAt", "2026-11-27T22:31:00.000Z");
+        rows.push(&e);
+    }
+    rows.into()
+}
+
+fn run_sample() -> JsValue {
+    let run = js::obj();
+    js::set_str(&run, "id", "2");
+    js::set_str(&run, "jobName", "verify");
+    js::set_num(&run, "number", 3.0);
+    js::set_str(&run, "label", "vibe-arcade:verify#3");
+    js::set_str(&run, "state", "running");
+    js::set_str(&run, "triggerSource", "trigger");
+    let stages = js_sys::Array::new();
+    for (i, (name, state, group, sandbox, session)) in [
+        ("build", "success", "", "sbox-0a1b2c3d", ""),
+        ("test", "running", "", "", "2026-11-27T22-31-00_ab12cd"),
+        ("lint", "pending", "fork-a", "", ""),
+        ("smoke", "blocked", "fork-a", "", ""),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let st = js::obj();
+        js::set_str(&st, "name", name);
+        js::set_str(&st, "state", state);
+        js::set_str(&st, "group", group);
+        if sandbox.is_empty() {
+            js::set(&st, "sandboxId", &JsValue::NULL);
+        } else {
+            js::set_str(&st, "sandboxId", sandbox);
+        }
+        if session.is_empty() {
+            js::set(&st, "sessionId", &JsValue::NULL);
+        } else {
+            js::set_str(&st, "sessionId", session);
+        }
+        js::set_num(&st, "position", i as f64);
+        let artifacts = js_sys::Array::new();
+        if i == 0 {
+            let a = js::obj();
+            js::set_str(&a, "repo", "vibe-arcade");
+            js::set_num(&a, "number", 7.0);
+            artifacts.push(&a);
+        }
+        js::set(&st, "artifacts", &artifacts);
+        stages.push(&st);
+    }
+    js::set(&run, "stages", &stages);
+    run.into()
 }

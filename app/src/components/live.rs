@@ -1574,6 +1574,15 @@ fn refresh_browser_sandbox(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+fn viewer_url_off(url: &str) -> String {
+    let Some((base, hash)) = url.split_once('#') else { return url.to_string() };
+    let keep: Vec<&str> = hash.split('&').filter(|p| !p.starts_with("audio=")).collect();
+    let mut parts = keep.join("&");
+    if !parts.is_empty() { parts.push('&'); }
+    parts.push_str("audio=off");
+    format!("{base}#{parts}")
+}
+
 fn load_viewer_url(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let id = js::get_str(&s, "browserSandboxId");
@@ -1590,7 +1599,7 @@ fn load_viewer_url(_this: JsValue, _args: js_sys::Array) -> JsValue {
         }
         let url = js::get_str(&v, "url");
         if !url.is_empty() {
-            js::set_str(&s, "browserViewerUrl", &url);
+            js::set_str(&s, "browserViewerUrl", &viewer_url_off(&url));
         }
         mjs::redraw();
     });
@@ -2225,7 +2234,7 @@ fn open_session_row(_this: JsValue, args: js_sys::Array) -> JsValue {
 fn open_session_editor(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let live = mjs::store_ref(STORE);
     let draft = mjs::store_ref("sessionDraft");
-    js::set_bool(&mjs::store_ref("groupDraft"), "open", false);
+    crate::components::aside_panels::close();
     let meta = js::get(&live, "session");
     js::call(&draft, "seed", &[meta, JsValue::from_str(STORE)]);
     js::set(&draft, "inherited", &js::obj().into());
@@ -2250,11 +2259,7 @@ fn open_session_editor(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set(&draft, "seats", &seats.into());
     js::set_str(&draft, "inviteHandle", "");
     js::set_bool(&draft, "open", true);
-    let agents = mjs::store_ref("agents");
-    js::set_bool(&agents, "open", false);
-    js::set_str(&agents, "selected", "");
-    js::set_bool(&mjs::store_ref("settings"), "open", false);
-    js::set_bool(&mjs::store_ref("tform"), "open", false);
+    js::set_str(&mjs::store_ref("agents"), "selected", "");
     js::set_bool(&mjs::store_ref("home"), "asideOpen", true);
     mjs::redraw();
     JsValue::UNDEFINED

@@ -28,14 +28,11 @@ fn shallow_copy(v: &JsValue) -> JsValue {
 
 fn open_panel(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
+    crate::components::aside_panels::close();
     js::set_bool(&s, "open", true);
     js::set_str(&s, "saved", "");
     let agents = mjs::store_ref("agents");
-    js::set_bool(&agents, "open", false);
     js::set_str(&agents, "selected", "");
-    js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
-    js::set_bool(&mjs::store_ref("groupDraft"), "open", false);
-    js::set_bool(&mjs::store_ref("ident"), "panelOpen", false);
     js::set_bool(&mjs::store_ref("home"), "asideOpen", true);
     load(JsValue::UNDEFINED, js_sys::Array::new());
     mjs::redraw();

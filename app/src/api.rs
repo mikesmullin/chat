@@ -213,3 +213,64 @@ fn json_parse(text: &str) -> Option<JsValue> {
         Some(v)
     }
 }
+
+pub fn vcs_get<F: FnMut(JsValue) + 'static>(action: &str, query: &str, then: F) {
+    let url = if query.is_empty() {
+        format!("/api/vcs/{action}")
+    } else {
+        format!("/api/vcs/{action}?{query}")
+    };
+    rustex1_kit::api::get(&url, None, then);
+}
+
+pub fn vcs_post<F: FnMut(JsValue) + 'static>(action: &str, payload: &JsValue, then: F) {
+    rustex1_kit::api::post_json(&format!("/api/vcs/{action}"), payload, then);
+}
+
+pub fn vcs_delete<F: FnMut(JsValue) + 'static>(action: &str, query: &str, then: F) {
+    let url = if query.is_empty() {
+        format!("/api/vcs/{action}")
+    } else {
+        format!("/api/vcs/{action}?{query}")
+    };
+    rustex1_kit::api::get(&url, Some("DELETE"), then);
+}
+
+pub fn jobs_get<F: FnMut(JsValue) + 'static>(action: &str, query: &str, then: F) {
+    let url = if query.is_empty() {
+        format!("/api/jobs/{action}")
+    } else {
+        format!("/api/jobs/{action}?{query}")
+    };
+    rustex1_kit::api::get(&url, None, then);
+}
+
+pub fn jobs_post<F: FnMut(JsValue) + 'static>(action: &str, payload: &JsValue, then: F) {
+    rustex1_kit::api::post_json(&format!("/api/jobs/{action}"), payload, then);
+}
+
+pub fn vcs_text<F: FnMut(JsValue) + 'static>(action: &str, query: &str, then: F) {
+    let url = if query.is_empty() {
+        format!("/api/vcs/{action}")
+    } else {
+        format!("/api/vcs/{action}?{query}")
+    };
+    let mut then = then;
+    spawn_local(async move {
+        let global = js_sys::global();
+        let Ok(response) = JsFuture::from(Promise::from(js::call(
+            &global,
+            "fetch",
+            &[JsValue::from_str(&url)],
+        )))
+        .await
+        else {
+            return;
+        };
+        let body = js::call(&response, "text", &[]);
+        let Ok(text) = JsFuture::from(Promise::from(body)).await else {
+            return;
+        };
+        then(text);
+    });
+}

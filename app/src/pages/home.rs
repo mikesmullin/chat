@@ -5,9 +5,10 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::components::{
-    agent_editor, agents_menu, automations_menu, browser_pane, identity_switcher, lightbox, mode_toggle,
-    perf_badge, profile_panel, project_tree, sandboxes_menu, session_editor, session_panel,
-    share_dialog, tab, target_form,
+    agent_editor, agents_menu, browser_pane, identity_switcher, job_panel, jobs_menu, lightbox,
+    mode_toggle, perf_badge, pipelines_menu, profile_panel, project_tree, pr_panel, prs_menu,
+    repo_panel, repos_menu, run_panel, sandboxes_menu, session_editor, session_panel, share_dialog,
+    tab, target_form, worktrees_menu,
 };
 use crate::css;
 
@@ -79,6 +80,11 @@ pub const CSS: &str = r#"
 .home-agents { padding: 0 14px; }
 .home-sandboxes { padding: 0 14px; }
 .home-automations { padding: 0 14px; }
+.home-repos { padding: 0 14px; }
+.home-worktrees { padding: 0 14px; }
+.home-pipelines { padding: 0 14px; }
+.home-prs { padding: 0 14px; }
+.home-jobs { padding: 0 14px; }
 
 .home-col {
   min-width: 0;
@@ -180,6 +186,11 @@ pub const CSS: &str = r#"
   .home-agents { padding: 0 6px 10px; }
   .home-sandboxes { padding: 0 6px 10px; }
   .home-automations { padding: 0 6px 10px; }
+  .home-repos { padding: 0 6px 10px; }
+  .home-worktrees { padding: 0 6px 10px; }
+  .home-pipelines { padding: 0 6px 10px; }
+  .home-prs { padding: 0 6px 10px; }
+  .home-jobs { padding: 0 6px 10px; }
   .home-col { margin-right: 8px; isolation: isolate; }
   .home-aside-toggle-row {
     display: flex; justify-content: flex-end; flex: 0 0 auto;
@@ -218,9 +229,21 @@ fn rail() -> Node {
                 m("div").class("home-sandboxes")
                     .show(&format!("{LIVE}.sandboxGroups.length > 0"))
                     .child(sandboxes_menu::sandboxes_menu(LIVE)),
-                m("div").class("home-automations")
-                    .show("($store.live.automations.length > 0 || $store.ident.can('automation.create'))")
-                    .child(automations_menu::automations_menu_live()),
+                m("div").class("home-repos")
+                    .show("($store.vcs.repos.length > 0 || $store.ident.can('repo.manage'))")
+                    .child(repos_menu::menu(LIVE)),
+                m("div").class("home-worktrees")
+                    .show("($store.vcs.worktrees.length > 0)")
+                    .child(worktrees_menu::menu(LIVE)),
+                m("div").class("home-prs")
+                    .show("($store.vcs.prs.length > 0 || $store.ident.can('pr.create'))")
+                    .child(prs_menu::menu()),
+                m("div").class("home-pipelines")
+                    .show("($store.jobs.runs.length > 0 || $store.jobs.jobs.length > 0)")
+                    .child(pipelines_menu::menu()),
+                m("div").class("home-jobs")
+                    .show("($store.jobs.jobs.length > 0 || $store.live.automations.length > 0 || $store.ident.can('job.manage'))")
+                    .child(jobs_menu::menu(LIVE)),
             ]),
             m("div").class("home-settings").kids(vec![
                 m("div").class("home-settings-row").child(
@@ -285,14 +308,20 @@ fn aside() -> Node {
         .kids(vec![
             m("div").class("home-aside-toggle-row").child(aside_toggle()),
             m("div").class("home-aside-body").kids(vec![
-                browser_pane::panel(LIVE),
+                m("div").show("$store.home.browserOpen").child(browser_pane::panel(LIVE)),
+                m("div").class("aside-forms").show("!$store.home.browserOpen").kids(vec![
                 agent_editor::agent_editor(),
                 agent_editor::settings_panel(),
                 profile_panel::panel(),
                 target_form::panel(),
                 session_editor::panel(LIVE),
                 crate::components::group_editor::panel(LIVE),
+                pr_panel::panel(),
+                repo_panel::panel(),
+                run_panel::panel(),
+                job_panel::panel(),
                 share_dialog::panel(),
+                ]),
             ]),
         ])
 }
@@ -301,7 +330,7 @@ pub fn shell() -> Node {
     m("div")
         .attr("id", "home")
         .class("home")
-        .init("$store.live.loadProjects(); $store.live.loadSessions(); $store.live.loadTargets(); $store.live.loadAutomations()")
+        .init("$store.live.loadProjects(); $store.live.loadSessions(); $store.live.loadTargets(); $store.live.loadAutomations(); $store.vcs.loadRepos(); $store.vcs.loadPrs(); $store.jobs.loadJobs(); $store.jobs.loadRuns()")
         .bind(
             "class",
             &format!(
@@ -450,6 +479,11 @@ fn toggle_section(_this: JsValue, args: js_sys::Array) -> JsValue {
         "agents" => "agentsOpen",
         "sandboxes" => "sandboxesOpen",
         "automations" => "automationsOpen",
+        "repos" => "reposOpen",
+        "worktrees" => "worktreesOpen",
+        "pipelines" => "pipelinesOpen",
+        "prs" => "prsOpen",
+        "jobs" => "jobsOpen",
         _ => return JsValue::UNDEFINED,
     };
     let open = !js::get_bool(&s, key);
@@ -460,11 +494,21 @@ fn toggle_section(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+fn toggle_browser(_this: JsValue, _args: js_sys::Array) -> JsValue {
+    let s = mjs::store_ref(STORE);
+    let next = !js::get_bool(&s, "browserOpen");
+    js::set_bool(&s, "browserOpen", next);
+    js::set_bool(&s, "asideOpen", next);
+    mjs::redraw();
+    JsValue::UNDEFINED
+}
+
 pub fn register() {
     css::inject("home", CSS);
     let mut d = Def::new().named("store home");
     d.bool("asideOpen", false)
         .bool("railOpen", true)
+        .bool("browserOpen", false)
         .num("railWidth", saved_width("chat.home.railWidth"))
         .num("asideWidth", saved_width("chat.home.asideWidth"))
         .str("dragSide", "")
@@ -472,8 +516,14 @@ pub fn register() {
         .bool("agentsOpen", section_open("agentsOpen"))
         .bool("sandboxesOpen", section_open("sandboxesOpen"))
         .bool("automationsOpen", section_open("automationsOpen"))
+        .bool("reposOpen", section_open("reposOpen"))
+        .bool("worktreesOpen", section_open("worktreesOpen"))
+        .bool("pipelinesOpen", section_open("pipelinesOpen"))
+        .bool("prsOpen", section_open("prsOpen"))
+        .bool("jobsOpen", section_open("jobsOpen"))
         .method("toggleAside", toggle_aside)
         .method("toggleRail", toggle_rail)
+        .method("toggleBrowser", toggle_browser)
         .method("toggleSection", toggle_section)
         .method("gutterDown", gutter_down)
         .method("gutterMove", gutter_move)

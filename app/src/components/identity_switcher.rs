@@ -243,11 +243,8 @@ fn can(_this: JsValue, args: js_sys::Array) -> JsValue {
 
 fn open_profile(_this: JsValue, _args: js_sys::Array) -> JsValue {
     js::set_bool(&mjs::store_ref(STORE), "open", false);
-    js::set_bool(&mjs::store_ref("agents"), "open", false);
+    crate::components::aside_panels::close();
     js::set_str(&mjs::store_ref("agents"), "selected", "");
-    js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
-    js::set_bool(&mjs::store_ref("groupDraft"), "open", false);
-    js::set_bool(&mjs::store_ref("settings"), "open", false);
     js::set_bool(&mjs::store_ref(STORE), "panelOpen", true);
     js::set_bool(&mjs::store_ref("home"), "asideOpen", true);
     let share = mjs::store_ref("share");

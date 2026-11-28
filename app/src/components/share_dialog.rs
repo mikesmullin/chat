@@ -184,11 +184,8 @@ fn open(_this: JsValue, args: js_sys::Array) -> JsValue {
     js::set_str(&s, "kind", &js::arg_str(&args, 0));
     js::set_str(&s, "name", &js::arg_str(&args, 1));
     js::set_str(&s, "error", "");
-    js::set_bool(&mjs::store_ref("agents"), "open", false);
+    crate::components::aside_panels::close();
     js::set_str(&mjs::store_ref("agents"), "selected", "");
-    js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
-    js::set_bool(&mjs::store_ref("groupDraft"), "open", false);
-    js::set_bool(&mjs::store_ref("settings"), "open", false);
     js::set_bool(&mjs::store_ref("ident"), "panelOpen", true);
     js::set_bool(&mjs::store_ref("home"), "asideOpen", true);
     load(JsValue::UNDEFINED, js_sys::Array::new());

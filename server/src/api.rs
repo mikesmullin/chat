@@ -264,6 +264,46 @@ fn add_token_counts(data: &mut Value, db: &rusqlite::Connection) {
     }
 }
 
+pub fn jobs_topic(_port: u16) -> Value {
+    let root = project_root();
+    let mut jobs = crate::db::with(&root, |c| crate::jobs::store::list_jobs(c)).unwrap_or_default();
+    for job in &mut jobs {
+        let id = job.get("id").and_then(Value::as_i64).unwrap_or(0);
+        let (enabled, next_run_at, last_run_at) =
+            crate::db::with(&root, |c| crate::jobs::store::job_flags(c, id)).unwrap_or((true, 0, 0));
+        let display = format!(
+            "{}:{}",
+            job.get("basedir").and_then(Value::as_str).unwrap_or_default(),
+            job.get("name").and_then(Value::as_str).unwrap_or_default()
+        );
+        if let Some(obj) = job.as_object_mut() {
+            obj.insert("enabled".into(), serde_json::json!(enabled));
+            obj.insert("nextRunAt".into(), serde_json::json!(next_run_at));
+            obj.insert("lastRunAt".into(), serde_json::json!(last_run_at));
+            obj.insert("display".into(), serde_json::json!(display));
+        }
+    }
+    let runs: Vec<Value> = crate::db::with(&root, |c| crate::jobs::store::list_runs(c, None, "all", 20))
+        .unwrap_or_default()
+        .into_iter()
+        .map(crate::jobs::with_label)
+        .collect();
+    let queue = crate::jobs::queue::queue_view(&root).unwrap_or(serde_json::json!({}));
+    serde_json::json!({ "jobs": jobs, "runs": runs, "queue": queue })
+}
+
+pub fn prs_topic(_port: u16) -> Value {
+    let root = project_root();
+    crate::db::with(&root, |c| {
+        serde_json::json!({
+            "repos": crate::vcs::store::list_repos(c),
+            "worktrees": crate::vcs::store::list_worktrees(c),
+            "prs": crate::vcs::store::list_all_prs(c, "all", 100),
+        })
+    })
+    .unwrap_or(serde_json::json!({}))
+}
+
 fn delete_empty_session(db: &rusqlite::Connection, id: &str) -> rusqlite::Result<bool> {
     db.execute_batch("PRAGMA foreign_keys = ON")?;
     Ok(db.execute(
@@ -404,6 +444,24 @@ fn required_capability(req: &Request) -> Option<&'static str> {
     }
     if p.starts_with("/api/sessions/") && p.ends_with("/participants") {
         return Some("session.invite");
+    }
+    if p.starts_with("/api/vcs/") {
+        let action = p.trim_start_matches("/api/vcs/").trim_matches('/');
+        return match action {
+            "repo-add" | "repo-update" | "repo-remove" => Some("repo.manage"),
+            "pr-create" | "pr-attach" => Some("pr.create"),
+            "pr-review" => Some("pr.review"),
+            "pr-merge" | "pr-cleanup" | "pr-delete" => Some("pr.merge"),
+            _ => None,
+        };
+    }
+    if p.starts_with("/api/jobs/") {
+        let action = p.trim_start_matches("/api/jobs/").trim_matches('/');
+        return match action {
+            "job-register" | "job-delete" | "job-enable" => Some("job.manage"),
+            "run-enqueue" | "run-answer" | "run-stop" => Some("job.trigger"),
+            _ => None,
+        };
     }
     None
 }
@@ -800,6 +858,117 @@ pub fn handle_api(state: &Arc<State>, req: &Request, out: &mut Stream<'_>) {
             }));
             return;
         }
+    }
+
+    if req.path.starts_with("/api/vcs/") {
+        let root = project_root();
+        let action = req
+            .path
+            .trim_start_matches("/api/vcs/")
+            .trim_matches('/')
+            .to_string();
+        if req.method == "GET" && action == "pr-diff" {
+            let repo = query_str(req, "repo");
+            let number = query_str(req, "number");
+            let result = crate::db::with(&root, |c| {
+                let r = crate::vcs::store::repo_by_name(c, &repo).ok_or_else(|| {
+                    crate::err::ApiError::not_found(
+                        "repo_not_found",
+                        format!("repo '{repo}' not found"),
+                    )
+                })?;
+                let path = std::path::PathBuf::from(
+                    r.get("path").and_then(Value::as_str).unwrap_or_default(),
+                );
+                crate::vcs::diff::pr_diff(c, &path, &repo, &number)
+            })
+            .map_err(crate::err::ApiError::internal)
+            .and_then(|r| r);
+            match result {
+                Ok(bytes) => {
+                    let _ = out.start(
+                        200,
+                        &[("content-type", "text/plain; charset=utf-8"), ("cache-control", "no-store")],
+                    );
+                    let _ = out.chunk(&bytes);
+                    let _ = out.finish();
+                }
+                Err(e) => {
+                    let _ = out.json(e.status, &e.to_json());
+                }
+            }
+            return;
+        }
+        if req.method == "GET" && action == "pr-attachment" {
+            let id: i64 = query_str(req, "id").parse().unwrap_or(0);
+            let result = crate::db::with(&root, |c| {
+                crate::vcs::attachments::read_attachment(&root, c, id)
+            })
+            .map_err(crate::err::ApiError::internal)
+            .and_then(|r| r);
+            match result {
+                Ok((name, bytes)) => {
+                    let ctype = if name.ends_with(".mp4") {
+                        "video/mp4"
+                    } else if name.ends_with(".webm") {
+                        "video/webm"
+                    } else if name.ends_with(".png") {
+                        "image/png"
+                    } else if name.ends_with(".jpg") || name.ends_with(".jpeg") {
+                        "image/jpeg"
+                    } else if name.ends_with(".md") {
+                        "text/markdown"
+                    } else {
+                        "application/octet-stream"
+                    };
+                    let _ = out.start(200, &[("content-type", ctype), ("cache-control", "no-store")]);
+                    let _ = out.chunk(&bytes);
+                    let _ = out.finish();
+                }
+                Err(e) => {
+                    let _ = out.json(e.status, &e.to_json());
+                }
+            }
+            return;
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let actor = crate::auth::current_user(req).map(|u| u.name.clone());
+        match crate::vcs::handle(
+            &root,
+            &req.method,
+            &action,
+            &req.query,
+            &body,
+            &req.body,
+            actor.as_deref(),
+        ) {
+            Ok((status, value)) => {
+                let _ = out.json(status, &value);
+            }
+            Err(e) => {
+                let _ = out.json(e.status, &e.to_json());
+            }
+        }
+        return;
+    }
+
+    if req.path.starts_with("/api/jobs/") {
+        let root = project_root();
+        let action = req
+            .path
+            .trim_start_matches("/api/jobs/")
+            .trim_matches('/')
+            .to_string();
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        match crate::jobs::handle(&root, &req.method, &action, &req.query, &body) {
+            Ok((status, value)) => {
+                let _ = out.json(status, &value);
+            }
+            Err(e) => {
+                let _ = out.json(e.status, &e.to_json());
+            }
+        }
+        return;
     }
 
     if req.method == "POST" && req.path == "/api/session/new" {

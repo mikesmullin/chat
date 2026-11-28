@@ -75,13 +75,12 @@ pub fn open(_this: JsValue, args: js_sys::Array) -> JsValue {
     let draft = mjs::store_ref("groupDraft");
     let home = mjs::store_ref("home");
     if js::get_str(&live, "activeProject") == name && js::get_bool(&draft, "open") {
-        js::set_bool(&draft, "open", false);
+        crate::components::aside_panels::close();
         js::set_bool(&home, "asideOpen", false);
     } else {
         js::set_str(&live, "activeProject", &name);
         js::call(&draft, "seed", &[JsValue::from_str(&name), live, JsValue::from_str(&source_name)]);
-        for store in ["sessionDraft", "agents", "settings", "tform", "share"] { js::set_bool(&mjs::store_ref(store), "open", false); }
-        js::set_bool(&mjs::store_ref("ident"), "panelOpen", false);
+        crate::components::aside_panels::close();
         js::set_bool(&draft, "open", true);
         js::set_bool(&home, "asideOpen", true);
     }

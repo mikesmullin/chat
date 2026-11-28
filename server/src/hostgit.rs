@@ -2,73 +2,119 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
 
-const GIT_TIMEOUT_SECS: u64 = 30;
-
+use crate::vcs::git;
 
 fn registry_path(root: &Path) -> PathBuf {
     root.join(".angela").join("hosts.json")
 }
 
-pub fn load(root: &Path) -> Value {
+pub fn import_legacy_registry(root: &Path) {
     let text = std::fs::read_to_string(registry_path(root)).unwrap_or_default();
-    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-    if v.is_object() {
-        v
-    } else {
-        json!({ "repos": [], "worktrees": [] })
+    if text.trim().is_empty() {
+        return;
+    }
+    let legacy: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    let repos = legacy
+        .get("repos")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let worktrees = legacy
+        .get("worktrees")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if repos.is_empty() && worktrees.is_empty() {
+        return;
+    }
+    let imported = crate::db::with(root, |c| {
+        let existing = crate::vcs::store::list_repos(c).len();
+        if existing > 0 {
+            return 0usize;
+        }
+        let mut n = 0usize;
+        for repo in &repos {
+            let id = repo.get("id").and_then(Value::as_str).unwrap_or_default();
+            let name = repo.get("name").and_then(Value::as_str).unwrap_or_default();
+            let path = repo.get("path").and_then(Value::as_str).unwrap_or_default();
+            if id.is_empty() || name.is_empty() || path.is_empty() {
+                continue;
+            }
+            if crate::vcs::store::insert_repo(c, id, name, path, "", "main").is_ok() {
+                n += 1;
+            }
+        }
+        for wt in &worktrees {
+            let mut row = wt.clone();
+            if let Some(obj) = row.as_object_mut() {
+                let repo_id = obj.get("repoId").and_then(Value::as_str).unwrap_or_default().to_string();
+                if let Some(repo) = crate::vcs::store::repo_by_id(c, &repo_id) {
+                    obj.insert("repoId".into(), json!(repo.get("id").and_then(Value::as_str).unwrap_or_default()));
+                }
+            }
+            if crate::vcs::store::upsert_worktree(c, &row).is_ok() {
+                n += 1;
+            }
+        }
+        n
+    })
+    .unwrap_or(0);
+    if imported > 0 {
+        eprintln!("hostgit: imported {imported} legacy registry row(s) from hosts.json");
     }
 }
 
-fn save(root: &Path, v: &Value) -> Result<(), String> {
-    let p = registry_path(root);
-    if let Some(dir) = p.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let text = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
-    let tmp = p.with_extension("json.tmp");
-    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &p).map_err(|e| e.to_string())
+fn repo_rows(root: &Path) -> Vec<Value> {
+    crate::db::with(root, |c| crate::vcs::store::list_repos(c)).unwrap_or_default()
 }
 
-fn list_of<'a>(reg: &'a Value, key: &str) -> &'a [Value] {
-    reg.get(key).and_then(Value::as_array).map(|v| &v[..]).unwrap_or(&[])
+fn repo_row(root: &Path, id: &str) -> Option<Value> {
+    crate::db::with(root, |c| crate::vcs::store::repo_by_id(c, id))
+        .ok()
+        .flatten()
+}
+
+fn worktree_rows(root: &Path) -> Vec<Value> {
+    crate::db::with(root, |c| {
+        let repos = crate::vcs::store::list_repos(c);
+        crate::vcs::store::list_worktrees(c)
+            .into_iter()
+            .map(|mut w| {
+                if let Some(obj) = w.as_object_mut() {
+                    let repo_id = obj.get("repoId").and_then(Value::as_str).unwrap_or_default().to_string();
+                    if let Some(repo) = repos.iter().find(|r| r.get("id").and_then(Value::as_str) == Some(repo_id.as_str())) {
+                        obj.insert("repoName".into(), json!(repo.get("name").and_then(Value::as_str).unwrap_or_default()));
+                        obj.insert("repoPath".into(), json!(repo.get("path").and_then(Value::as_str).unwrap_or_default()));
+                    }
+                }
+                w
+            })
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+fn worktree_row(root: &Path, id: &str) -> Option<Value> {
+    worktree_rows(root)
+        .into_iter()
+        .find(|w| w.get("id").and_then(Value::as_str) == Some(id))
+}
+
+fn put_worktree(root: &Path, w: &Value) -> Result<(), String> {
+    crate::db::with(root, |c| crate::vcs::store::upsert_worktree(c, w))?
+}
+
+fn drop_worktree(root: &Path, id: &str) -> Result<(), String> {
+    crate::db::with(root, |c| crate::vcs::store::delete_worktree(c, id))?
 }
 
 fn id_for(prefix: &str, path: &str) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in path.as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x1000_0000_01b3);
-    }
-    format!("{prefix}{h:012x}")
+    crate::vcs::id_for(prefix, path)
 }
 
-
 pub fn check_path(raw: &str) -> Result<PathBuf, String> {
-    let t = raw.trim();
-    if t.is_empty() {
-        return Err("a repo needs an absolute path".into());
-    }
-    if !t.starts_with('/') {
-        return Err(format!("path must be absolute: {t}"));
-    }
-    if t.contains(':') || t.contains(',') {
-        return Err("path cannot contain ':' or ',' — a mount spec is delimited by both".into());
-    }
-    let p = PathBuf::from(t);
-    let canon = p
-        .canonicalize()
-        .map_err(|_| format!("no such directory: {t}"))?;
-    if !canon.is_dir() {
-        return Err(format!("not a directory: {t}"));
-    }
-    let s = canon.to_string_lossy().to_string();
-    if s.contains(':') || s.contains(',') {
-        return Err("resolved path contains ':' or ','".into());
-    }
-    Ok(canon)
+    crate::vcs::check_path(raw).map_err(|e| e.message)
 }
 
 fn is_git_dir(p: &Path) -> bool {
@@ -77,125 +123,11 @@ fn is_git_dir(p: &Path) -> bool {
 }
 
 pub fn is_safe_ref(s: &str) -> bool {
-    let t = s.trim();
-    !t.is_empty()
-        && t.len() <= 200
-        && !t.starts_with('-')
-        && !t.starts_with('/')
-        && !t.ends_with('/')
-        && !t.contains("..")
-        && !t.contains("//")
-        && !t.contains('\\')
-        && !t.contains('~')
-        && !t.contains('^')
-        && !t.contains(':')
-        && !t.contains('?')
-        && !t.contains('*')
-        && !t.contains('[')
-        && !t.chars().any(|c| c.is_whitespace() || c.is_control())
+    git::is_safe_ref(s)
 }
-
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(dir);
-    for a in args {
-        cmd.arg(a);
-    }
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
-    cmd.env("GIT_OPTIONAL_LOCKS", "0");
-    let out = run_with_timeout(cmd)?;
-    if out.status_ok {
-        Ok(out.stdout)
-    } else {
-        let msg = out
-            .stderr
-            .lines()
-            .map(str::trim)
-            .find(|l| l.to_ascii_lowercase().starts_with("fatal"))
-            .or_else(|| out.stderr.lines().next())
-            .unwrap_or("git failed")
-            .to_string();
-        Err(msg)
-    }
-}
-
-struct Output {
-    status_ok: bool,
-    stdout: String,
-    stderr: String,
-}
-
-fn run_with_timeout(mut cmd: Command) -> Result<Output, String> {
-    use std::process::Stdio;
-    use std::time::{Duration, Instant};
-
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| format!("could not run git: {e}"))?;
-    let deadline = Instant::now() + Duration::from_secs(GIT_TIMEOUT_SECS);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if Instant::now() > deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!("git timed out after {GIT_TIMEOUT_SECS}s"));
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("could not read git output: {e}"))?;
-    Ok(Output {
-        status_ok: out.status.success(),
-        stdout: String::from_utf8_lossy(&out.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&out.stderr).to_string(),
-    })
-}
-
-fn subuid_mapped_uid() -> Option<u32> {
-    let euid = current_euid()?;
-    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
-    let name = passwd.lines().find_map(|line| {
-        let mut f = line.split(':');
-        let user = f.next()?;
-        let _pw = f.next()?;
-        let uid: u32 = f.next()?.parse().ok()?;
-        (uid == euid).then(|| user.to_string())
-    })?;
-    let subuid = std::fs::read_to_string("/etc/subuid").ok()?;
-    let base: u64 = subuid.lines().find_map(|line| {
-        let (user, rest) = line.split_once(':')?;
-        let base: u64 = rest.split(':').next()?.parse().ok()?;
-        (user == name).then_some(base)
-    })?;
-    u32::try_from(base + 999).ok()
-}
-
-fn current_euid() -> Option<u32> {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::metadata("/proc/self").ok().map(|m| m.uid())
-}
-
-pub fn branches(dir: &Path) -> Vec<String> {
-    git(
-        dir,
-        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
-    )
-    .map(|s| {
-        s.lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .map(str::to_string)
-            .collect()
-    })
-    .unwrap_or_default()
+    git::git(dir, args)
 }
 
 fn current_branch(dir: &Path) -> String {
@@ -205,6 +137,9 @@ fn current_branch(dir: &Path) -> String {
         .unwrap_or_default()
 }
 
+pub fn branches(dir: &Path) -> Vec<String> {
+    git::branches(dir).into_iter().map(|(name, _)| name).collect()
+}
 
 pub fn add_repo(root: &Path, raw_path: &str) -> Result<Value, String> {
     let path = check_path(raw_path)?;
@@ -218,43 +153,42 @@ pub fn add_repo(root: &Path, raw_path: &str) -> Result<Value, String> {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| path_s.clone());
 
-    let mut reg = load(root);
-    let mut repos: Vec<Value> = list_of(&reg, "repos").to_vec();
-    repos.retain(|r| r.get("id").and_then(Value::as_str) != Some(id.as_str()));
-    repos.push(json!({ "id": id, "path": path_s, "name": name }));
-    reg["repos"] = Value::Array(repos);
-    reg.as_object_mut()
-        .map(|m| m.entry("worktrees").or_insert_with(|| json!([])));
-    save(root, &reg)?;
-    let head = current_branch(&path);
-    let select = if head.is_empty() {
-        String::new()
-    } else {
-        format!("{id}:{head}")
-    };
-    Ok(json!({ "id": id, "select": select, "selectKind": "branch" }))
+    crate::db::with(root, |c| {
+        if crate::vcs::store::repo_by_id(c, &id).is_some() {
+            let head = current_branch(&path);
+            let select = if head.is_empty() {
+                String::new()
+            } else {
+                format!("{id}:{head}")
+            };
+            return Ok(json!({ "id": id, "select": select, "selectKind": "branch" }));
+        }
+        crate::vcs::store::insert_repo(c, &id, &name, &path_s, "", "main")?;
+        let head = current_branch(&path);
+        let select = if head.is_empty() {
+            String::new()
+        } else {
+            format!("{id}:{head}")
+        };
+        Ok(json!({ "id": id, "select": select, "selectKind": "branch" }))
+    })?
 }
 
 pub fn remove_repo(root: &Path, id: &str) -> Result<Value, String> {
-    let mut reg = load(root);
-    let repos: Vec<Value> = list_of(&reg, "repos")
-        .iter()
-        .filter(|r| r.get("id").and_then(Value::as_str) != Some(id))
-        .cloned()
+    let ids: Vec<String> = worktree_rows(root)
+        .into_iter()
+        .filter(|w| w.get("repoId").and_then(Value::as_str) == Some(id))
+        .filter_map(|w| w.get("id").and_then(Value::as_str).map(str::to_string))
         .collect();
-    let worktrees: Vec<Value> = list_of(&reg, "worktrees")
-        .iter()
-        .filter(|w| w.get("repoId").and_then(Value::as_str) != Some(id))
-        .cloned()
-        .collect();
-    reg["repos"] = Value::Array(repos);
-    reg["worktrees"] = Value::Array(worktrees);
-    save(root, &reg)?;
+    for wid in ids {
+        let _ = remove_worktree(root, &wid);
+    }
+    crate::db::with(root, |c| crate::vcs::store::delete_repo(c, id))??;
     Ok(json!({ "removed": id }))
 }
 
 pub fn add_branch(root: &Path, repo_id: &str, name: &str, from: &str) -> Result<Value, String> {
-    let repo = find(root, "repos", repo_id).ok_or("no such repo")?;
+    let repo = repo_row(root, repo_id).ok_or("no such repo")?;
     let dir = PathBuf::from(repo.get("path").and_then(Value::as_str).unwrap_or_default());
     if !is_safe_ref(name) {
         return Err(format!("not a usable branch name: {name}"));
@@ -275,13 +209,6 @@ pub fn add_branch(root: &Path, repo_id: &str, name: &str, from: &str) -> Result<
     }))
 }
 
-fn find(root: &Path, key: &str, id: &str) -> Option<Value> {
-    list_of(&load(root), key)
-        .iter()
-        .find(|r| r.get("id").and_then(Value::as_str) == Some(id))
-        .cloned()
-}
-
 fn worktree_dir(root: &Path, repo_name: &str, branch: &str) -> PathBuf {
     let safe: String = branch
         .chars()
@@ -292,21 +219,20 @@ fn worktree_dir(root: &Path, repo_name: &str, branch: &str) -> PathBuf {
         .join(format!("{repo_name}-{safe}"))
 }
 
-
 pub fn add_worktree(
     root: &Path,
     repo_id: &str,
     branch: &str,
     create: bool,
 ) -> Result<Value, String> {
-    let repo = find(root, "repos", repo_id).ok_or("no such repo")?;
-    let repo_path = repo.get("path").and_then(Value::as_str).unwrap_or_default();
-    let repo_name = repo.get("name").and_then(Value::as_str).unwrap_or("repo");
-    let dir = PathBuf::from(repo_path);
+    let repo = repo_row(root, repo_id).ok_or("no such repo")?;
+    let repo_path = repo.get("path").and_then(Value::as_str).unwrap_or_default().to_string();
+    let repo_name = repo.get("name").and_then(Value::as_str).unwrap_or("repo").to_string();
+    let dir = PathBuf::from(&repo_path);
     if !is_safe_ref(branch) {
         return Err(format!("not a usable branch name: {branch}"));
     }
-    let target = worktree_dir(root, repo_name, branch);
+    let target = worktree_dir(root, &repo_name, branch);
     if target.exists() {
         return Err(format!(
             "a worktree directory already exists at {}",
@@ -327,19 +253,19 @@ pub fn add_worktree(
     git(&dir, &args)?;
 
     let id = id_for("w", &target_s);
-    let mut reg = load(root);
-    let mut list: Vec<Value> = list_of(&reg, "worktrees").to_vec();
-    list.retain(|w| w.get("id").and_then(Value::as_str) != Some(id.as_str()));
-    list.push(json!({
-        "id": id,
-        "repoId": repo_id,
-        "repoName": repo_name,
-        "path": target_s,
-        "branch": branch,
-        "sandboxId": "",
-    }));
-    reg["worktrees"] = Value::Array(list);
-    save(root, &reg)?;
+    put_worktree(
+        root,
+        &json!({
+            "id": id,
+            "repoId": repo_id,
+            "repoName": repo_name,
+            "repoPath": repo_path,
+            "path": target_s,
+            "branch": branch,
+            "sessionId": "",
+            "sandboxId": "",
+        }),
+    )?;
     Ok(json!({
         "id": id,
         "path": target.to_string_lossy(),
@@ -349,34 +275,26 @@ pub fn add_worktree(
 }
 
 pub fn remove_worktree(root: &Path, id: &str) -> Result<Value, String> {
-    let Some(wt) = find(root, "worktrees", id) else {
+    let Some(wt) = worktree_row(root, id) else {
         return Err("no such worktree".into());
     };
     let repo_id = wt.get("repoId").and_then(Value::as_str).unwrap_or_default();
-    let path = wt.get("path").and_then(Value::as_str).unwrap_or_default();
+    let path = wt.get("path").and_then(Value::as_str).unwrap_or_default().to_string();
     let mut note = String::new();
-    if let Some(repo) = find(root, "repos", repo_id) {
+    if let Some(repo) = repo_row(root, repo_id) {
         let dir = PathBuf::from(repo.get("path").and_then(Value::as_str).unwrap_or_default());
-        if let Err(e) = git(&dir, &["worktree", "remove", "--force", path]) {
+        if let Err(e) = git(&dir, &["worktree", "remove", "--force", &path]) {
             note = e;
         }
     }
-    let mut reg = load(root);
-    let list: Vec<Value> = list_of(&reg, "worktrees")
-        .iter()
-        .filter(|w| w.get("id").and_then(Value::as_str) != Some(id))
-        .cloned()
-        .collect();
-    reg["worktrees"] = Value::Array(list);
-    save(root, &reg)?;
+    drop_worktree(root, id)?;
     if !path.is_empty() {
         let _ = Command::new("git")
-            .args(["config", "--global", "--unset-all", "safe.directory", path])
+            .args(["config", "--global", "--unset-all", "safe.directory", &path])
             .output();
     }
     Ok(json!({ "removed": id, "note": note }))
 }
-
 
 fn default_worktree_parent(root: &Path) -> PathBuf {
     root.join(".angela").join("worktrees")
@@ -394,6 +312,7 @@ fn branch_prefix(branch: &str) -> String {
 }
 
 fn branch_hash(common_dir: &str, branch: &str) -> String {
+    use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(common_dir.as_bytes());
     h.update([0]);
@@ -415,7 +334,8 @@ fn random_hex() -> String {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let mut h = Sha256::new();
+        let mut h = sha2::Sha256::new();
+        use sha2::Digest;
         h.update(nanos.to_le_bytes());
         h.update(std::process::id().to_le_bytes());
         let d = h.finalize();
@@ -466,8 +386,7 @@ pub fn expand_worktree_path(
     }
     if out.contains(':') || out.contains(',') {
         return Err(
-            "the worktree path cannot contain ':' or ',' — a mount spec is delimited by both"
-                .into(),
+            "the worktree path cannot contain ':' or ',' — a mount spec is delimited by both".into(),
         );
     }
     Ok(out)
@@ -501,20 +420,7 @@ fn expand_branch_pattern(pattern: &str) -> Result<String, String> {
 }
 
 fn git_common_dir(repo: &Path) -> Result<String, String> {
-    let raw = git(repo, &["rev-parse", "--git-common-dir"])?;
-    let rel = raw.trim();
-    if rel.is_empty() {
-        return Err("git reported no common dir".into());
-    }
-    let p = if Path::new(rel).is_absolute() {
-        PathBuf::from(rel)
-    } else {
-        repo.join(rel)
-    };
-    let canon = p
-        .canonicalize()
-        .map_err(|e| format!("cannot resolve the git common dir: {e}"))?;
-    Ok(canon.to_string_lossy().to_string())
+    git::git_common_dir(repo).ok_or_else(|| "git reported no common dir".to_string())
 }
 
 fn record_from_row(row: &Value) -> Value {
@@ -557,7 +463,7 @@ fn provision_session_worktree_full(
     path_pattern: &str,
     branch_override: Option<&str>,
 ) -> Result<Value, String> {
-    let repo = find(root, "repos", repo_id).ok_or("no such repo")?;
+    let repo = repo_row(root, repo_id).ok_or("no such repo")?;
     let repo_path = PathBuf::from(repo.get("path").and_then(Value::as_str).unwrap_or_default());
     if !repo_path.is_dir() {
         return Err(format!(
@@ -594,13 +500,13 @@ fn provision_session_worktree_full(
     }
 
     let target = PathBuf::from(&path_s);
-    let row = list_of(&load(root), "worktrees")
-        .iter()
+    let row = worktree_rows(root)
+        .into_iter()
         .find(|w| {
             w.get("path").and_then(Value::as_str) == Some(path_s.as_str())
                 && w.get("sessionId").and_then(Value::as_str) == Some(session_id)
         })
-        .cloned();
+        ;
     if let Some(row) = row {
         if target.is_dir() {
             return Ok(record_from_row(&row));
@@ -663,23 +569,21 @@ fn provision_session_worktree_full(
         .output();
 
     let id = id_for("w", &path_s);
-    let mut reg = load(root);
-    let mut list: Vec<Value> = list_of(&reg, "worktrees").to_vec();
-    list.retain(|w| w.get("id").and_then(Value::as_str) != Some(id.as_str()));
-    list.push(json!({
-        "id": id,
-        "repoId": repo_id,
-        "repoName": repo_name,
-        "repoPath": repo_path,
-        "branch": branch,
-        "path": path_s,
-        "sessionId": session_id,
-        "branchPattern": branch_pattern,
-        "pathPattern": path_pattern,
-        "sandboxId": "",
-    }));
-    reg["worktrees"] = Value::Array(list);
-    save(root, &reg)?;
+    put_worktree(
+        root,
+        &json!({
+            "id": id,
+            "repoId": repo_id,
+            "repoName": repo_name,
+            "repoPath": repo_path,
+            "branch": branch,
+            "path": path_s,
+            "sessionId": session_id,
+            "branchPattern": branch_pattern,
+            "pathPattern": path_pattern,
+            "sandboxId": "",
+        }),
+    )?;
 
     Ok(json!({
         "repoId": repo_id,
@@ -693,13 +597,36 @@ fn provision_session_worktree_full(
     }))
 }
 
+fn subuid_mapped_uid() -> Option<u32> {
+    let euid = current_euid()?;
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    let name = passwd.lines().find_map(|line| {
+        let mut f = line.split(':');
+        let user = f.next()?;
+        let _pw = f.next()?;
+        let uid: u32 = f.next()?.parse().ok()?;
+        (uid == euid).then(|| user.to_string())
+    })?;
+    let subuid = std::fs::read_to_string("/etc/subuid").ok()?;
+    let base: u64 = subuid.lines().find_map(|line| {
+        let (user, rest) = line.split_once(':')?;
+        let base: u64 = rest.split(':').next()?.parse().ok()?;
+        (user == name).then_some(base)
+    })?;
+    u32::try_from(base + 999).ok()
+}
+
+fn current_euid() -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata("/proc/self").ok().map(|m| m.uid())
+}
+
 pub fn reap_session_worktree(root: &Path, session_id: &str) {
     if session_id.trim().is_empty() {
         return;
     }
-    let reg = load(root);
-    let ids: Vec<String> = list_of(&reg, "worktrees")
-        .iter()
+    let ids: Vec<String> = worktree_rows(root)
+        .into_iter()
         .filter(|w| w.get("sessionId").and_then(Value::as_str) == Some(session_id))
         .filter_map(|w| w.get("id").and_then(Value::as_str).map(str::to_string))
         .collect();
@@ -709,10 +636,15 @@ pub fn reap_session_worktree(root: &Path, session_id: &str) {
 }
 
 pub fn reap_all_session_worktrees(root: &Path) {
-    let reg = load(root);
-    let ids: Vec<String> = list_of(&reg, "worktrees")
-        .iter()
-        .filter(|w| !w.get("sessionId").and_then(Value::as_str).unwrap_or_default().trim().is_empty())
+    let ids: Vec<String> = worktree_rows(root)
+        .into_iter()
+        .filter(|w| {
+            !w.get("sessionId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .is_empty()
+        })
         .filter_map(|w| w.get("id").and_then(Value::as_str).map(str::to_string))
         .collect();
     for id in ids {
@@ -720,20 +652,26 @@ pub fn reap_all_session_worktrees(root: &Path) {
     }
 }
 
-pub fn session_properties_ready(root: &Path, meta: &Value, def: &angela::agent_loader::AgentDef) -> Result<(), String> {
+pub fn session_properties_ready(
+    root: &Path,
+    meta: &Value,
+    def: &angela::agent_loader::AgentDef,
+) -> Result<(), String> {
     let id = meta.get("id").and_then(Value::as_str).unwrap_or("");
     let store = angela::conv_store::ConvStore::new(root).map_err(|e| e.to_string())?;
     let authored = store.load(id).unwrap_or(Value::Null);
     let mut resolved = meta.clone();
     let mut workspace_only = meta.clone();
     workspace_only["worktree"] = Value::Null;
-    crate::hostgit::session_worktree_ready(root, &workspace_only, def)?;
+    session_worktree_ready(root, &workspace_only, def)?;
     if authored.get("worktree").is_none_or(Value::is_null) {
         if let Some(wt) = meta.get("worktree").filter(|v| v.is_object()) {
             let repo = wt.get("repoId").and_then(Value::as_str).unwrap_or("");
             let branch = wt.get("branchPattern").and_then(Value::as_str).unwrap_or("");
             let path = wt.get("pathPattern").and_then(Value::as_str).unwrap_or("");
-            if repo.is_empty() || branch.is_empty() { return Err("worktree requires a repo and branch pattern".into()); }
+            if repo.is_empty() || branch.is_empty() {
+                return Err("worktree requires a repo and branch pattern".into());
+            }
             static PROVISION: std::sync::Mutex<()> = std::sync::Mutex::new(());
             let _guard = PROVISION.lock().map_err(|e| e.to_string())?;
             let cached = store.inherited_worktree(id).filter(|v| {
@@ -744,7 +682,7 @@ pub fn session_properties_ready(root: &Path, meta: &Value, def: &angela::agent_l
             let record = match cached {
                 Some(record) => record,
                 None => {
-                    let record = crate::hostgit::provision_session_worktree(root, id, repo, branch, path)?;
+                    let record = provision_session_worktree(root, id, repo, branch, path)?;
                     store.set_inherited_worktree(id, &record)?;
                     record
                 }
@@ -752,9 +690,8 @@ pub fn session_properties_ready(root: &Path, meta: &Value, def: &angela::agent_l
             resolved["worktree"] = record;
         }
     }
-    crate::hostgit::session_worktree_ready(root, &resolved, def)
+    session_worktree_ready(root, &resolved, def)
 }
-
 
 pub fn session_worktree_ready(
     root: &Path,
@@ -783,7 +720,10 @@ pub fn session_worktree_ready(
     let Some(record) = record.as_object() else {
         return Err("worktree not provisioned".into());
     };
-    let provisioned = record.get("provisioned").and_then(Value::as_bool).unwrap_or(false);
+    let provisioned = record
+        .get("provisioned")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if !provisioned {
         return Err("worktree not provisioned".into());
     }
@@ -798,20 +738,25 @@ pub fn session_worktree_ready(
     }
 
     if !Path::new(&path).is_dir() {
-        let repo_id = record.get("repoId").and_then(Value::as_str).unwrap_or_default();
-        let branch = record.get("branch").and_then(Value::as_str).unwrap_or_default();
-        let path_pattern = record.get("pathPattern").and_then(Value::as_str).unwrap_or("");
+        let repo_id = record
+            .get("repoId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let branch = record
+            .get("branch")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let path_pattern = record
+            .get("pathPattern")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let session_id = meta.get("id").and_then(Value::as_str).unwrap_or_default();
         if repo_id.is_empty() || branch.is_empty() {
             return Err("worktree missing".into());
         }
-        if let Err(e) = provision_session_worktree_on_branch(
-            root,
-            session_id,
-            repo_id,
-            branch,
-            path_pattern,
-        ) {
+        if let Err(e) =
+            provision_session_worktree_on_branch(root, session_id, repo_id, branch, path_pattern)
+        {
             return Err(format!("worktree missing: {e}"));
         }
         if !Path::new(&path).is_dir() {
@@ -822,30 +767,24 @@ pub fn session_worktree_ready(
 }
 
 pub fn sweep(root: &Path) {
-    let reg = load(root);
-    let before = list_of(&reg, "worktrees").len();
-    let kept: Vec<Value> = list_of(&reg, "worktrees")
-        .iter()
+    let stale: Vec<String> = worktree_rows(root)
+        .into_iter()
         .filter(|w| {
-            w.get("path")
+            !w.get("path")
                 .and_then(Value::as_str)
                 .map(|p| Path::new(p).is_dir())
                 .unwrap_or(false)
         })
-        .cloned()
+        .filter_map(|w| w.get("id").and_then(Value::as_str).map(str::to_string))
         .collect();
-    if kept.len() != before {
-        let mut reg = reg;
-        reg["worktrees"] = Value::Array(kept);
-        let _ = save(root, &reg);
+    for id in stale {
+        let _ = drop_worktree(root, &id);
     }
 }
 
-
 pub fn branch_items(root: &Path) -> Value {
-    let reg = load(root);
     let mut out = Vec::new();
-    for repo in list_of(&reg, "repos") {
+    for repo in repo_rows(root) {
         let id = repo.get("id").and_then(Value::as_str).unwrap_or_default();
         let name = repo.get("name").and_then(Value::as_str).unwrap_or_default();
         let path = PathBuf::from(repo.get("path").and_then(Value::as_str).unwrap_or_default());
@@ -865,9 +804,8 @@ pub fn branch_items(root: &Path) -> Value {
 }
 
 pub fn repo_items(root: &Path) -> Value {
-    let reg = load(root);
     Value::Array(
-        list_of(&reg, "repos")
+        repo_rows(root)
             .iter()
             .map(|r| {
                 let path = r.get("path").and_then(Value::as_str).unwrap_or_default();
@@ -884,9 +822,8 @@ pub fn repo_items(root: &Path) -> Value {
 }
 
 pub fn worktree_items(root: &Path) -> Value {
-    let reg = load(root);
     Value::Array(
-        list_of(&reg, "worktrees")
+        worktree_rows(root)
             .iter()
             .map(|w| {
                 json!({

@@ -51,15 +51,6 @@ fn blank_draft() -> JsValue {
     d.into()
 }
 
-fn close_settings() {
-    js::set_bool(&mjs::store_ref(crate::components::settings::STORE), "open", false);
-}
-
-fn close_session_editor() {
-    js::set_bool(&mjs::store_ref("sessionDraft"), "open", false);
-    js::set_bool(&mjs::store_ref("groupDraft"), "open", false);
-}
-
 fn load_agents(_this: JsValue, _args: js_sys::Array) -> JsValue {
     rustex1_kit::api::get("/api/agents", None, |v| {
         let s = mjs::store_ref(STORE);
@@ -119,9 +110,8 @@ fn select(_this: JsValue, args: js_sys::Array) -> JsValue {
     let Some(a) = found else {
         return JsValue::UNDEFINED;
     };
+    crate::components::aside_panels::close();
     js::set_str(&s, "selected", &name);
-    close_settings();
-    close_session_editor();
     js::set_str(&s, "editing", &name);
     js::set(&s, "draft", &to_draft(&a));
     js::set_bool(&s, "open", true);
@@ -135,11 +125,10 @@ fn select(_this: JsValue, args: js_sys::Array) -> JsValue {
 
 fn new_agent(_this: JsValue, _args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
+    crate::components::aside_panels::close();
     js::set(&s, "draft", &blank_draft());
     js::set_str(&s, "selected", "");
     js::set_str(&s, "editing", "");
-    close_settings();
-    close_session_editor();
     js::set_bool(&s, "open", true);
     js::set_bool(&s, "creating", true);
     js::set_str(&s, "error", "");

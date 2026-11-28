@@ -9,13 +9,34 @@ pub const CSS: &str = r#"
   padding: 6px 10px; font-size: 11px;
 }
 :is(#sb, #home) .roster .presence-seat:nth-child(n+7) { display: none; }
-:is(#sb, #home) .roster .notify-toggle { margin-left: auto; }
+:is(#sb, #home) .roster .browser-toggle {
+  width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--muted); cursor: pointer;
+  margin-left: auto;
+}
+:is(#sb, #home) .roster .browser-toggle:hover { color: var(--text); background: var(--panel-2); }
+:is(#sb, #home) .roster .browser-toggle.is-on { color: var(--pastel-cyan); }
+:is(#sb, #home) .roster .browser-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+:is(#sb, #home) .roster .browser-toggle .ph { font-size: 16px; }
 "#;
 
 pub fn roster(st: &str) -> Node {
     m("div")
         .class("roster")
         .show(&format!("{st}.activeId"))
+        .child(
+            m("button")
+                .class("browser-toggle")
+                .attr("type", "button")
+                .attr("aria-label", "Toggle sandbox desktop")
+                .bind("class", &format!("($store.home.browserOpen ? ' is-on' : '')"))
+                .bind("aria-pressed", &format!("($store.home.browserOpen ? 'true' : 'false')"))
+                .bind("title", &format!("($store.home.browserOpen ? 'Hide sandbox desktop' : 'Show sandbox desktop')"))
+                .on("click", "$store.home.toggleBrowser()")
+                .child(Node::icon("desktop"))
+                .show("$store.live.browserSandboxes.length > 0")
+        )
         .child(notification_toggle::button(st))
         .child(
             presence::row(

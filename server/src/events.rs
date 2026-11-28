@@ -7,8 +7,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Default)]
 struct Snapshot {
-    values: [Option<Value>; 5],
-    versions: [u64; 5],
+    values: [Option<Value>; 7],
+    versions: [u64; 7],
     turns: HashMap<u64, Turn>,
     turn_version: u64,
 }
@@ -38,6 +38,14 @@ pub fn bump_sessions() {
 
 pub fn bump_queues() {
     publish(4, crate::api::queues_topic(0));
+}
+
+pub fn bump_jobs() {
+    publish(5, crate::api::jobs_topic(0));
+}
+
+pub fn bump_prs() {
+    publish(6, crate::api::prs_topic(0));
 }
 
 pub(crate) fn publish_models(value: Value) {
@@ -213,6 +221,8 @@ pub fn start(state: Arc<State>) {
         let mut sessions = Value::Null;
         let mut session_at = Instant::now() - Duration::from_secs(4);
         let mut model_at = Instant::now() - Duration::from_secs(600);
+        let mut jobs_at = Instant::now() - Duration::from_secs(3);
+        let mut prs_at = Instant::now() - Duration::from_secs(3);
         loop {
             if session_at.elapsed() >= Duration::from_secs(4) {
                 sessions = crate::api::sessions(state.config.port);
@@ -224,6 +234,14 @@ pub fn start(state: Arc<State>) {
                 model_at = Instant::now();
             }
             publish(4, crate::api::queues_topic(state.config.port));
+            if jobs_at.elapsed() >= Duration::from_secs(2) {
+                publish(5, crate::api::jobs_topic(state.config.port));
+                jobs_at = Instant::now();
+            }
+            if prs_at.elapsed() >= Duration::from_secs(2) {
+                publish(6, crate::api::prs_topic(state.config.port));
+                prs_at = Instant::now();
+            }
             let mut pending = serde_json::Map::new();
             if let Some(rows) = sessions.get("sessions").and_then(Value::as_array) {
                 for row in rows {
@@ -323,8 +341,8 @@ pub fn stream(out: &mut Stream<'_>, viewer: Option<i64>) {
         return;
     }
     let f = feed();
-    let mut seen = [0; 5];
-    let mut previous: [Option<Value>; 5] = [None, None, None, None, None];
+    let mut seen = [0; 7];
+    let mut previous: [Option<Value>; 7] = [None, None, None, None, None, None, None];
     let mut turns_seen: HashMap<u64, usize> = HashMap::new();
     let mut turn_version = 0;
     let mut initial = true;
@@ -338,7 +356,7 @@ pub fn stream(out: &mut Stream<'_>, viewer: Option<i64>) {
             guard = g;
         }
         let mut frames = Vec::new();
-        for (i, name) in ["sessions", "models", "approvals", "sandboxes", "queues"].iter().enumerate() {
+        for (i, name) in ["sessions", "models", "approvals", "sandboxes", "queues", "jobs", "prs"].iter().enumerate() {
             if guard.versions[i] != seen[i] {
                 seen[i] = guard.versions[i];
                 if let Some(value) = &guard.values[i] {
