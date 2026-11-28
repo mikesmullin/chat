@@ -10,7 +10,7 @@ use crate::components::{
     search_input,
     share_dialog,
     target_form,
-    diff_card, diff_view, field, hint_text, history_tree, input_prompt, item_group, job_card, job_panel, job_row,
+    diff_card, diff_view, cron_field, field, hint_text, history_tree, input_prompt, item_group, job_card, job_panel, job_row,
     job_run_chip, jobs_menu, journal_tail, label, md_diff_preview, merge_panel, nav_rail, notification_toggle,
     perf_badge, pipeline_graph, pipelines_menu, pr_avatar, pr_card, pr_panel, pr_state_badge, pr_state_pill,
     pr_thread, prs_menu, radio_input, range_input, repo_card, repo_panel, repos_menu, review_changes, review_form,
@@ -182,6 +182,10 @@ pub fn register(rt: &mut Runtime) {
 
     rt.route("/storybook/field", "Field", |_| {
         route_def("route /storybook/field", "Field", field::demo())
+    });
+
+    rt.route("/storybook/cron-field", "Cron Field", |_| {
+        route_def("route /storybook/cron-field", "Cron Field", cron_field::demo())
     });
 
     rt.route("/storybook/label", "Label", |_| {

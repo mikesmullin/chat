@@ -5,7 +5,7 @@ use rustex1_kit::mjs::Def;
 use rustex1_kit::{js, mjs};
 
 use crate::css;
-use crate::components::{name_tag, picker, validation_info};
+use crate::components::{cron_field, field, name_tag, picker, validation_info};
 
 const STORE: &str = "tform";
 const ST: &str = "$store.tform";
@@ -87,24 +87,20 @@ pub fn panel() -> Node {
                     .text(&format!("{ST}.heading")),
             ]),
             validation_info::live("'error'", &format!("{ST}.error")),
-            m("div")
-                .class("ae-field")
-                .show(&format!("{ST}.kind === 'project'"))
-                .kids(vec![
-                    m("label").class("ae-label").kids(vec![
-                        m("span").child(lit("Name")),
-                        m("span")
-                            .class("hint")
-                            .child(lit("use / to nest, e.g. psicom/chat")),
-                    ]),
-                    m("input")
-                        .attr("type", "text")
-                        .attr("spellcheck", "false")
-                        .attr("placeholder", "psicom/chat")
-                        .model(&format!("{ST}.name"))
-                        .on("input", &format!("{ST}.name = $event.target.value"))
-                        .on("keydown.enter", &format!("{ST}.save()")),
-                ]),
+            field::field(
+                "Name",
+                false,
+                "use / to nest, e.g. psicom/chat",
+                m("input")
+                    .attr("type", "text")
+                    .attr("spellcheck", "false")
+                    .attr("placeholder", "psicom/chat")
+                    .model(&format!("{ST}.name"))
+                    .on("input", &format!("{ST}.name = $event.target.value"))
+                    .on("keydown.enter", &format!("{ST}.save()")),
+                false,
+            )
+            .show(&format!("{ST}.kind === 'project'")),
             m("div").class("ae-field se-project")
                 .show(&format!("{ST}.kind === 'project' && {ST}.mode === 'create'"))
                 .kids(vec![
@@ -221,21 +217,19 @@ pub fn panel() -> Node {
                     m("span").text(&format!("{ST}.path")),
                 ]),
             ]),
-            m("div")
-                .class("ae-field")
-                .show(&format!("{ST}.kind === 'repo' && {ST}.mode !== 'edit'"))
-                .kids(vec![
-                    m("label").class("ae-label").kids(vec![
-                        m("span").child(lit("Path")),
-                        m("span").class("hint").child(lit("absolute, on this machine")),
-                    ]),
-                    m("input")
-                        .attr("type", "text")
-                        .attr("spellcheck", "false")
-                        .attr("placeholder", "/workspace/psicom/chat")
-                        .model(&format!("{ST}.path"))
-                        .on("keydown.enter", &format!("{ST}.save()")),
-                ]),
+            field::field(
+                "Path",
+                false,
+                "absolute, on this machine",
+                m("input")
+                    .attr("type", "text")
+                    .attr("spellcheck", "false")
+                    .attr("placeholder", "/workspace/psicom/chat")
+                    .model(&format!("{ST}.path"))
+                    .on("keydown.enter", &format!("{ST}.save()")),
+                false,
+            )
+            .show(&format!("{ST}.kind === 'repo' && {ST}.mode !== 'edit'")),
             m("div")
                 .class("ae-field")
                 .show(&format!("({ST}.kind === 'branch' || {ST}.kind === 'worktree') && {ST}.mode !== 'edit'"))
@@ -280,21 +274,19 @@ pub fn panel() -> Node {
                         .model(&format!("{ST}.create")),
                     m("span").child(lit("create this branch too")),
                 ]),
-            m("div")
-                .class("ae-field")
-                .show(&format!("{ST}.kind === 'automation'"))
-                .kids(vec![
-                    m("label").class("ae-label").kids(vec![
-                        m("span").child(lit("Name")),
-                        m("span").class("hint").child(lit("shown in the rail")),
-                    ]),
-                    m("input")
-                        .attr("type", "text")
-                        .attr("spellcheck", "false")
-                        .attr("placeholder", "issue-triage")
-                        .model(&format!("{ST}.name"))
-                        .on("keydown.enter", &format!("{ST}.save()")),
-                ]),
+            field::field(
+                "Name",
+                false,
+                "shown in the rail",
+                m("input")
+                    .attr("type", "text")
+                    .attr("spellcheck", "false")
+                    .attr("placeholder", "issue-triage")
+                    .model(&format!("{ST}.name"))
+                    .on("keydown.enter", &format!("{ST}.save()")),
+                false,
+            )
+            .show(&format!("{ST}.kind === 'automation'")),
             crate::components::switch::switch(
                 &format!("{ST}.enabled"),
                 &format!("{ST}.toggleBool('enabled')"),
@@ -309,30 +301,9 @@ pub fn panel() -> Node {
                 None,
             )
             .show(&format!("{ST}.kind === 'automation'")),
-            m("div")
-                .class("ae-field")
+            cron_field::field("Schedule", ST, false)
                 .show(&format!("{ST}.kind === 'automation'"))
-                .kids(vec![
-                    m("label").class("ae-label").kids(vec![
-                        m("span").child(lit("Schedule")),
-                        m("span").class("hint").child(lit("presets fill the cron")),
-                    ]),
-                    m("div").class("ae-modes").kids(vec![
-                        cron_preset("Hourly", "0 * * * *"),
-                        cron_preset("Every morning", "0 9 * * *"),
-                        cron_preset("Weekdays 9:00", "0 9 * * 1-5"),
-                        cron_preset("Mondays 9:00", "0 9 * * 1"),
-                        cron_preset("Fridays 17:00", "0 17 * * 5"),
-                        cron_custom(),
-                    ]),
-                    m("input")
-                        .class("tform-cron")
-                        .attr("type", "text")
-                        .attr("spellcheck", "false")
-                        .attr("placeholder", "0 9 * * 1-5")
-                        .model(&format!("{ST}.cron"))
-                        .on("keydown.enter", &format!("{ST}.save()")),
-                ]),
+                .on("keydown.enter", &format!("{ST}.save()")),
             m("div")
                 .class("ae-field")
                 .show(&format!("{ST}.kind === 'automation'"))
@@ -939,51 +910,12 @@ fn remove(_this: JsValue, _args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
-fn cron_preset(label: &str, cron: &str) -> Node {
-    m("button")
-        .class("ae-mode")
-        .attr("type", "button")
-        .bind("class", &format!("({ST}.cron === '{cron}' ? 'is-on' : '')"))
-        .on("click", &format!("{ST}.setCron('{cron}')"))
-        .child(m("span").child(lit(label)))
-}
-
-fn cron_custom() -> Node {
-    m("button")
-        .class("ae-mode")
-        .attr("type", "button")
-        .bind(
-            "class",
-            &format!(
-                "({ST}.cron !== '' && {ST}.cron !== '0 * * * *' && {ST}.cron !== '0 9 * * *' \
-                 && {ST}.cron !== '0 9 * * 1-5' && {ST}.cron !== '0 9 * * 1' && {ST}.cron !== '0 17 * * 5' \
-                 ? 'is-on' : '')"
-            ),
-        )
-        .on("click", &format!("{ST}.setCron('__custom')"))
-        .child(m("span").child(lit("Custom")))
-}
-
 fn toggle_bool(_this: JsValue, args: js_sys::Array) -> JsValue {
     let s = mjs::store_ref(STORE);
     let field = js::arg_str(&args, 0);
     if field != "enabled" && field != "catchUp" { return JsValue::UNDEFINED; }
     js::set_bool(&s, &field, !js::get_bool(&s, &field));
     mjs::redraw();
-    JsValue::UNDEFINED
-}
-
-fn set_cron(_this: JsValue, args: js_sys::Array) -> JsValue {
-    let cron = js::arg_str(&args, 0);
-    if cron == "__custom" {
-        let document = js::get(&js::global(), "document");
-        let input = js::call(&document, "querySelector", &[JsValue::from_str(".tform-cron")]);
-        if !input.is_undefined() && !input.is_null() {
-            js::call(&input, "focus", &[]);
-        }
-        return JsValue::UNDEFINED;
-    }
-    js::set_str(&mjs::store_ref(STORE), "cron", &cron);
     JsValue::UNDEFINED
 }
 
@@ -1065,8 +997,9 @@ pub fn register() {
         .method("statusIcon", status_icon)
         .method("statusClass", status_class)
         .method("statusLabel", status_label)
-        .method("setCron", set_cron)
         .method("toggleBool", toggle_bool)
+        .method("cronDescription", |this, _args| JsValue::from_str(&crate::cron::description_of(&js::get_str(&this, "cron"))))
+        .method("cronNext", |this, _args| JsValue::from_str(&crate::cron::next_line_of(&js::get_str(&this, "cron"))))
         .method("openCreate", open_create)
         .method("openEdit", open_edit)
         .method("close", close)

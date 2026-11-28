@@ -15,6 +15,7 @@ pub mod diff_view;
 pub mod counter;
 pub mod dropdown;
 pub mod error_card;
+pub mod cron_field;
 pub mod field;
 pub mod fold_card;
 pub mod hint_text;
@@ -124,6 +125,7 @@ pub fn register() {
     counter::register();
     dropdown::register();
     error_card::register();
+    cron_field::register();
     field::register();
     hint_text::register();
     history_tree::register();

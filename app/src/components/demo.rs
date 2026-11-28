@@ -13,6 +13,16 @@ fn toggle_bool(_this: JsValue, args: js_sys::Array) -> JsValue {
     JsValue::UNDEFINED
 }
 
+fn cron_description(this: &JsValue, _args: js_sys::Array) -> JsValue {
+    let cron = js::get_str(this, "cron");
+    JsValue::from_str(&crate::cron::description_of(&cron))
+}
+
+fn cron_next(this: &JsValue, _args: js_sys::Array) -> JsValue {
+    let cron = js::get_str(this, "cron");
+    JsValue::from_str(&crate::cron::next_line_of(&cron))
+}
+
 pub fn register() {
     let mut d = Def::new().named("store demo");
     d.str("text1", "")
@@ -24,8 +34,11 @@ pub fn register() {
         .str("area", "")
         .str("tags", "")
         .str("field", "")
+        .str("cron", "5 4 * * *")
         .bool("switchOn", true)
         .bool("switchOff", false)
-        .method("toggleBool", toggle_bool);
+        .method("toggleBool", toggle_bool)
+        .method("cronDescription", |this, args| cron_description(&this, args))
+        .method("cronNext", |this, args| cron_next(&this, args));
     mjs::store("demo", &d.finish());
 }

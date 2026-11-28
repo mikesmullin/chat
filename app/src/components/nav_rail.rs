@@ -8,7 +8,7 @@ use rustex1_kit::js;
 use crate::components::search_input;
 use crate::css;
 
-const ENTRIES: [(&'static str, &'static str, &'static str); 84] = [
+const ENTRIES: [(&'static str, &'static str, &'static str); 85] = [
     ("Approval Card", "/storybook/approval-card", "0"),
     ("Assistant Card", "/storybook/assistant-card", "0"),
     ("Counter", "/storybook/counter", "0"),
@@ -53,6 +53,7 @@ const ENTRIES: [(&'static str, &'static str, &'static str); 84] = [
     ("Presence", "/storybook/presence", "2"),
     ("Tab", "/storybook/tab", "2"),
     ("Field", "/storybook/field", "3"),
+    ("Cron Field", "/storybook/cron-field", "3"),
     ("Item Group", "/storybook/item-group", "3"),
     ("Project Tree", "/storybook/project-tree", "3"),
     ("Session Editor", "/storybook/session-editor", "3"),

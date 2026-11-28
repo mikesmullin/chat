@@ -29,7 +29,7 @@ pub const CSS: &str = r#"
   width: 100%; box-sizing: border-box;
   background: var(--panel-2); color: var(--fg);
   border: 1px solid transparent; border-radius: 8px;
-  padding: 7px 9px; font: inherit; line-height: 1.5;
+  padding: 7px 9px; font-size: 12px; font-family: var(--sans); line-height: 1.5;
   resize: vertical;
 }
 :is(#sb, #home) .ae-field textarea { min-height: 64px; font-size: 12px; }

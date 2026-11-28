@@ -1,6 +1,5 @@
-use rustex1_kit::h::{m, Node};
+use rustex1_kit::h::{lit, m, Node};
 
-use crate::components::{hint_text, label, text_input};
 use crate::css;
 
 pub const CSS: &str = r#"
@@ -8,24 +7,29 @@ pub const CSS: &str = r#"
 "#;
 
 pub fn field(label_text: &str, required: bool, hint_text: &str, control: Node, wide: bool) -> Node {
+    let mut label_kids = vec![m("span").child(lit(label_text))];
+    if required {
+        label_kids.push(m("em").class("req").child(lit("*")));
+    }
+    label_kids.push(m("span").class("hint").child(lit(hint_text)));
     m("div")
-        .class(if wide { "field wide" } else { "field" })
+        .class(if wide { "ae-field wide" } else { "ae-field" })
         .kids(vec![
-            label::label(label_text, required),
+            m("label").class("ae-label").kids(label_kids),
             control,
-            hint_text::hint(hint_text),
         ])
 }
 
 pub fn demo() -> Node {
     use crate::components::demo::MODEL;
-    m("div").class("field-demo").child(field(
-        "Schedule",
-        true,
-        "crontab",
-        text_input::input("field", MODEL, "0 9 * * *"),
-        false,
-    ))
+    let input = m("input")
+        .attr("type", "text")
+        .attr("spellcheck", "false")
+        .attr("placeholder", "acme-corp")
+        .model(&format!("{MODEL}.field"));
+    m("div")
+        .class("field-demo")
+        .child(field("Name", false, "absolute path", input, false))
 }
 
 pub fn register() {
