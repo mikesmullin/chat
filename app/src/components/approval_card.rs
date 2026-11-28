@@ -4,6 +4,13 @@ use crate::components::{fold_card, samples, session};
 use crate::css;
 
 pub const CSS: &str = r#"
+:is(#sb, #home) .fold-card.fold-approval {
+  border-color: color-mix(in srgb, #fb923c 38%, transparent);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+:is(#sb, #home) .fold-card.fold-approval .fold-head { color: #fb923c; }
+
 :is(#sb, #home) .approval-actions {
   display: flex; flex-wrap: wrap; gap: 8px;
   margin-top: 10px;
@@ -12,43 +19,54 @@ pub const CSS: &str = r#"
   appearance: none;
   border-radius: 8px;
   padding: 5px 12px;
-  font: 600 12px/1.5 var(--sans, ui-sans-serif, system-ui, sans-serif);
+  font: 600 11.5px/1.5 var(--sans, ui-sans-serif, system-ui, sans-serif);
   cursor: pointer;
   display: inline-flex; align-items: center; gap: 6px;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+:is(#sb, #home) .approval-actions button:focus-visible {
+  outline: 2px solid #fb923c; outline-offset: 2px;
 }
 :is(#sb, #home) .btn-allow {
-  border: 1px solid rgba(74, 222, 128, .5);
-  background: rgba(22, 101, 52, .35);
-  color: #bbf7d0;
+  border: 1px solid color-mix(in srgb, #fb923c 40%, transparent);
+  background: color-mix(in srgb, #fb923c 14%, transparent);
+  color: #fb923c;
 }
-:is(#sb, #home) .btn-allow:hover { background: rgba(22, 101, 52, .6); }
+:is(#sb, #home) .btn-allow:hover {
+  background: color-mix(in srgb, #fb923c 22%, transparent);
+  border-color: color-mix(in srgb, #fb923c 60%, transparent);
+}
 :is(#sb, #home) .btn-always {
-  border: 1px solid rgba(96, 165, 250, .45);
-  background: rgba(30, 58, 95, .35);
-  color: #bfdbfe;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
 }
-:is(#sb, #home) .btn-always:hover { background: rgba(30, 58, 95, .6); }
+:is(#sb, #home) .btn-always:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, #fb923c 55%, transparent);
+}
 :is(#sb, #home) .btn-deny {
-  border: 1px solid rgba(248, 113, 113, .45);
-  background: rgba(127, 29, 29, .3);
-  color: #fecaca;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
 }
-:is(#sb, #home) .btn-deny:hover { background: rgba(127, 29, 29, .55); }
+:is(#sb, #home) .btn-deny:hover {
+  color: var(--danger, #d9534f);
+  border-color: var(--danger, #d9534f);
+}
+
+:is(#sb, #home) .fold-card.fold-approval.is-collapsed .approval-actions,
+:is(#sb, #home) .fold-card.fold-approval.is-collapsed .approval-verdict {
+  margin-left: 0.25em;
+}
 
 :is(#sb, #home) .approval-verdict {
   display: inline-flex; align-items: center; gap: 6px;
   margin-top: 10px;
   font-size: 12px; font-weight: 600;
-  color: var(--gray-dim);
+  color: var(--muted);
 }
-:is(#sb, #home) .approval-verdict.is-allowed { color: #86efac; }
-:is(#sb, #home) .approval-verdict.is-denied { color: #fca5a5; }
-
-:is(#sb, #home) .fold-approval.is-done:not(.is-collapsed) {
-  border-color: color-mix(in srgb, var(--agent-accent, #a78bfa) 35%, transparent);
-  background: color-mix(in srgb, var(--agent-accent, #a78bfa) 12%, transparent);
-}
+:is(#sb, #home) .approval-verdict .ph { color: #fb923c; }
 
 .approval-demo { width: min(560px, 100%); }
 .approval-demo .mjs-chat.mode-sidebar { border-left: 0; }

@@ -39,12 +39,6 @@ pub const CSS: &str = r#"
 :is(#sb, #home) .fold-card.is-err .fold-head { color: #e8908c; }
 :is(#sb, #home) .fold-card.is-err .fold-body { color: #e8b4b1; }
 
-:is(#sb, #home) .fold-card.is-ask {
-  border-color: rgba(217, 119, 6, .55);
-  background: rgba(120, 53, 15, .35);
-}
-:is(#sb, #home) .fold-card.is-ask .fold-head { color: #fcd34d; }
-
 :is(#sb, #home) .fold-card.is-collapsed {
   display: flex; align-items: baseline; gap: 6px;
   min-width: 0;
